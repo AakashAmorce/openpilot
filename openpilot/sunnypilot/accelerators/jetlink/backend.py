@@ -71,7 +71,11 @@ class _Link:
     self._abandoned = False
 
   def open(self, deadline: float | None = None):
-    """The client, opening one if we have not got one yet."""
+    """The client, opening one if we have not got one yet, or if the one held
+    is dead: a big model retired after a link loss closes its client, and
+    reusing it failed the next attempt with EBADF, 5 s after every loss."""
+    if self.client is not None and getattr(self.client, 'dead', False) is True:
+      self.close()
     if self.client is None:
       self.client = helpers.connect(name=self.name, loan=self._borrow(deadline))
     return self.client

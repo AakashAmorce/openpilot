@@ -234,6 +234,18 @@ class BorrowingTheGadget(unittest.TestCase):
     loan.renew.assert_called_once()
     assert connect.call_args.kwargs['loan'] is loan
 
+  def test_a_dead_client_is_replaced_not_reused(self):
+    # a big model retired after a link loss closes its client; the next
+    # attempt reused it and failed on EBADF, a whole retry after every loss
+    dead = mock.Mock(dead=True)
+    loan = mock.Mock(closed=False)
+    loan.renew.return_value = True
+    self.link.client, self.link.loan = dead, loan
+    with mock.patch.object(backend.helpers, 'connect') as connect:
+      assert self.link.open() is connect.return_value
+    dead.close.assert_called_once()
+    loan.renew.assert_called_once()
+
   def test_a_renewal_still_on_hold_is_not_an_open_of_our_own(self):
     # the owner is holding for a phone; opening the endpoints here would
     # write a hello to it
