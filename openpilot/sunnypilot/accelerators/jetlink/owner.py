@@ -15,7 +15,7 @@ files over a unix socket (lending.py) and the gadget never leaves the bus.
 The gadget is composite: a phone on the cable is on its network interface and
 dials this process (lending.CableListener), which is how the transport is
 decided. An accepted dial is a phone and the loan carries its socket; a host
-that never dials within CABLE_HOLD of enumerating is a Jetson or a Mac on
+that never dials within the hold after enumerating is a Jetson or a Mac on
 FunctionFS, exactly as before. Over TCP the gadget is never released, settled
 or bounced: every unbind drops the phone's network interface with it.
 
@@ -112,6 +112,8 @@ class Owner:
     self.attached = False
     self.configured = False             # attached, as of the last step: for the edges
     self.cable_hold_until = 0.0
+    self.cable_hold_last = 0.0          # CABLE_HOLD_MAX after the configured edge
+    self.configured_at = 0.0            # that edge by the wall clock, for the lease file
     self.dialed = False                 # a phone dialed in since the last run
     self.net_ready = False              # usb0 configured for this bind
     self.next_net_attempt = 0.0
@@ -145,18 +147,41 @@ class Owner:
 
   def holding(self) -> bool:
     """Is a phone still owed its chance to dial? A borrower that wrote a
-    hello over FunctionFS to a phone would block 15 s and bounce the gadget."""
-    return time.monotonic() < self.cable_hold_until and not self.cable.held
+    hello over FunctionFS to a phone would block 15 s and bounce the gadget.
+
+    CABLE_HOLD from the configured edge, then on to CABLE_DIAL_GRACE after a
+    lease the host took on the cable's network in this bind, up to
+    CABLE_HOLD_MAX. The lease file is read only past the first hold."""
+    if self.cable.held:
+      return False
+    now = time.monotonic()
+    if now < self.cable_hold_until:
+      return True
+    if now >= self.cable_hold_last:
+      return False
+    leased = gadget.lease_written_at()
+    if leased is None or leased < self.configured_at:
+      return False
+    until = min(self.cable_hold_last, now + leased + gadget.CABLE_DIAL_GRACE - time.time())
+    if until > self.cable_hold_until and now < until:
+      gadget.log.warning("jetlink: the host took an address on the cable's network; holding %.1f s more for a phone to dial",
+                         until - now)
+    self.cable_hold_until = max(self.cable_hold_until, until)
+    return now < self.cable_hold_until
 
   def bounce_gadget(self) -> bool:
     """One unplug and replug, for a borrower whose write has no reader.
 
     Unbinding is the only thing that makes FunctionFS dequeue a write the host
     is not draining, and the unbind belongs to whoever holds ep0. See
-    FfsTransport._abort_write. Not over the cable: the unbind would drop the
-    phone's network interface, and a TCP link has no such write.
+    FfsTransport._abort_write. Over the cable too: only a borrower on
+    FunctionFS asks (a TCP link has no such write), and without the unbind it
+    stays blocked for good, as modeld did on the bench when a phone dialed
+    just after the hold. The phone's idle dial goes down with its network
+    interface and it dials again once the host enumerates; the freed borrower
+    gets the cable on its next borrow.
     """
-    if self.transport is None or gadget.link_kind() == 'cable':
+    if self.transport is None:
       return False
     try:
       return bool(self.transport.rebind())
@@ -465,10 +490,12 @@ class Owner:
         gadget.log.warning("jetlink: a host configured us at %s", speed)
       else:
         self.cable_hold_until = now + gadget.CABLE_HOLD
+        self.cable_hold_last = now + gadget.CABLE_HOLD_MAX
+        self.configured_at = time.time()
         gadget.log.warning("jetlink: a host configured us at %s; %.0f s for a phone to dial",
                            speed, gadget.CABLE_HOLD)
     elif self.configured and not self.attached:
-      self.cable_hold_until = 0.0
+      self.cable_hold_until = self.cable_hold_last = 0.0
       if self.cable.held or gadget.link_kind() == 'cable':
         gadget.log.warning("jetlink: the host went away, the cable link with it")
       self.cable.release()

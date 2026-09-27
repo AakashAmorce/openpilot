@@ -146,6 +146,23 @@ CABLE_ADDR = ('192.168.60.1', 5599)
 # FunctionFS so a phone has had a chance to dial. A Jetson or a Mac never
 # dials, so after the hold the link is USB exactly as it was
 CABLE_HOLD = 5.0
+# A host that took an address on the cable's network is most likely a phone on
+# its way to dialing: on the bench a Mac leased 3.9 s after enumerating and
+# dialed 1.8 s after that, past CABLE_HOLD. So the hold runs on to
+# CABLE_DIAL_GRACE after a lease taken in this bind, never past CABLE_HOLD_MAX
+# from the configured edge. A Jetson or a Mac serving USB takes a lease too and
+# never dials; it waits out the grace once per enumeration.
+CABLE_DIAL_GRACE = 3.0
+CABLE_HOLD_MAX = 15.0
+LEASES = Path("/dev/shm/jetlink-usb0.leases")   # dnsmasq's, from setup_gadget.sh
+
+
+def lease_written_at() -> float | None:
+  """When dnsmasq last wrote a lease on the cable's network, by the wall clock."""
+  try:
+    return LEASES.stat().st_mtime
+  except OSError:
+    return None
 
 
 def _link_record() -> list[str]:

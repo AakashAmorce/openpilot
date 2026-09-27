@@ -8,6 +8,7 @@ The process that holds the gadget: what it keeps, what it lets go of, and when
 it starts the heavy half.
 """
 import json
+import os
 import select
 import socket
 import tempfile
@@ -38,6 +39,7 @@ class OwnerTest(unittest.TestCase):
                         ('wait_for_host', mock.Mock(return_value=True)),
                         # the owner's own records, and a loopback stand-in for usb0
                         ('LINK', self.tmp / 'link'),
+                        ('LEASES', self.tmp / 'leases'),
                         ('CABLE_ADDR', ('127.0.0.1', 0)),
                         ('net_up', mock.Mock(return_value=True)),
                         ('net_status', mock.Mock(return_value='ok 192.168.60.1')),
@@ -454,7 +456,7 @@ class TestCable(OwnerTest):
     self.assertEqual(gadget.link_kind(), 'usb')
     o.spawn_worker.assert_not_called()
 
-  def test_over_the_cable_the_owner_never_sleeps_settles_or_bounces(self):
+  def test_over_the_cable_the_owner_never_sleeps_or_settles(self):
     # every unbind takes the phone's network interface down with it
     o = self.owner(lendable=False)
     o.step()
@@ -469,9 +471,61 @@ class TestCable(OwnerTest):
     self.assertFalse(o.dormant)
     o.close_link.assert_not_called()
     o.transport.release_endpoints.assert_not_called()
+
+  def test_a_borrower_stuck_on_functionfs_is_freed_with_a_phone_dialed(self):
+    # a phone that dials just after the hold finds modeld already writing a
+    # hello over FunctionFS that nothing reads; only an unbind frees it, and
+    # the phone dials again after it (the bench, 2026-09-27)
+    o = self.owner()
+    o.step()
+    self.dial(o)
+    o.step()
+    self.assertEqual(gadget.link_kind(), 'cable')
     o.transport.rebind.return_value = True
-    self.assertFalse(o.bounce_gadget())
-    o.transport.rebind.assert_not_called()
+    self.assertTrue(o.bounce_gadget())
+    o.transport.rebind.assert_called_once()
+
+  def lease(self, age: float) -> None:
+    """dnsmasq writing a lease on the cable's network `age` seconds ago."""
+    path = self.tmp / 'leases'
+    path.write_text('1 aa:bb 192.168.60.5 iPhone *\n')
+    when = time.time() - age
+    os.utime(path, (when, when))
+
+  def past_the_first_hold(self, configured_ago: float = 6.0):
+    o = self.owner()
+    o.step()
+    now = time.monotonic()
+    o.cable_hold_until = now - 0.1
+    o.cable_hold_last = now - configured_ago + gadget.CABLE_HOLD_MAX
+    o.configured_at = time.time() - configured_ago
+    return o
+
+  def test_a_lease_holds_on_for_the_phone_to_dial(self):
+    # on the bench a Mac leased 3.9 s after enumerating and dialed 1.8 s later
+    o = self.past_the_first_hold()
+    self.lease(age=1.0)
+    self.assertTrue(o.holding())
+    self.assertAlmostEqual(o.cable_hold_until, time.monotonic() + gadget.CABLE_DIAL_GRACE - 1.0, delta=0.5)
+
+  def test_a_host_that_leased_and_never_dialed_is_usb_after_the_grace(self):
+    o = self.past_the_first_hold(configured_ago=8.0)
+    self.lease(age=gadget.CABLE_DIAL_GRACE + 0.5)
+    self.assertFalse(o.holding())
+
+  def test_no_lease_ends_the_hold_on_time(self):
+    o = self.past_the_first_hold()
+    self.assertFalse(o.holding())
+
+  def test_a_lease_from_an_earlier_bind_does_not_count(self):
+    o = self.past_the_first_hold(configured_ago=2.0)
+    self.lease(age=5.0)
+    self.assertFalse(o.holding())
+
+  def test_the_hold_never_outlasts_its_cap(self):
+    o = self.past_the_first_hold(configured_ago=gadget.CABLE_HOLD_MAX + 1.0)
+    self.lease(age=0.0)
+    self.assertFalse(o.holding())
 
   def test_the_host_going_away_clears_the_cable_link(self):
     o = self.owner()
