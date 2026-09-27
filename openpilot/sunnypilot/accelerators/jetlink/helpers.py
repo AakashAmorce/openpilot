@@ -177,7 +177,7 @@ _REF = re.compile(r'[0-9a-f]{40}')
 # every frame; the status line can lag a new pick by this long
 INDEX_TTL = 2.0
 _index_cache: tuple[float, list[dict]] | None = None
-_slot_cache: tuple[float, str | None] | None = None
+_slot_cache: tuple[float, tuple[str, str] | None] | None = None
 
 
 def catalog() -> list[dict]:
@@ -245,9 +245,10 @@ def model_index() -> list[dict]:
   return out
 
 
-def selected_ref() -> str | None:
-  """The big-model slot's pick. The raw dict, not a parsed bundle, and memoised:
-  the slot is the model manager's to validate, and the UI asks every frame."""
+def selected_slot() -> tuple[str, str] | None:
+  """The big-model slot's pick as (ref, name). The raw dict, not a parsed bundle,
+  and memoised: the slot is the model manager's to validate, and the UI asks
+  every frame."""
   global _slot_cache
   now = time.monotonic()
   if _slot_cache is not None and now - _slot_cache[0] < INDEX_TTL:
@@ -255,26 +256,40 @@ def selected_ref() -> str | None:
   from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS
   slot = _get(ACTIVE_BUNDLE_KEYS["chestnut"])
   ref = slot.get('ref') if isinstance(slot, dict) else None
-  _slot_cache = (now, ref if isinstance(ref, str) and ref else None)
-  return _slot_cache[1]
+  pick = None
+  if isinstance(ref, str) and ref:
+    pick = (ref, str(slot.get('displayName') or ref[:10]))
+  _slot_cache = (now, pick)
+  return pick
+
+
+def selected_ref() -> str | None:
+  pick = selected_slot()
+  return pick[0] if pick else None
 
 
 def selected_model() -> dict | None:
   """The big model the device picked, or the fork's default big model, or the newest.
 
-  The pick is the model manager's big-model slot, a choice for whichever
-  hardware runs it. A ref the catalog dropped falls back the same way: leaving
-  the device with no model at all would be worse than quietly using the default.
+  The pick is the model manager's big-model slot, the one the settings screen
+  shows and a chestnut runs, whether or not the catalog lists it: a model's
+  identity is its commit's LFS pointer, which needs only the ref. The catalog
+  lists the choices. Missing from it, a pick is one sunnypilot dropped or one
+  a newer catalog carries that was not merged in when the model manager last
+  fetched, and running the default instead would run what the screen does not
+  show. The default is for a device with no pick.
   """
   models = model_index()
+  pick = selected_slot()
+  if pick is not None:
+    ref, name = pick
+    for m in models:
+      if m['ref'] == ref:
+        return m
+    p = pointers().get(ref) or {}
+    return {'name': name, 'ref': ref, 'oid': p.get('oid'), 'size': int(p['size']) if p.get('size') else None}
   if not models:
     return None
-  wanted = selected_ref()
-  if wanted:
-    for m in models:
-      if m['ref'] == wanted:
-        return m
-    cloudlog.warning("jetlink: no catalog model for %r, using the default", wanted)
   return next((m for m in models if m['ref'] == DEFAULT_BIG_MODEL_REF), models[0])
 
 

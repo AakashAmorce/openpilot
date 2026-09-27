@@ -115,8 +115,14 @@ def enabled() -> bool:
 
 def big_catalog(catalog: dict) -> dict:
   """The big-model catalog the model manager fetched, with the models newer
-  catalogs list folded in when an accelerator runs the big model."""
+  catalogs list folded in when an accelerator could run the big model."""
   return _backend().big_catalog(catalog)
+
+
+def extends_catalog() -> bool:
+  """Would big_catalog fold newer catalogs in right now? Hardware, not the link
+  toggle, so the catalog the big-model pick is validated against holds still."""
+  return _backend().extends_catalog()
 
 
 def selected_model_name() -> str | None:

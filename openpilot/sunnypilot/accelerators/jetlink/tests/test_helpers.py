@@ -368,10 +368,12 @@ class TestSelectedModel(unittest.TestCase):
     {'name': 'Beta', 'ref': REF_B, 'oid': 'b' * 64, 'size': 20},
   ]
 
-  def select_with(self, slot_ref, default=REF_B):
-    with mock.patch.object(helpers, 'model_index', return_value=self.INDEX), \
+  def select_with(self, slot_ref, default=REF_B, index=None, pointers=None):
+    pick = (slot_ref, 'Picked') if slot_ref else None
+    with mock.patch.object(helpers, 'model_index', return_value=self.INDEX if index is None else index), \
          mock.patch.object(helpers, 'DEFAULT_BIG_MODEL_REF', default), \
-         mock.patch.object(helpers, 'selected_ref', return_value=slot_ref):
+         mock.patch.object(helpers, 'pointers', return_value=pointers or {}), \
+         mock.patch.object(helpers, 'selected_slot', return_value=pick):
       return helpers.selected_model()
 
   def test_an_empty_slot_takes_the_forks_default_big_model(self):
@@ -383,13 +385,20 @@ class TestSelectedModel(unittest.TestCase):
   def test_a_default_not_in_the_catalog_falls_to_the_newest(self):
     assert self.select_with(None, default='f' * 40)['name'] == 'Alpha'
 
-  def test_a_ref_the_catalog_dropped_falls_back(self):
-    # leaving the device with no model at all would be worse than quietly using the default
-    assert self.select_with('9' * 40)['name'] == 'Beta'
+  def test_a_pick_the_catalog_does_not_list_is_still_the_pick(self):
+    # the screen shows the slot; running the default would run something else.
+    # The worker resolves the oid from the ref, as for any catalog model
+    assert self.select_with(REF_C) == {'name': 'Picked', 'ref': REF_C, 'oid': None, 'size': None}
 
-  def test_an_empty_index_is_no_model(self):
-    with mock.patch.object(helpers, 'model_index', return_value=[]):
-      assert helpers.selected_model() is None
+  def test_an_uncatalogued_pick_keeps_a_pointer_already_resolved(self):
+    known = {REF_C: {'oid': 'c' * 64, 'size': '30'}}
+    assert self.select_with(REF_C, pointers=known) == {'name': 'Picked', 'ref': REF_C, 'oid': 'c' * 64, 'size': 30}
+
+  def test_a_pick_needs_no_catalog(self):
+    assert self.select_with(REF_C, index=[])['ref'] == REF_C
+
+  def test_no_pick_and_no_catalog_is_no_model(self):
+    assert self.select_with(None, index=[]) is None
 
 
 class TestSelectedRef(unittest.TestCase):
@@ -412,6 +421,14 @@ class TestSelectedRef(unittest.TestCase):
 
   def test_reads_the_slots_ref(self):
     assert self.read_with({'ref': REF_A, 'displayName': 'Alpha'}) == REF_A
+
+  def test_the_slot_carries_its_name(self):
+    helpers._slot_cache = None
+    with mock.patch.object(helpers, '_get', return_value={'ref': REF_A, 'displayName': 'Alpha'}):
+      assert helpers.selected_slot() == (REF_A, 'Alpha')
+    helpers._slot_cache = None
+    with mock.patch.object(helpers, '_get', return_value={'ref': REF_A}):
+      assert helpers.selected_slot() == (REF_A, REF_A[:10])
 
   def test_anything_else_is_no_pick(self):
     for slot in (None, {}, {'ref': ''}, {'ref': 7}, 'junk'):
