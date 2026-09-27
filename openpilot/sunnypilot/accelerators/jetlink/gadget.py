@@ -147,12 +147,14 @@ CABLE_ADDR = ('192.168.60.1', 5599)
 # dials, so after the hold the link is USB exactly as it was
 CABLE_HOLD = 5.0
 # A host that took an address on the cable's network is most likely a phone on
-# its way to dialing: on the bench a Mac leased 3.9 s after enumerating and
-# dialed 1.8 s after that, past CABLE_HOLD. So the hold runs on to
-# CABLE_DIAL_GRACE after a lease taken in this bind, never past CABLE_HOLD_MAX
-# from the configured edge. A Jetson or a Mac serving USB takes a lease too and
-# never dials; it waits out the grace once per enumeration.
-CABLE_DIAL_GRACE = 3.0
+# its way to dialing. macOS, iOS's network stack, leases about 4 s after
+# enumerating (a random wait before its first request), then probes the address
+# for 1.6 s before it is usable: on the bench a Mac dialed 2.7 s after its lease,
+# past CABLE_HOLD. So the hold runs on to CABLE_DIAL_GRACE after a lease taken in
+# this bind, never past CABLE_HOLD_MAX from the configured edge. A Jetson or a
+# Mac serving USB takes a lease too and never dials; it waits out the grace
+# once per enumeration.
+CABLE_DIAL_GRACE = 5.0
 CABLE_HOLD_MAX = 15.0
 LEASES = Path("/dev/shm/jetlink-usb0.leases")   # dnsmasq's, from setup_gadget.sh
 

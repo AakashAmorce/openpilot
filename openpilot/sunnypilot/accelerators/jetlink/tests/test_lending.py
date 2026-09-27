@@ -231,6 +231,69 @@ class TheCable(LendingTest):
     assert loan is not None and loan.sock is not None
 
 
+class Renewing(LendingTest):
+  """The loan lasts the drive; which link it is for is asked again before
+  every attempt at a join. On the bench a borrower that took the endpoint
+  files once wrote a hello to a phone on every attempt, and each bounce that
+  freed the write took the phone's network interface down before it dialed."""
+
+  def test_a_phone_that_dialed_after_the_loan_is_what_a_renewal_gets(self):
+    listener = self.listener()
+    self.lender(cable=listener)
+    loan = self.take()
+    assert loan.sock is None
+    self.dial(listener)
+    assert loan.renew(timeout=3.0)
+    assert loan.sock is not None
+
+  def test_a_renewal_with_nothing_new_keeps_the_endpoint_files(self):
+    self.lender()
+    loan = self.take()
+    assert loan.renew(timeout=1.0)
+    assert loan.sock is None and loan.udc == 'udc0'
+
+  def test_a_spent_dial_is_let_go_and_the_phones_next_one_lent(self):
+    listener = self.listener()
+    phone = self.dial(listener)
+    self.lender(cable=listener)
+    loan = self.take()
+    first = loan.sock
+    got = []
+    t = threading.Thread(target=lambda: got.append(loan.renew(timeout=3.0)), daemon=True)
+    t.start()
+    # the session went with the attempt: the phone hears so, and dials again
+    phone.settimeout(3.0)
+    assert phone.recv(1) == b''
+    assert not got, 'lent the endpoint files to a phone'
+    self.dial(listener)
+    t.join(3.0)
+    assert got == [True] and loan.sock is not None and loan.sock is not first
+    assert not listener.news, 'the phone coming back is not a phone turning up'
+
+  def test_a_phone_that_does_not_dial_again_leaves_the_endpoint_files(self):
+    listener = self.listener()
+    self.dial(listener)
+    self.lender(cable=listener)
+    loan = self.take()
+    with mock.patch.object(lending.gadget, 'CABLE_DIAL_GRACE', 0.2):
+      assert loan.renew(timeout=2.0)
+    assert loan.sock is None
+
+  def test_a_renewal_during_the_hold_waits_and_keeps_the_loan(self):
+    self.lender()
+    loan = self.take()
+    self.holding = True
+    assert not loan.renew(timeout=0.2)
+    assert not loan.closed
+
+  def test_an_owner_that_is_gone_ends_the_loan(self):
+    lender = self.lender()
+    loan = self.take()
+    lender.stop()
+    assert not loan.renew(timeout=1.0)
+    assert loan.closed
+
+
 class TheListener(LendingTest):
   def test_a_newer_dial_replaces_an_older_one(self):
     listener = self.listener()

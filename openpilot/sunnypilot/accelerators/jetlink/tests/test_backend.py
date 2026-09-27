@@ -221,14 +221,44 @@ class BorrowingTheGadget(unittest.TestCase):
     assert connect.call_args.kwargs['loan'] is loan
     assert connect.call_args.kwargs['name'] == 'modeld'
 
-  def test_the_lease_is_asked_for_once(self):
+  def test_the_lease_is_borrowed_once_and_renewed_every_attempt(self):
+    # a phone may have dialed since the last attempt, or its dial be spent
     loan = mock.Mock(closed=False)
+    loan.renew.return_value = True
     with mock.patch.object(self.lending, 'borrow', return_value=loan) as borrow, \
-         mock.patch.object(backend.helpers, 'connect'):
+         mock.patch.object(backend.helpers, 'connect') as connect:
       self.link.open()
       self.link.client = None
       self.link.open()
     borrow.assert_called_once()
+    loan.renew.assert_called_once()
+    assert connect.call_args.kwargs['loan'] is loan
+
+  def test_a_renewal_still_on_hold_is_not_an_open_of_our_own(self):
+    # the owner is holding for a phone; opening the endpoints here would
+    # write a hello to it
+    loan = mock.Mock(closed=False)
+    loan.renew.return_value = False
+    self.link.loan = loan
+    with mock.patch.object(self.lending, 'borrow') as borrow, \
+         mock.patch.object(backend.helpers, 'connect') as connect:
+      with self.assertRaises(TimeoutError):
+        self.link.open()
+    borrow.assert_not_called()
+    connect.assert_not_called()
+
+  def test_a_renewal_that_finds_the_owner_gone_borrows_afresh(self):
+    loan = mock.Mock(closed=False)
+    def gone(timeout):
+      loan.closed = True
+      return False
+    loan.renew.side_effect = gone
+    self.link.loan = loan
+    with mock.patch.object(self.lending, 'borrow', return_value=None) as borrow, \
+         mock.patch.object(backend.helpers, 'connect') as connect:
+      self.link.open()
+    borrow.assert_called_once()
+    assert connect.call_args.kwargs['loan'] is None
 
   def test_a_lease_that_ended_is_asked_for_again(self):
     with mock.patch.object(self.lending, 'borrow', return_value=mock.Mock(closed=True)) as borrow, \

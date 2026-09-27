@@ -105,11 +105,18 @@ class _Link:
     always did, so a drive never loses the large model to a daemon fault.
     """
     from openpilot.sunnypilot.accelerators.jetlink import lending
-    if self.loan is not None and not self.loan.closed:
-      return self.loan
     # bounded by whatever the caller has left: an early present that spends its
     # whole budget here has nothing left to open the link with
     timeout = lending.BORROW_TIMEOUT if deadline is None else max(0.0, deadline - time.monotonic())
+    if self.loan is not None and not self.loan.closed:
+      # the loan lasts the drive, but which link it is for is asked again every
+      # attempt: a phone may have dialed since, or the last dial be spent
+      if self.loan.renew(timeout):
+        return self.loan
+      if not self.loan.closed:
+        # the owner is still holding for a phone; opening the endpoints
+        # ourselves would write to one
+        raise TimeoutError("jetlinkd has not lent the link yet")
     try:
       self.loan = lending.borrow(self.name, timeout=timeout)
     except Exception:
