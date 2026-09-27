@@ -237,11 +237,31 @@ class TestTiciModelsPanel:
       assert layout.accelerator_link_item.description.endswith("A device is on the USB port.")
     with accelerator(installed=True, present=True), mock.patch(f"{link}.read", return_value="0"):
       layout._refresh_accelerator_items()
-      assert layout.accelerator_link_item.description.endswith("Accelerator connected.")
+      assert layout.accelerator_link_item.description.endswith("Accelerator connected: USB.")
     # a kernel without the CC pin in sysfs claims nothing rather than an empty port
     with accelerator(installed=True), mock.patch(f"{link}.read", return_value=None):
       layout._refresh_accelerator_items()
       assert layout.accelerator_link_item.description.endswith("accelerator.")
+
+  def test_the_status_names_the_transport(self, params):
+    # the gadget is composite and the owner decides at runtime: a phone dials
+    # in over the gadget's network interface, a Jetson takes the vendor
+    # interface, and JetlinkEndpoint names one on ethernet
+    import tempfile
+    from pathlib import Path
+    from openpilot.selfdrive.ui.sunnypilot.accelerator_link import link_status
+    gadget = "openpilot.sunnypilot.accelerators.jetlink.gadget"
+    record = Path(tempfile.mkdtemp()) / "link"
+    with accelerator(installed=True, present=True), mock.patch(f"{gadget}.link_endpoint", return_value=None), \
+         mock.patch(f"{gadget}.LINK", record):
+      assert link_status() == "Accelerator connected: USB."
+      record.write_text("cable 192.168.60.3")
+      assert link_status() == "Accelerator connected: iPhone over USB (192.168.60.3)."
+      with mock.patch(f"{gadget}.link_endpoint", return_value=("10.0.0.5", 5599)):
+        assert link_status() == "Accelerator connected: Ethernet (10.0.0.5:5599)."
+    # a status that cannot be read is USB, never a crash on the panel's tick
+    with accelerator(installed=True, present=True), mock.patch(f"{gadget}.link_kind", side_effect=OSError):
+      assert link_status() == "Accelerator connected: USB."
 
   def test_toggle_writes_the_param_and_leaves_the_runner_alone(self, params):
     # the small model is the model manager's: the link does not decide which modeld runs

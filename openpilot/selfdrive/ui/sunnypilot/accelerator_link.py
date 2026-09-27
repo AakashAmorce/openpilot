@@ -12,6 +12,7 @@ the accelerator joins it, so the toggle never changes which modeld runs.
 from openpilot.common.hardware.usb import TYPEC_CC_ORIENTATION_PATH, read
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot import accelerators
+from openpilot.sunnypilot.accelerators.jetlink import gadget
 from openpilot.system.ui.lib.multilang import tr
 
 LINK_PARAM = "JetlinkEnabled"
@@ -45,15 +46,34 @@ def link_toggle_meaningful() -> bool:
           or accelerators.unavailable_reason() is not None)
 
 
+def link_transport() -> str:
+  """What carries the link. The gadget is composite and the owner decides at
+  runtime: a phone dials in over the gadget's network interface, a Jetson or
+  a Mac takes the vendor interface, and JetlinkEndpoint names a Jetson on
+  ethernet. Never raises: this is read on the panel's tick."""
+  try:
+    kind = gadget.link_kind()
+    if kind == 'cable':
+      peer = gadget.link_peer()
+      return f"iPhone over USB ({peer})" if peer else "iPhone over USB"
+    if kind == 'ethernet':
+      host, port = gadget.link_endpoint()
+      return f"Ethernet ({host}:{port})"
+  except Exception:
+    pass
+  return "USB"
+
+
 def link_status() -> str:
   """One line under the toggle: what is on the comma's USB-C port right now.
 
-  present() knows a Jetson. Below that only the CC pin speaks: it says a cable
-  with a host behind it is plugged in, not what the host is. Empty where the
-  kernel does not expose it, rather than claiming an empty port.
+  present() knows a Jetson, or a phone; the transport says which. Below that
+  only the CC pin speaks: it says a cable with a host behind it is plugged in,
+  not what the host is. Empty where the kernel does not expose it, rather
+  than claiming an empty port.
   """
   if accelerators.present():
-    return tr("Accelerator connected.")
+    return f"{tr('Accelerator connected:')} {link_transport()}."
   raw = read(TYPEC_CC_ORIENTATION_PATH)
   if raw is None:
     return ""
