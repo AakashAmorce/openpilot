@@ -149,24 +149,38 @@ class Loan:
         return False
       spent, self.sock = self.sock, None
       _close(spent)   # the client that used it closed it too; closing twice is harmless
-      try:
-        got = _ask(self.conn, self._buf, self.name, time.monotonic() + timeout)
-      except (OSError, ValueError, KeyError):
-        gadget.log.exception("jetlink: could not ask jetlinkd for the link again")
-        self._closed = True
-        _close(self.conn)
-        return False
-      if got is None:
-        return False
-      reply, self.sock = got
-      self.mount, self.udc = str(reply['mount']), str(reply['udc'])
-      if (self.sock is None) != (spent is None):
+      reply = self._take(timeout)
+      if reply is not None and (self.sock is None) != (spent is None):
         gadget.log.warning("jetlink: the loan is now %s", _what_was_lent(reply))
-      return True
+      return reply is not None
+
+  def _take(self, timeout: float) -> dict | None:
+    """Ask the owner for the link until it lends one or `timeout` passes; on a
+    lend, what this loan carries now and the reply that lent it. The loan is
+    closed when the owner is gone."""
+    try:
+      got = _ask(self.conn, self._buf, self.name, time.monotonic() + timeout)
+    except (OSError, ValueError, KeyError):
+      if not self._closed:   # a close() from another thread wakes the ask this way
+        gadget.log.exception("jetlink: could not ask jetlinkd for the link")
+      self._closed = True
+      _close(self.conn)
+      return None
+    if got is None:
+      return None
+    reply, self.sock = got
+    self.mount, self.udc = str(reply['mount']), str(reply['udc'])
+    return reply
 
   def close(self) -> None:
+    # not behind the lock: a renewal holds it through a whole hold, and the
+    # shutdown is what wakes that renewal
+    self._closed = True
+    try:
+      self.conn.shutdown(socket.SHUT_RDWR)
+    except OSError:
+      pass
     with self._lock:
-      self._closed = True
       _close(self.conn)
       _close(self.sock)
 
@@ -184,25 +198,19 @@ def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path = S
   if gadget.link_endpoint() is not None:
     # asking would only wait out the timeout on "retry" before connecting anyway
     return None
-  deadline = time.monotonic() + timeout
   try:
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.settimeout(POLL)
     conn.connect(str(path))
   except OSError:
     return None   # no jetlinkd listening; the caller owns the gadget itself
-  buf = bytearray()
-  try:
-    got = _ask(conn, buf, name, deadline)
-  except (OSError, ValueError, KeyError):
-    gadget.log.exception("jetlink: could not borrow the gadget")
-    got = None
-  if got is None:
-    conn.close()
+  loan = Loan(conn, bytearray(), '', '', name=name)
+  reply = loan._take(timeout)
+  if reply is None:
+    loan.close()
     return None
-  reply, sock = got
   gadget.log.warning("jetlink: borrowed %s from jetlinkd", _what_was_lent(reply))
-  return Loan(conn, buf, str(reply['mount']), str(reply['udc']), sock=sock, name=name)
+  return loan
 
 
 def _ask(conn: socket.socket, buf: bytearray, name: str,
@@ -406,9 +414,6 @@ class Lender:
     self._cable_lent = False
     # what this borrower was last told it has, so each change is logged once
     self._told = ''
-    # a renewal let a spent dial go: "retry" until the phone dials again,
-    # rather than the endpoint files to a phone
-    self._redial_until = 0.0
     self.path = path
     self.borrower = ''
     self._sock: socket.socket | None = None
@@ -489,14 +494,19 @@ class Lender:
         if self._lent.is_set():
           gadget.log.warning("jetlink: %s handed the %s back", self.borrower or 'the borrower',
                              'cable link' if self._cable_lent else 'gadget')
-        if self._cable_lent and self._cable is not None:
-          # the phone's session ended with the borrower; let it dial again
-          self._cable.release(expect_redial=True)
-        self._cable_lent = False
+        # the phone's session ended with the borrower; let it dial again
+        self._release_cable()
         self._told = ''
-        self._redial_until = 0.0
         self._lent.clear()
         self.borrower = ''
+
+  def _release_cable(self) -> None:
+    """Let a lent dial go, so the phone dials again: its session went with the
+    borrower, or with the attempt a renewal follows. The owner's hold keeps a
+    phone that has dialed from being lent the endpoint files meanwhile."""
+    if self._cable_lent and self._cable is not None:
+      self._cable.release(expect_redial=True)
+    self._cable_lent = False
 
   def _tell(self, what: str, *msg) -> None:
     """Log a lend when it is not what this borrower already had: a renewal
@@ -523,26 +533,18 @@ class Lender:
     if op == 'borrow':
       self.borrower = str(msg.get('name') or 'a borrower')
       self._lent.set()
-      udc = gadget.bound_udc()
-      if self._cable_lent and self._cable is not None:
-        # a renewal: the dial went with the attempt that used it. Let the
-        # phone dial again, and wait for that rather than lend it the endpoints
-        self._cable_lent = False
-        self._cable.release(expect_redial=True)
-        self._redial_until = time.monotonic() + gadget.CABLE_DIAL_GRACE
+      # a renewal: the dial went with the attempt that used it
+      self._release_cable()
       if self._cable is not None and self._cable.held:
         # a phone: the link is its dial, and the endpoint files stay put
-        if self._cable.lend(conn, {'ok': True, 'udc': udc or '', 'mount': str(gadget.FFS_MOUNT)}):
+        if self._cable.lend(conn, {'ok': True, 'udc': gadget.bound_udc() or '', 'mount': str(gadget.FFS_MOUNT)}):
           self._cable_lent = True
-          self._redial_until = 0.0
           self._tell('cable', "jetlink: lending the cable link to %s (%s)", self.borrower, self._cable.peer)
           return
-      if time.monotonic() < self._redial_until:
-        _send(conn, {'ok': False, 'retry': True, 'detail': 'waiting for the phone to dial again'})
-        return
       if self._holding():
         _send(conn, {'ok': False, 'retry': True, 'detail': 'waiting for a phone to dial'})
         return
+      udc = gadget.bound_udc()
       if not (udc and self._lendable()):
         # the daemon is mid-exchange, or has not bound yet. It sees `lent` on
         # its next cycle and puts the endpoints down for us

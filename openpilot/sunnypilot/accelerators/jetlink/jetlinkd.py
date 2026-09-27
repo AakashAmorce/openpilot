@@ -273,9 +273,7 @@ class Jetlinkd:
     A run that never heard a hello keeps what an earlier one learned. Writing
     the default instead told the owner a phone or an always-on Jetson sleeps
     after every run with nothing to do, and it let the gadget go."""
-    sleeps = self.server_sleeps
-    if sleeps is None:
-      sleeps = gadget.owner_state().get('sleep_after', 1.0) > 0
+    sleeps = gadget.far_end_sleeps() if self.server_sleeps is None else self.server_sleeps
     try:
       gadget.STATE.write_text(json.dumps({
         'sleep_after': 1.0 if sleeps else 0.0,

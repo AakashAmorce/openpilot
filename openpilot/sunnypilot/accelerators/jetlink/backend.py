@@ -54,11 +54,13 @@ def _package_missing(what: str) -> bool:
 class _Link:
   """modeld's end of the gadget: the lease, and the client that rides on it.
 
-  Both are kept across join attempts. The lease never changes for the length of
-  a drive, and opening the gadget again per attempt is an unplug as the Jetson
-  sees it - which, while one boots and the join loop asks every few seconds, is
-  an unplug a cycle. So an attempt that cannot use the link leaves it here
-  rather than closing it, and only a deliberate close() lets go.
+  Both are kept across join attempts. The lease lasts the drive, though which
+  link it carries is asked again before each new client (a phone may have
+  dialed, or its last dial be spent), and opening the gadget again per attempt
+  is an unplug as the Jetson sees it - which, while one boots and the join loop
+  asks every few seconds, is an unplug a cycle. So an attempt that cannot use
+  the link leaves it here rather than closing it, and only a deliberate close()
+  lets go.
   """
 
   def __init__(self, name: str = 'modeld'):

@@ -258,6 +258,7 @@ class Renewing(LendingTest):
     self.lender(cable=listener)
     loan = self.take()
     first = loan.sock
+    self.holding = True   # the owner, for a host that has dialed: a phone
     got = []
     t = threading.Thread(target=lambda: got.append(loan.renew(timeout=3.0)), daemon=True)
     t.start()
@@ -270,14 +271,28 @@ class Renewing(LendingTest):
     assert got == [True] and loan.sock is not None and loan.sock is not first
     assert not listener.news, 'the phone coming back is not a phone turning up'
 
-  def test_a_phone_that_does_not_dial_again_leaves_the_endpoint_files(self):
+  def test_after_a_spent_dial_the_owners_hold_decides(self):
+    # the lender keeps no clock of its own: with no hold, the endpoint files
     listener = self.listener()
     self.dial(listener)
     self.lender(cable=listener)
     loan = self.take()
-    with mock.patch.object(lending.gadget, 'CABLE_DIAL_GRACE', 0.2):
-      assert loan.renew(timeout=2.0)
+    assert loan.renew(timeout=2.0)
     assert loan.sock is None
+
+  def test_closing_a_loan_wakes_a_renewal_waiting_out_the_hold(self):
+    # modeld shutting down must not sit behind a renewal for the whole hold
+    self.lender()
+    loan = self.take()
+    self.holding = True
+    got = []
+    t = threading.Thread(target=lambda: got.append(loan.renew(timeout=5.0)), daemon=True)
+    t.start()
+    time.sleep(0.1)
+    started = time.monotonic()
+    loan.close()
+    t.join(3.0)
+    assert got == [False] and time.monotonic() - started < 1.0
 
   def test_a_renewal_during_the_hold_waits_and_keeps_the_loan(self):
     self.lender()

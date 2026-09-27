@@ -347,7 +347,7 @@ class TestTheRun(unittest.TestCase):
     return d
 
   def state(self) -> dict:
-    return json.loads(gadget.STATE.read_text())
+    return gadget.owner_state()
 
   def test_nothing_to_do_never_opens_the_link(self):
     d = self.worker(work=False)

@@ -111,8 +111,7 @@ class Owner:
     self.attached = False
     self.configured = False             # attached, as of the last step: for the edges
     self.cable_hold_until = 0.0
-    self.cable_hold_last = 0.0          # CABLE_HOLD_MAX after the configured edge
-    self.configured_at = 0.0            # that edge, for telling this bind's lease from an older one
+    self.configured_at = 0.0            # the configured edge; 0 with no host
     self.dialed = False                 # a phone dialed in since the last run
     self.phone_host = False             # the host on the bus dialed: a phone, which never sleeps
     self.net_ready = False              # usb0 configured for this bind
@@ -149,20 +148,25 @@ class Owner:
     """Is a phone still owed its chance to dial? A borrower that wrote a
     hello over FunctionFS to a phone would block 15 s and bounce the gadget.
 
-    CABLE_HOLD from the configured edge, then on to CABLE_DIAL_GRACE after a
-    lease the host took on the cable's network in this bind, up to
-    CABLE_HOLD_MAX. The lease file is read only past the first hold."""
+    A host that has dialed is a phone until it goes away: between its dials
+    (a session ended, the app restarted) it is waited for, never lent the
+    endpoint files. Before its first dial, CABLE_HOLD from the configured edge,
+    then on to CABLE_DIAL_GRACE after a DHCP lease the host took in this bind,
+    up to CABLE_HOLD_MAX. The lease file is read only past the first hold."""
     if self.cable.held:
       return False
+    if self.phone_host:
+      return True
     now = time.monotonic()
     if now < self.cable_hold_until:
       return True
-    if now >= self.cable_hold_last:
+    last = self.configured_at + gadget.CABLE_HOLD_MAX
+    if not self.configured_at or now >= last:
       return False
-    age = gadget.lease_age()
+    age = gadget.dhcp_lease_age()
     if age is None or now - age < self.configured_at:
       return False
-    until = min(self.cable_hold_last, now - age + gadget.CABLE_DIAL_GRACE)
+    until = min(last, now - age + gadget.CABLE_DIAL_GRACE)
     if until > self.cable_hold_until and now < until:
       gadget.log.warning("jetlink: the host took an address on the cable's network; holding %.1f s more for a phone to dial",
                          until - now)
@@ -281,9 +285,6 @@ class Owner:
       self.open_link()
 
   # -- the parked car -------------------------------------------------------
-
-  def state(self) -> dict:
-    return gadget.owner_state()
 
   def go_dormant(self) -> None:
     """Release the gadget so the Jetson can sleep. The marker goes first so
@@ -405,7 +406,7 @@ class Owner:
     # each read is a file; take them once and pass them down
     offroad = gadget.offroad()
     self.attached = gadget.host_attached()
-    state = self.state()
+    state = gadget.owner_state()
     self.listen_for_a_phone()
 
     # before the worker gate: hardwared waits 25 s for this and a build in
@@ -456,7 +457,7 @@ class Owner:
 
     # a phone never sleeps, and letting go takes its network interface, so it
     # could not dial back when it next has work
-    sleeps = state.get('sleep_after', 1.0) > 0 and not self.phone_host
+    sleeps = gadget.far_end_sleeps(state) and not self.phone_host
     if self.transport is None:
       # nothing to do and nothing presented: only worth a bind if the far end
       # stays awake for it
@@ -488,12 +489,11 @@ class Owner:
         gadget.log.warning("jetlink: a host configured us at %s", speed)
       else:
         self.cable_hold_until = now + gadget.CABLE_HOLD
-        self.cable_hold_last = now + gadget.CABLE_HOLD_MAX
         self.configured_at = now
         gadget.log.warning("jetlink: a host configured us at %s; %.0f s for a phone to dial",
                            speed, gadget.CABLE_HOLD)
     elif self.configured and not self.attached:
-      self.cable_hold_until = self.cable_hold_last = 0.0
+      self.cable_hold_until = self.configured_at = 0.0
       if self.cable.held or gadget.link_kind() == 'cable':
         gadget.log.warning("jetlink: the host went away, the cable link with it")
       self.cable.release()

@@ -39,7 +39,7 @@ class OwnerTest(unittest.TestCase):
                         ('wait_for_host', mock.Mock(return_value=True)),
                         # the owner's own records, and a loopback stand-in for usb0
                         ('LINK', self.tmp / 'link'),
-                        ('LEASES', self.tmp / 'leases'),
+                        ('DHCP_LEASES', self.tmp / 'leases'),
                         ('CABLE_ADDR', ('127.0.0.1', 0)),
                         ('net_up', mock.Mock(return_value=True)),
                         ('net_status', mock.Mock(return_value='ok 192.168.60.1')),
@@ -497,7 +497,6 @@ class TestCable(OwnerTest):
     o.step()
     now = time.monotonic()
     o.cable_hold_until = now - 0.1
-    o.cable_hold_last = now - configured_ago + gadget.CABLE_HOLD_MAX
     o.configured_at = now - configured_ago
     return o
 
@@ -548,6 +547,23 @@ class TestCable(OwnerTest):
     o.step()
     self.assertFalse(o.cable.held)
     self.assertEqual(gadget.link_kind(), 'usb')
+
+  def test_a_phone_between_dials_is_waited_for_not_lent_the_endpoints(self):
+    # its session ended (a borrower finished, the app restarted): a borrower
+    # asking now would write a hello to a phone, 15 s and a bounce
+    o = self.owner()
+    o.step()
+    phone = self.dial(o)
+    o.step()
+    phone.close()
+    o.step()
+    self.assertTrue(o.holding())
+    self.dial(o)
+    o.step()
+    self.assertFalse(o.holding(), 'its dial is in hand, to lend')
+    gadget.host_attached.return_value = False
+    o.step()
+    self.assertFalse(o.holding())
 
   def test_a_phone_that_hung_up_does_not_send_the_owner_dormant(self):
     # the record says the far end sleeps (a run with nothing to do never asks),

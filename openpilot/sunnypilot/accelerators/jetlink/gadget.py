@@ -156,14 +156,14 @@ CABLE_HOLD = 5.0
 # once per enumeration.
 CABLE_DIAL_GRACE = 5.0
 CABLE_HOLD_MAX = 15.0
-LEASES = Path("/dev/shm/jetlink-usb0.leases")   # dnsmasq's, from setup_gadget.sh
+DHCP_LEASES = Path("/dev/shm/jetlink-usb0.leases")   # dnsmasq's, from setup_gadget.sh
 
 
-def lease_age() -> float | None:
+def dhcp_lease_age() -> float | None:
   """Seconds since dnsmasq last wrote a lease on the cable's network, or None.
   An mtime is on the wall clock, so this is the one place that reads it."""
   try:
-    return time.time() - LEASES.stat().st_mtime  # noqa: TID251
+    return time.time() - DHCP_LEASES.stat().st_mtime  # noqa: TID251
   except OSError:
     return None
 
@@ -264,6 +264,12 @@ def owner_state() -> dict:
   except (OSError, ValueError):
     return {}
   return value if isinstance(value, dict) else {}
+
+
+def far_end_sleeps(state: dict | None = None) -> bool:
+  """Does the far end suspend when the gadget goes, as the runs recorded it?
+  No record means it does: letting go of one that does not only costs a rebind."""
+  return (owner_state() if state is None else state).get('sleep_after', 1.0) > 0
 
 
 def repo_root() -> Path:
