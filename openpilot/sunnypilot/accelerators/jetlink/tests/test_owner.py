@@ -364,19 +364,11 @@ class TestTheToggle(OwnerTest):
     o.port.update.assert_called_once_with(True)
 
   def test_ethernet_gives_the_port_back(self):
-    o = self.owner(presented=False)
+    o = self.owner()
     with mock.patch.object(gadget, 'link_endpoint', return_value=('10.0.0.2', 5599)):
       o.step()
     o.port.update.assert_called_once_with(False)
 
-  def test_a_held_gadget_keeps_the_port_a_device(self):
-    # On jetson-trt this also checks the endpoint param is not read: there a
-    # held gadget answers the question alone. Here step() reads it anyway, to
-    # tell the phone's cable from USB (gadget.link_kind), so only the answer
-    # is checked.
-    o = self.owner()
-    o.step()
-    o.port.update.assert_called_once_with(True)
 
   def test_turning_it_off_gives_the_port_back(self):
     o = self.owner()

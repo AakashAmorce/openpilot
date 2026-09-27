@@ -61,7 +61,9 @@ RELEASE_AFTER = 5.0
 # how long the port reads empty before a plug counts as gone. A device let go
 # by a hold reattaches in a DRP toggle and a CC debounce, well under this
 UNPLUGGED = 1.5
-SCRIPT_TIMEOUT = 5.0
+# sudo and three echos take tens of ms. Short, because the one in run()'s finally
+# comes before the FunctionFS close inside manager's 5 s
+SCRIPT_TIMEOUT = 2.0
 UNSUPPORTED = 3
 
 
@@ -80,10 +82,12 @@ def chestnut_attached() -> bool:
   except OSError:
     return False
   for name in names:
+    if ':' in name:
+      continue   # an interface
     try:
       ids = tuple(int((USB_DEVICES / name / f).read_text(), 16) for f in ('idVendor', 'idProduct'))
     except (OSError, ValueError):
-      continue   # an interface, or a device going away
+      continue   # a device going away
     if ids in CHESTNUT_IDS:
       return True
   return False
@@ -113,34 +117,35 @@ class Port:
     self._reset()
 
   def _reset(self) -> None:
-    self.usb = False        # the link is on and over USB
-    self.able = False       # the lever is there, so the role is worth watching
-    self.held = False       # the voter is forced to sink
-    self.took = False       # a host has attached since the hold began
-    self.settled = False    # this plug has been judged; leave it until it comes out
+    self.able: bool | None = None   # is there a lever; None until the link first runs over USB
+    self.held = False               # the voter is forced to sink
+    # this plug has been judged, so leave it until it comes out. Also set for
+    # the length of a hold until a host comes back
+    self.settled = False
     self.role: str | None = None
     self.role_since = 0.0
 
   def update(self, usb: bool, now: float | None = None) -> None:
     if not usb:
-      return self.off()
-    now = time.monotonic() if now is None else now
-    if not self.usb:
+      self.off()
+      return
+    if self.able is None:
       # the port as AGNOS boots it, whatever an owner killed mid-hold left
       # behind, and the answer to whether there is a lever at all
-      self.usb = True
       self.able = run_script('off')
     if not self.able:
       return
+    now = time.monotonic() if now is None else now
     role = power_role()
     if role != self.role:
       self.role, self.role_since = role, now
     lasted = now - self.role_since
     if self.held:
       if role == 'sink':
-        self.took = True
+        self.settled = False   # a host came back
       elif role != 'source' and lasted >= RELEASE_AFTER:
-        self._release(now)
+        self._release()
+        self.role_since = now  # the accessory reattaches in a moment; time the gap afresh
     elif role == 'source':
       if not self.settled and lasted >= SWAP_AFTER:
         if chestnut_attached():
@@ -148,31 +153,26 @@ class Port:
         else:
           self._hold(lasted)
     elif role == 'sink' or lasted >= UNPLUGGED:
-      self.settled = False    # a host, or the plug is gone
+      self.settled = False     # a host, or the plug is gone
 
   def _hold(self, lasted: float) -> None:
     gadget.log.warning(f"jetlink: hosting something that is not a chestnut for {lasted:.0f} s on the USB-C port; holding it as a device")
-    self.took = False
+    # settled stays set if the hold did not happen, so this plug is not tried every cycle
     self.held = run_script('hold')
-    # a hold that did not happen leaves the comma hosting the same plug; judge
-    # it once rather than run sudo every cycle
-    self.settled = not self.held
+    self.settled = True
 
-  def _release(self, now: float) -> None:
-    if self.took:
-      gadget.log.warning("jetlink: the USB-C port is empty; back to dual role")
-    else:
+  def _release(self) -> None:
+    if self.settled:
       # a sink-only accessory: it comes back as a sink on dual role, and
       # holding again would only cycle it
       gadget.log.warning("jetlink: no host came back on the USB-C port; leaving it dual role until the next plug")
-    self.held, self.settled = False, not self.took
-    # the accessory reattaches in a moment; the empty time restarts from here
-    self.role_since = now
+    else:
+      gadget.log.warning("jetlink: the USB-C port is empty; back to dual role")
+    self.held = False
     run_script('off')
 
   def off(self) -> None:
     """Undo a hold. Outside one the port is already as AGNOS boots it."""
-    held = self.held
-    self._reset()
-    if held:
+    if self.held:
       run_script('off')
+    self._reset()
