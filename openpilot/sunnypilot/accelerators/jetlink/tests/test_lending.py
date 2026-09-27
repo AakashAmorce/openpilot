@@ -13,7 +13,9 @@ the handshake for it.
 """
 
 import shutil
+import socket
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -38,12 +40,36 @@ class LendingTest(unittest.TestCase):
     self.addCleanup(p.stop)
     self.udc = 'udc0'
     p.start()
+    # the link is the gadget unless a test says otherwise, whatever this
+    # machine's own params hold; and a loopback stand-in for usb0
+    for name, value in (('link_endpoint', mock.Mock(return_value=None)),
+                        ('CABLE_ADDR', ('127.0.0.1', 0))):
+      p = mock.patch.object(lending.gadget, name, value)
+      self.addCleanup(p.stop)
+      p.start()
+    self.holding = False
 
-  def lender(self) -> lending.Lender:
-    lender = lending.Lender(lambda: self.free, self.bounce, path=self.path)
+  def lender(self, cable: lending.CableListener | None = None) -> lending.Lender:
+    lender = lending.Lender(lambda: self.free, self.bounce, path=self.path,
+                            holding=lambda: self.holding, cable=cable)
     assert lender.start()
     self.addCleanup(lender.stop)
     return lender
+
+  def listener(self) -> lending.CableListener:
+    listener = lending.CableListener()
+    assert listener.open()
+    self.addCleanup(listener.close)
+    return listener
+
+  def dial(self, listener: lending.CableListener) -> socket.socket:
+    """A phone: connects, and the owner's step takes the dial."""
+    phone = socket.create_connection(listener.bound[:2], timeout=3.0)
+    self.addCleanup(phone.close)
+    # the accept is non-blocking and the loopback handshake can still be
+    # finishing when connect returns; the owner polls every step
+    assert self.until(lambda: listener.poll() == '127.0.0.1'), 'the dial was never taken'
+    return phone
 
   def take(self, **kw):
     loan = lending.borrow(path=self.path, **kw)
@@ -94,6 +120,24 @@ class Borrowing(LendingTest):
     t.join(3.0)
     assert got and got[0] is not None
 
+  def test_over_tcp_there_is_nothing_to_borrow_and_nobody_is_asked(self):
+    lender = self.lender()
+    with mock.patch.object(lending.gadget, 'link_endpoint', return_value=('10.0.0.5', 5599)):
+      t0 = time.monotonic()
+      assert self.take(timeout=3.0) is None
+      assert time.monotonic() - t0 < 0.5, 'waited on a lender over TCP'
+    assert not lender.lent, 'the owner was asked for endpoints it does not have'
+
+  def test_during_the_hold_a_borrower_is_told_to_retry(self):
+    # a phone may still dial; a hello over FunctionFS to a phone blocks 15 s
+    self.holding = True
+    lender = self.lender()
+    assert self.take(timeout=0.2) is None
+    assert lender.lent
+    self.holding = False
+    loan = self.take(timeout=1.0)
+    assert loan is not None and loan.sock is None
+
   def test_a_borrow_nobody_can_answer_gives_up_and_says_so(self):
     self.free = False
     lender = self.lender()
@@ -116,6 +160,111 @@ class Borrowing(LendingTest):
     assert lender.lent
     self.udc = 'udc0'
     assert self.take(timeout=1.0) is not None
+
+
+class TheCable(LendingTest):
+  """A phone dials the owner; the loan carries its socket, over the same unix
+  socket, and the endpoint files stay where they are."""
+
+  def test_a_loan_carries_the_phones_dial(self):
+    listener = self.listener()
+    phone = self.dial(listener)
+    lender = self.lender(cable=listener)
+    loan = self.take()
+    assert loan is not None and loan.sock is not None
+    assert lender.lent and lender.borrower == 'modeld'
+    phone.sendall(b'hello')
+    loan.sock.settimeout(3.0)
+    assert loan.sock.recv(5) == b'hello'
+    loan.sock.sendall(b'ready')
+    assert phone.recv(5) == b'ready'
+
+  def test_the_phone_dials_again_when_the_loan_ends(self):
+    # the owner's copy of the dial goes with the loan, so a borrower that has
+    # finished, or died, does not leave the phone talking to nobody
+    listener = self.listener()
+    phone = self.dial(listener)
+    lender = self.lender(cable=listener)
+    loan = self.take()
+    loan.close()
+    assert self.until(lambda: not lender.lent)
+    assert self.until(lambda: not listener.held)
+    assert phone.recv(1) == b''
+    # and that redial is the same phone coming back, not a phone turning up
+    assert listener.redial_expected
+    self.dial(listener)
+    assert not listener.news
+    self.dial(listener)
+    assert listener.news, 'a dial replacing a held one is a phone turning up'
+
+  def test_a_dial_during_the_hold_ends_it_for_the_borrower(self):
+    listener = self.listener()
+    self.holding = True
+    self.lender(cable=listener)
+    got = []
+    t = threading.Thread(target=lambda: got.append(self.take(timeout=3.0)), daemon=True)
+    t.start()
+    time.sleep(0.1)
+    assert not got, 'lent inside the hold'
+    self.dial(listener)
+    t.join(3.0)
+    assert got and got[0] is not None and got[0].sock is not None
+
+  def test_a_usb_loan_leaves_a_later_dial_for_the_next_borrower(self):
+    listener = self.listener()
+    lender = self.lender(cable=listener)
+    loan = self.take()
+    assert loan.sock is None
+    self.dial(listener)
+    loan.close()
+    assert self.until(lambda: not lender.lent)
+    assert listener.held, 'let a phone go that nobody had borrowed'
+
+  def test_a_dial_is_lent_whatever_the_endpoints_are_doing(self):
+    # the endpoint files are not what a phone's borrower uses
+    self.free = False
+    self.udc = None
+    listener = self.listener()
+    self.dial(listener)
+    self.lender(cable=listener)
+    loan = self.take(timeout=1.0)
+    assert loan is not None and loan.sock is not None
+
+
+class TheListener(LendingTest):
+  def test_a_newer_dial_replaces_an_older_one(self):
+    listener = self.listener()
+    first = self.dial(listener)
+    self.dial(listener)
+    assert listener.held
+    assert first.recv(1) == b''
+
+  def test_a_phone_that_hung_up_is_dropped(self):
+    listener = self.listener()
+    phone = self.dial(listener)
+    phone.close()
+    assert self.until(lambda: listener.poll() is None and not listener.held)
+
+  def test_nothing_waiting_is_nothing(self):
+    listener = self.listener()
+    assert listener.poll() is None and not listener.held
+    listener.release(expect_redial=True)   # nothing held is not an error, and nothing to expect
+    assert not listener.redial_expected
+    assert listener.news is False
+    self.dial(listener)
+    assert listener.news
+
+  def test_an_address_that_is_not_ours_yet_is_tried_again_later(self):
+    # usb0 has no address until setup_gadget.sh --net has run
+    listener = lending.CableListener()
+    self.addCleanup(listener.close)
+    with mock.patch.object(lending.gadget, 'CABLE_ADDR', ('192.0.2.1', 0)):
+      assert not listener.open()
+      assert not listener.listening
+      assert listener.next_open > time.monotonic()
+    assert not listener.open(), 'retried inside the backoff'
+    listener.next_open = 0.0
+    assert listener.open() and listener.listening
 
 
 class Bouncing(LendingTest):

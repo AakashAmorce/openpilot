@@ -19,9 +19,15 @@ that: modeld borrows for the length of a drive, jetlinkd stays off the
 endpoints while it does, and the connection is the lease, so a modeld that is
 killed returns it by dying. There is no "give it back" message: the socket
 closing is the only signal, because it is the only one a killed process sends.
+
+An iPhone cannot take the endpoint files: it is on the gadget's network
+interface and dials the owner (CableListener). The loan then carries the
+accepted socket instead, sent over the same unix socket with SCM_RIGHTS, and
+the owner closes its copy when the loan ends so the phone dials again.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import socket
@@ -47,7 +53,7 @@ def _send(conn: socket.socket, msg: dict) -> None:
   conn.sendall(json.dumps(msg).encode() + b'\n')
 
 
-def _recv_line(conn: socket.socket, buf: bytearray, deadline: float) -> dict | None:
+def _recv_line(conn: socket.socket, buf: bytearray, deadline: float, fds: list[int] | None = None) -> dict | None:
   """One json message off the socket, or None if the deadline passes first.
 
   Both ends speak newline-delimited json over a stream, so a message can arrive
@@ -57,6 +63,9 @@ def _recv_line(conn: socket.socket, buf: bytearray, deadline: float) -> dict | N
 
   The peer going away raises, because that is the one thing neither end may
   read as "nothing yet": for the lender it is the whole lease ending.
+
+  With `fds`, file descriptors sent along with the bytes land there: a plain
+  recv would have the kernel close them unseen.
   """
   while time.monotonic() < deadline:
     if b'\n' in buf:
@@ -64,7 +73,11 @@ def _recv_line(conn: socket.socket, buf: bytearray, deadline: float) -> dict | N
       buf[:] = rest
       return json.loads(line)
     try:
-      chunk = conn.recv(4096)
+      if fds is None:
+        chunk = conn.recv(4096)
+      else:
+        chunk, got, _, _ = socket.recv_fds(conn, 4096, 4)
+        fds.extend(got)
     except TimeoutError:
       continue
     if not chunk:
@@ -81,10 +94,14 @@ class Loan:
   back, and a modeld that crashed hands it back the same way.
   """
 
-  def __init__(self, conn: socket.socket, buf: bytearray, mount: str, udc: str):
+  def __init__(self, conn: socket.socket, buf: bytearray, mount: str, udc: str,
+               sock: socket.socket | None = None):
     self.conn = conn
     self.mount = mount
     self.udc = udc
+    # a phone's dial, accepted by the owner: the link rides on this and the
+    # endpoint files are left alone. None on a USB link
+    self.sock = sock
     self._buf = buf
     self._lock = threading.Lock()
     self._closed = False
@@ -119,6 +136,11 @@ class Loan:
         self.conn.close()
       except OSError:
         pass
+      if self.sock is not None:
+        try:
+          self.sock.close()
+        except OSError:
+          pass
 
 
 def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path = SOCKET) -> Loan | None:
@@ -127,7 +149,13 @@ def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path = S
   None is the ordinary answer on a device where the link was only just turned
   on, or whose daemon died: the caller opens the gadget itself, as it always
   did, so a drive never loses the large model to a daemon fault.
+
+  Over the cable the answer carries the phone's socket; over ethernet there is
+  nothing to lend and nobody holds anything, so nobody is asked.
   """
+  if gadget.link_endpoint() is not None:
+    # asking would only wait out the timeout on "retry" before connecting anyway
+    return None
   deadline = time.monotonic() + timeout
   try:
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -136,36 +164,200 @@ def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path = S
   except OSError:
     return None   # no jetlinkd listening; the caller owns the gadget itself
   buf = bytearray()
+  fds: list[int] = []
   try:
     while time.monotonic() < deadline:
       _send(conn, {'op': 'borrow', 'name': name})
-      reply = _recv_line(conn, buf, deadline)
+      reply = _recv_line(conn, buf, deadline, fds)
       if reply is None:
         break   # out of time
       if reply.get('ok'):
-        gadget.log.warning("jetlink: borrowed the gadget from jetlinkd (udc %s)", reply.get('udc'))
-        return Loan(conn, buf, str(reply['mount']), str(reply['udc']))
+        sock = None
+        if reply.get('cable'):
+          if not fds:
+            gadget.log.warning("jetlink: jetlinkd lent the cable link without its socket")
+            break
+          sock = socket.socket(fileno=fds.pop(0))
+          gadget.log.warning("jetlink: borrowed the cable link from jetlinkd (%s)", reply.get('peer'))
+        else:
+          gadget.log.warning("jetlink: borrowed the gadget from jetlinkd (udc %s)", reply.get('udc'))
+        return Loan(conn, buf, str(reply['mount']), str(reply['udc']), sock=sock)
       if not reply.get('retry'):
         gadget.log.warning("jetlink: jetlinkd would not lend the gadget (%s)", reply.get('detail'))
         break
       time.sleep(RETRY)
   except (OSError, ValueError, KeyError):
     gadget.log.exception("jetlink: could not borrow the gadget")
+  for fd in fds:
+    os.close(fd)
   conn.close()
   return None
+
+
+# between attempts to bind the cable address: usb0 has no address until
+# setup_gadget.sh has run, and a bind that keeps failing is not worth a log
+# line twice a second
+CABLE_BIND_BACKOFF = 5.0
+
+
+class CableListener:
+  """The owner's ear for a phone: one accept socket on CABLE_ADDR, open while
+  the gadget is presented, holding at most one dial at a time.
+
+  A dial is accepted from the owner's step, never read: what it proves is that
+  a phone is on the cable, and the bytes belong to whoever borrows the link.
+  A newer dial replaces an older one, so a phone whose app restarted is not
+  stuck behind its own dead connection.
+  """
+
+  def __init__(self):
+    self._srv: socket.socket | None = None
+    self._sock: socket.socket | None = None
+    self.peer: str | None = None
+    self.bound: tuple | None = None
+    self.next_open = 0.0
+    # we hung up on the phone because its borrower finished, so its next dial
+    # is the same phone coming back, not news; `news` says which the last
+    # accepted dial was
+    self.redial_expected = False
+    self.news = False
+    self._last_error = ''
+    self._lock = threading.Lock()
+
+  @property
+  def listening(self) -> bool:
+    return self._srv is not None
+
+  @property
+  def held(self) -> bool:
+    """Is a phone's dial in hand?"""
+    return self._sock is not None
+
+  def open(self) -> bool:
+    """Bind, or say why not. Never raises: the address is usb0's, which may
+    not exist yet, and the owner's loop must carry on without it."""
+    if self._srv is not None:
+      return True
+    now = time.monotonic()
+    if now < self.next_open:
+      return False
+    self.next_open = now + CABLE_BIND_BACKOFF
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+      srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+      srv.bind(gadget.CABLE_ADDR)
+      srv.listen(2)
+      srv.setblocking(False)
+    except OSError as e:
+      srv.close()
+      why = ('usb0 has no address yet' if e.errno == errno.EADDRNOTAVAIL else str(e))
+      if why != self._last_error:
+        self._last_error = why
+        gadget.log.warning("jetlink: cannot listen for a phone on %s:%d (%s)", *gadget.CABLE_ADDR, why)
+      return False
+    self._srv = srv
+    self.bound = srv.getsockname()
+    self._last_error = ''
+    gadget.log.warning("jetlink: listening for a phone on %s:%d", *self.bound[:2])
+    return True
+
+  def poll(self) -> str | None:
+    """Take a dial if one is waiting. The peer's address when one arrived,
+    else None. A held dial the phone has since dropped is let go here too,
+    so a borrower is never handed a dead socket."""
+    if self._srv is None:
+      return None
+    self._drop_if_dead()
+    try:
+      conn, addr = self._srv.accept()
+    except (BlockingIOError, InterruptedError):
+      return None
+    except OSError:
+      gadget.log.exception("jetlink: the cable listener failed")
+      return None
+    conn.setblocking(True)
+    with self._lock:
+      old, self._sock = self._sock, conn
+      self.peer = str(addr[0])
+      self.news, self.redial_expected = not self.redial_expected, False
+    _close(old)
+    return self.peer
+
+  def _drop_if_dead(self) -> None:
+    """A phone that closed its end. It sends nothing until a hello, so a
+    readable idle socket is EOF."""
+    with self._lock:
+      sock = self._sock
+      if sock is None:
+        return
+      try:
+        alive = sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) != b''
+      except (BlockingIOError, InterruptedError):
+        return
+      except OSError:
+        alive = False
+      if alive:
+        return
+      self._sock, self.peer = None, None
+    gadget.log.warning("jetlink: the phone hung up")
+    _close(sock)
+
+  def lend(self, conn: socket.socket, msg: dict) -> bool:
+    """Send the held dial along with `msg` on the lend connection. False
+    with nothing held. From the lender's thread."""
+    with self._lock:
+      sock = self._sock
+      if sock is None:
+        return False
+      msg = {**msg, 'cable': True, 'peer': self.peer}
+      socket.send_fds(conn, [json.dumps(msg).encode() + b'\n'], [sock.fileno()])
+      return True
+
+  def release(self, expect_redial: bool = False) -> None:
+    """Close the held dial. The phone dials again and the next accept
+    replaces it: a borrower that has finished, or died, must not leave the
+    phone talking to nobody. `expect_redial` marks that next dial as ours to
+    expect rather than a phone turning up."""
+    with self._lock:
+      sock, self._sock = self._sock, None
+      self.peer = None
+      self.redial_expected = expect_redial and sock is not None
+    _close(sock)
+
+  def close(self) -> None:
+    self.release()
+    srv, self._srv = self._srv, None
+    self.bound = None
+    _close(srv)
+
+
+def _close(sock: socket.socket | None) -> None:
+  if sock is not None:
+    try:
+      sock.close()
+    except OSError:
+      pass
+
 
 class Lender:
   """jetlinkd's side: one borrower at a time, for as long as it stays connected.
 
   `lendable` says whether the gadget is in the state a borrower can take over
   from, bound with no endpoint file open here; while it is not, a borrow is
-  answered "retry" and the daemon's own loop puts it there.
+  answered "retry" and the daemon's own loop puts it there. `holding` is the
+  window after a host enumerates in which a phone may still dial: "retry" too,
+  so nobody writes a hello over FunctionFS to a phone. With `cable` holding a
+  dial, the loan carries the phone's socket instead of the endpoint files.
   """
 
   def __init__(self, lendable: Callable[[], bool], bounce: Callable[[], bool],
-               path: Path = SOCKET):
+               path: Path = SOCKET, holding: Callable[[], bool] | None = None,
+               cable: CableListener | None = None):
     self._lendable = lendable
     self._bounce = bounce
+    self._holding = holding or (lambda: False)
+    self._cable = cable
+    self._cable_lent = False
     self.path = path
     self.borrower = ''
     self._sock: socket.socket | None = None
@@ -244,7 +436,12 @@ class Lender:
       finally:
         conn.close()
         if self._lent.is_set():
-          gadget.log.warning("jetlink: %s handed the gadget back", self.borrower or 'the borrower')
+          gadget.log.warning("jetlink: %s handed the %s back", self.borrower or 'the borrower',
+                             'cable link' if self._cable_lent else 'gadget')
+        if self._cable_lent and self._cable is not None:
+          # the phone's session ended with the borrower; let it dial again
+          self._cable.release(expect_redial=True)
+        self._cable_lent = False
         self._lent.clear()
         self.borrower = ''
 
@@ -268,6 +465,16 @@ class Lender:
       self.borrower = str(msg.get('name') or 'a borrower')
       self._lent.set()
       udc = gadget.bound_udc()
+      if self._cable is not None and self._cable.held:
+        # a phone: the link is its dial, and the endpoint files stay put
+        if first:
+          gadget.log.warning("jetlink: lending the cable link to %s (%s)", self.borrower, self._cable.peer)
+        if self._cable.lend(conn, {'ok': True, 'udc': udc or '', 'mount': str(gadget.FFS_MOUNT)}):
+          self._cable_lent = True
+          return
+      if self._holding():
+        _send(conn, {'ok': False, 'retry': True, 'detail': 'waiting for a phone to dial'})
+        return
       if not (udc and self._lendable()):
         # the daemon is mid-exchange, or has not bound yet. It sees `lent` on
         # its next cycle and puts the endpoints down for us
