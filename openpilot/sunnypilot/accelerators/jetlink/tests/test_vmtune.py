@@ -46,7 +46,8 @@ class TestVmTuning(unittest.TestCase):
               mock.patch.object(vmtune.subprocess, 'run', self.run_mock),
               mock.patch.object(vmtune.os, 'geteuid', return_value=1000),
               mock.patch.object(gadget, 'DORMANT', self.tmp / 'dormant'),
-              mock.patch.object(gadget, 'link_endpoint', mock.Mock(return_value=None))):
+              mock.patch.object(gadget, 'link_endpoint', mock.Mock(return_value=None)),
+              mock.patch.object(owner.usbport, 'Port', mock.Mock())):
       self.addCleanup(p.stop)
       p.start()
 

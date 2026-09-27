@@ -43,6 +43,10 @@ class OwnerTest(unittest.TestCase):
     p = mock.patch.object(owner, 'vmtune', mock.Mock())
     self.addCleanup(p.stop)
     self.vmtune = p.start()
+    # the real one runs sudo on a comma, and these run there too
+    p = mock.patch.object(owner.usbport, 'Port', mock.Mock())
+    self.addCleanup(p.stop)
+    p.start()
 
   def write(self, key: str, value: bytes) -> None:
     (self.params / key).write_bytes(value)
@@ -333,6 +337,39 @@ class TestTheToggle(OwnerTest):
     o.step()
     self.vmtune.apply_vm_tuning.assert_called_once()
     self.vmtune.restore_vm_tuning.assert_not_called()
+
+  def test_the_port_is_kept_a_device_while_the_link_is_usb(self):
+    o = self.owner()
+    o.step()
+    o.port.update.assert_called_once_with(True)
+
+  def test_ethernet_gives_the_port_back(self):
+    o = self.owner(presented=False)
+    with mock.patch.object(gadget, 'link_endpoint', return_value=('10.0.0.2', 5599)):
+      o.step()
+    o.port.update.assert_called_once_with(False)
+
+  def test_a_held_gadget_is_usb_without_reading_the_endpoint(self):
+    o = self.owner()
+    with mock.patch.object(gadget, 'link_endpoint') as endpoint:
+      o.port.update.side_effect = lambda usb: self.assertTrue(usb)
+      o.step()
+    o.port.update.assert_called_once_with(True)
+    self.assertEqual(endpoint.call_count, 0)
+
+  def test_turning_it_off_gives_the_port_back(self):
+    o = self.owner()
+    self.write('JetlinkEnabled', b'0')
+    o.step()
+    o.port.off.assert_called_once()
+    o.port.update.assert_not_called()
+
+  def test_stopping_gives_the_port_back(self):
+    o = self.owner()
+    o.lender.start.return_value = True
+    o.stop = True
+    o.run()
+    o.port.off.assert_called_once()
 
   def test_a_jetson_on_ethernet_has_no_gadget_to_own(self):
     with mock.patch.object(gadget, 'link_endpoint', return_value=('10.0.0.2', 5599)):

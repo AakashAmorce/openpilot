@@ -35,7 +35,7 @@ import sys
 import time
 from pathlib import Path
 
-from openpilot.sunnypilot.accelerators.jetlink import gadget, lending, vmtune
+from openpilot.sunnypilot.accelerators.jetlink import gadget, lending, usbport, vmtune
 
 POLL = 0.5
 # how long the gadget is held after the last thing that wanted it. The server
@@ -103,6 +103,7 @@ class Owner:
     self.seen: dict[str, int] = {}      # watched param -> mtime when last looked
     self._watched: dict[str, str] | None = None
     self.had_host = False
+    self.port = usbport.Port()
     self.lender = lending.Lender(self.lendable, self.bounce_gadget)
 
   # -- the gadget -----------------------------------------------------------
@@ -312,11 +313,16 @@ class Owner:
       if self.vm_tuned:
         vmtune.restore_vm_tuning()
         self.vm_tuned = False
+      self.port.off()
       return
 
     if not self.vm_tuned:
       vmtune.apply_vm_tuning()
       self.vm_tuned = True
+    # before anything is presented: a C-to-C host has to find a device here.
+    # Ethernet needs the port as it boots, to host the adapter. A transport is
+    # only ever opened for USB, so holding one saves the param read
+    self.port.update(self.transport is not None or gadget.link_endpoint() is None)
 
     # each read is a file; take them once and pass them down
     offroad = gadget.offroad()
@@ -396,7 +402,10 @@ class Owner:
           self.next_attempt = time.monotonic() + RECONNECT_BACKOFF
         time.sleep(max(0.0, POLL - (time.monotonic() - started)))
     finally:
-      # the sysctls stay: a stop here is where a drive begins
+      # first, inside manager's 5 s: it stops this when a chestnut turns up,
+      # and the comma has to host that. The sysctls stay: a stop here is where
+      # a drive begins
+      self.port.off()
       self.lender.stop()
       self.stop_worker()
       self.close_link()
