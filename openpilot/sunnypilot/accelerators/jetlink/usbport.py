@@ -6,21 +6,24 @@ See the LICENSE.md file in the root directory for more details.
 
 The comma's USB-C port, kept the device end of a USB link.
 
-The port is dual role. It hosts a chestnut or a USB ethernet adapter, and it is
-the device for a jetlink host. An A-to-C cable settles which by construction:
-the A end only pulls CC up, so the comma can only be the sink and the device.
-A C-to-C cable to a Mac does not. Both ends are dual role, and the comma can
-come out the source and the host, facing a Mac that cannot be a USB device.
-Carrot's Jetson on C-to-C showed the same thing from the other side: the comma
-read "Powered cable w/ sink" and enumerated the Jetson's own gadget.
+The port is dual role. It hosts a chestnut, and it is the device for a jetlink
+host. An A-to-C cable settles which by construction: the A end only pulls CC
+up, so the comma can only be the sink and the device. A C-to-C cable does not.
+Both ends are dual role, and the comma can come out the source and the host:
+facing a Mac, nothing enumerates; facing an iPhone or a Jetson's own USB-C
+port, the far end enumerates as a device. Carrot's Jetson on C-to-C read
+"Powered cable w/ sink" and enumerated as 0955:7020.
 
-So when the comma finds itself powering the far end and nothing has enumerated
-on its host port, the far end is a host that lost the toss, and the port is
-held at sink until that cable comes out. A chestnut or an adapter enumerates
-within the wait and is left alone, and a USB-A host never gets here: the comma
-is already the sink there. Holding for the whole session would be simpler and
-would hide a chestnut plugged in while the link is on, since chestnut_present()
-needs the comma to host it before jetlink stands aside.
+While the link runs over USB, a chestnut is the only thing the comma should
+host on this port; ethernet takes the link off USB and this with it. So once
+the comma has been the host for a few seconds with no chestnut on the port,
+whatever is on the other end is a host that lost the toss, and the port is held
+at sink until that cable comes out. Nothing happens anywhere else: the comma
+as the device (every USB-A host, a C-to-C host that won), a power supply, a
+chestnut, and a device without the lever all leave the port as AGNOS boots it.
+Holding for the whole session would be simpler and would hide a chestnut
+plugged in while the link is on, since chestnut_present() needs the comma to
+host it before jetlink stands aside.
 
 The lever is the charger's DISABLE_POWER_ROLE_SWITCH voter, forced from
 debugfs. It is the one that holds. The charger puts the port back to dual role
@@ -28,14 +31,10 @@ on every unplug and refuses a role written through the power supply once
 nothing is attached, so the policy engine's rev3_sink_only and dual_role/mode
 last one plug at most; a forced voter gates all of those writes.
 
-USB PD is off while the link is on USB. An A-to-C cable never has any, and as
-a PD sink the comma would ask a Mac for up to 3 A. Apple hosts have also
-dropped PD sinks that do not answer their revision 3 messages
-(raspberrypi/linux#6569). The policy engine reads this only when the comma
-starts up as a sink, so a chestnut the comma powers is untouched.
-
-None of it survives a reboot, and all of it is undone when the link is turned
-off or moved to ethernet. Standard library only, like the rest of the owner.
+USB PD is off for the length of a hold, so the host that comes back gets what
+an A-to-C cable gives it: no contract, and no request from the comma for 3 A.
+Apple hosts have also dropped PD sinks that do not answer their revision 3
+messages (raspberrypi/linux#6569). None of it survives a reboot.
 """
 from __future__ import annotations
 
@@ -48,13 +47,13 @@ from openpilot.sunnypilot.accelerators.jetlink import gadget
 
 SCRIPT = Path(__file__).with_name('usb_port.sh')
 POWER_ROLE = Path('/sys/class/usbpd/usbpd0/current_pr')
-# USB_DEVICES_PATH and PRIMARY_USB_CONTROLLER in common/hardware/usb.py, which
-# the owner cannot import: the hardware package brings cereal and capnp with it.
-# a800000 is host-only and carries the modem
 USB_DEVICES = Path('/sys/bus/usb/devices')
-PORT_CONTROLLER = 'a600000.ssusb'
-# how long the comma powers the far end with nothing enumerated before it takes
-# the far end for a host. An adapter or a chestnut enumerates well inside this
+# CHESTNUT_USB_IDS and CHESTNUT_ROM_USB_IDS in common/hardware/usb.py, which the
+# owner cannot import: the hardware package brings cereal and capnp with it.
+# The ROM ones too, so a chestnut being flashed is never taken for a host
+CHESTNUT_IDS = frozenset({(0xADD1, 0x0001), (0x3801, 0x0001), (0x174C, 0x2464), (0x174C, 0x2463)})
+# how long the comma hosts the far end before judging it. A chestnut enumerates
+# well inside this
 SWAP_AFTER = 3.0
 # how long the port reads empty before a hold is let go. The hold itself is an
 # unplug and replug, so this has to outlast the replug
@@ -74,20 +73,18 @@ def power_role() -> str | None:
     return None
 
 
-def hosting_a_device() -> bool:
-  """Has anything enumerated on the port while the comma was its host?
-
-  Devices only: a root hub is named usbN and an interface has a colon. Not
-  usb.py's idVendor test, which counts the root hubs host mode brings up.
-  """
+def chestnut_attached() -> bool:
+  """Is a chestnut enumerated, running or in its ROM? It can only be on this port."""
   try:
     names = os.listdir(USB_DEVICES)
   except OSError:
     return False
   for name in names:
-    if name.startswith('usb') or ':' in name:
-      continue
-    if f'/{PORT_CONTROLLER}/' in os.path.realpath(USB_DEVICES / name):
+    try:
+      ids = tuple(int((USB_DEVICES / name / f).read_text(), 16) for f in ('idVendor', 'idProduct'))
+    except (OSError, ValueError):
+      continue   # an interface, or a device going away
+    if ids in CHESTNUT_IDS:
       return True
   return False
 
@@ -129,8 +126,10 @@ class Port:
       return self.off()
     now = time.monotonic() if now is None else now
     if not self.usb:
+      # the port as AGNOS boots it, whatever an owner killed mid-hold left
+      # behind, and the answer to whether there is a lever at all
       self.usb = True
-      self.able = run_script('link')
+      self.able = run_script('off')
     if not self.able:
       return
     role = power_role()
@@ -144,18 +143,18 @@ class Port:
         self._release(now)
     elif role == 'source':
       if not self.settled and lasted >= SWAP_AFTER:
-        if hosting_a_device():
-          self.settled = True   # something the comma is meant to host
+        if chestnut_attached():
+          self.settled = True
         else:
           self._hold(lasted)
     elif role == 'sink' or lasted >= UNPLUGGED:
       self.settled = False    # a host, or the plug is gone
 
   def _hold(self, lasted: float) -> None:
-    gadget.log.warning(f"jetlink: nothing enumerated in {lasted:.0f} s on the USB-C port the comma powers; holding it as a device")
+    gadget.log.warning(f"jetlink: hosting something that is not a chestnut for {lasted:.0f} s on the USB-C port; holding it as a device")
     self.took = False
     self.held = run_script('hold')
-    # a hold that did not happen leaves the comma powering the same plug; judge
+    # a hold that did not happen leaves the comma hosting the same plug; judge
     # it once rather than run sudo every cycle
     self.settled = not self.held
 
@@ -163,17 +162,17 @@ class Port:
     if self.took:
       gadget.log.warning("jetlink: the USB-C port is empty; back to dual role")
     else:
-      # a sink-only device the comma did not see enumerate: it comes back as a
-      # sink on dual role, and holding again would only cycle it
+      # a sink-only accessory: it comes back as a sink on dual role, and
+      # holding again would only cycle it
       gadget.log.warning("jetlink: no host came back on the USB-C port; leaving it dual role until the next plug")
     self.held, self.settled = False, not self.took
-    # the device reattaches in a moment; the empty time restarts from here
+    # the accessory reattaches in a moment; the empty time restarts from here
     self.role_since = now
-    run_script('release')
+    run_script('off')
 
   def off(self) -> None:
-    """The port as AGNOS boots it. Once: nothing to do if the link never was on USB."""
-    if not self.usb:
-      return
+    """Undo a hold. Outside one the port is already as AGNOS boots it."""
+    held = self.held
     self._reset()
-    run_script('off')
+    if held:
+      run_script('off')
