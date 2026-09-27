@@ -110,10 +110,8 @@ class Owner:
     self.lease_settled = 0.0
     self.attached = False
     self.configured = False             # attached, as of the last step: for the edges
-    self.cable_hold_until = 0.0
-    self.configured_at = 0.0            # the configured edge; 0 with no host
     self.dialed = False                 # a phone dialed in since the last run
-    self.phone_host = False             # the host on the bus dialed: a phone, which never sleeps
+    self.built_ios: bool | None = None  # what the gadget was built for; None until looked at
     self.net_ready = False              # usb0 configured for this bind
     self.next_net_attempt = 0.0
     self.worker: subprocess.Popen | None = None
@@ -145,45 +143,18 @@ class Owner:
     return self.transport is not None and self.transport.lendable
 
   def holding(self) -> bool:
-    """Is a phone still owed its chance to dial? A borrower that wrote a
-    hello over FunctionFS to a phone would block 15 s and bounce the gadget.
-
-    A host that has dialed is a phone until it goes away: between its dials
-    (a session ended, the app restarted) it is waited for, never lent the
-    endpoint files. Before its first dial, CABLE_HOLD from the configured edge,
-    then on to CABLE_DIAL_GRACE after a DHCP lease the host took in this bind,
-    up to CABLE_HOLD_MAX. The lease file is read only past the first hold."""
-    if self.cable.held:
-      return False
-    if self.phone_host:
-      return True
-    now = time.monotonic()
-    if now < self.cable_hold_until:
-      return True
-    last = self.configured_at + gadget.CABLE_HOLD_MAX
-    if not self.configured_at or now >= last:
-      return False
-    age = gadget.dhcp_lease_age()
-    if age is None or now - age < self.configured_at:
-      return False
-    until = min(last, now - age + gadget.CABLE_DIAL_GRACE)
-    if until > self.cable_hold_until and now < until:
-      gadget.log.warning("jetlink: the host took an address on the cable's network; holding %.1f s more for a phone to dial",
-                         until - now)
-    self.cable_hold_until = max(self.cable_hold_until, until)
-    return now < self.cable_hold_until
+    """Should a borrower wait rather than take the endpoint files? For iOS,
+    always: the host is a phone, which never reads them, so a borrower waits
+    for its dial (the lender hands that over first). For USB, never."""
+    return gadget.ios()
 
   def bounce_gadget(self) -> bool:
     """One unplug and replug, for a borrower whose write has no reader.
 
     Unbinding is the only thing that makes FunctionFS dequeue a write the host
     is not draining, and the unbind belongs to whoever holds ep0. See
-    FfsTransport._abort_write. Over the cable too: only a borrower on
-    FunctionFS asks (a TCP link has no such write), and without the unbind it
-    stays blocked for good, as modeld did on the bench when a phone dialed
-    just after the hold. The phone's idle dial goes down with its network
-    interface and it dials again once the host enumerates; the freed borrower
-    gets the cable on its next borrow.
+    FfsTransport._abort_write. Only a borrower on FunctionFS asks: for iOS
+    nothing is ever lent the endpoint files.
     """
     if self.transport is None:
       return False
@@ -233,7 +204,10 @@ class Owner:
     if time.monotonic() < self.next_gadget_attempt:
       return False
     self.next_gadget_attempt = time.monotonic() + GADGET_SETUP_BACKOFF
-    return gadget.setup_gadget()
+    if not gadget.setup_gadget():
+      return False
+    self.built_ios = gadget.ios()
+    return True
 
   def ensure_net(self) -> None:
     """usb0 exists only once the UDC is bound, so the network comes up here,
@@ -405,9 +379,11 @@ class Owner:
 
     # each read is a file; take them once and pass them down
     offroad = gadget.offroad()
+    if self.switch_mode(offroad):
+      return
     self.attached = gadget.host_attached()
     state = gadget.owner_state()
-    self.listen_for_a_phone()
+    self.watch_the_port()
 
     # before the worker gate: hardwared waits 25 s for this and a build in
     # flight takes minutes, so a shutdown request cannot queue behind one
@@ -455,9 +431,9 @@ class Owner:
         return
       return self.spawn_worker(why)
 
-    # a phone never sleeps, and letting go takes its network interface, so it
-    # could not dial back when it next has work
-    sleeps = gadget.far_end_sleeps(state) and not self.phone_host
+    # a phone never sleeps, and letting go takes the network interface it
+    # dials over: for iOS the gadget stays up whatever the record says
+    sleeps = gadget.far_end_sleeps(state) and not self.built_ios
     if self.transport is None:
       # nothing to do and nothing presented: only worth a bind if the far end
       # stays awake for it
@@ -465,58 +441,67 @@ class Owner:
         self.open_link()
       return
     if sleeps and not gadget.over_tcp() and time.monotonic() - self.idle_since >= DORMANT_HOLD:
-      # never over TCP: the phone's session is its dial, and an unbind would
-      # take the network interface it dialed over
       self.go_dormant()
     else:
       self.settle()
 
-  def listen_for_a_phone(self) -> None:
-    """The edges of the USB link, and the dial that tells a phone from a Jetson.
+  def watch_the_port(self) -> None:
+    """The edges of the USB link, and for iOS the phone's dial.
 
-    A host enumerating opens the hold: borrowers are answered "retry" for
-    CABLE_HOLD so a phone can dial before anything writes over FunctionFS. A
-    dial ends it and marks the link as the cable; no dial, and it is USB. The
-    host going away clears both, so the next one is looked at afresh.
+    For iOS the gadget's network comes up after each bind and the owner
+    listens for the phone; an accepted dial is the link. The host going away
+    takes the dial with it, so the next one is looked at afresh.
     """
-    now = time.monotonic()
-    self.ensure_net()
-    net = gadget.net_status() or ''
-    no_net = net.startswith('net: unavailable')   # a kernel without NCM or ECM: USB only
     if self.attached and not self.configured:
-      speed = gadget.usb_speed() or 'an unknown speed'
-      if no_net:
-        gadget.log.warning("jetlink: a host configured us at %s", speed)
-      else:
-        self.cable_hold_until = now + gadget.CABLE_HOLD
-        self.configured_at = now
-        gadget.log.warning("jetlink: a host configured us at %s; %.0f s for a phone to dial",
-                           speed, gadget.CABLE_HOLD)
-    elif self.configured and not self.attached:
-      self.cable_hold_until = self.configured_at = 0.0
-      if self.cable.held or gadget.link_kind() == 'cable':
-        gadget.log.warning("jetlink: the host went away, the cable link with it")
+      gadget.log.warning("jetlink: a host configured us at %s", gadget.usb_speed() or 'an unknown speed')
+    elif self.configured and not self.attached and self.cable.held:
+      gadget.log.warning("jetlink: the host went away, the cable link with it")
       self.cable.release()
       self.dialed = False
-      self.phone_host = False
       gadget.clear_link()
     self.configured = self.attached
-    if self.transport is not None and net.startswith('ok') and not self.cable.listening:
+    if not self.built_ios:
+      return
+    self.ensure_net()
+    if self.transport is not None and self.net_ready and not self.cable.listening:
       self.cable.open()   # not before: the bind to 192.168.60.1 fails without usb0
     peer = self.cable.poll()
     if peer is not None:
       gadget.note_link('cable', peer)
       gadget.log.warning("jetlink: cable link from %s", peer)
       self.had_host = True
-      self.phone_host = True
-      self.idle_since = now
+      self.idle_since = time.monotonic()
       # a reason for a run, unless it is the phone coming back after we hung
       # up on it, or a run is already going and its borrow will take this dial
       running = self.worker is not None and self.worker.poll() is None
       if self.cable.news and not running:
         self.dialed = True
-    elif not self.cable.held and gadget.link_kind() == 'cable':
+    elif not self.cable.held and gadget.link_peer() is not None:
       gadget.clear_link()   # the phone hung up, or its borrower finished
+
+  def switch_mode(self, offroad: bool) -> bool:
+    """Rebuild the gadget when the setting moved between USB and iOS: they are
+    different devices. Only while parked and with nobody on the link, since
+    the rebuild is an unplug. True when this step went on it."""
+    ios = gadget.ios()
+    if self.built_ios is None:
+      self.built_ios = gadget.built_for_ios() if gadget.link_configured() else ios
+    if ios == self.built_ios or gadget.link_endpoint() is not None:
+      return False
+    if not offroad or self.lender.lent or self.worker_running():
+      return False
+    now = time.monotonic()
+    if now < self.next_gadget_attempt:
+      return True
+    self.next_gadget_attempt = now + GADGET_SETUP_BACKOFF
+    gadget.log.warning("jetlink: Accelerator Link is now %s, rebuilding the gadget", 'iOS' if ios else 'USB')
+    self.close_link()
+    self.cable.close()
+    self.dialed = False
+    gadget.clear_link()
+    if gadget.setup_gadget():
+      self.built_ios = ios
+    return True
 
   def run(self) -> None:
     gadget.clear_link()   # ours to write, and a record from a previous owner is stale

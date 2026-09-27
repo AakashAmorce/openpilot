@@ -143,10 +143,10 @@ class WaitForHost(ClockedTest):
     # the phone configured the UDC and its dial is the proof it is there; an
     # unbind would only take its network interface down
     self.bus('configured')
-    gadget.note_link('cable', '192.168.60.3')
     link = mock.Mock()
     link.open.return_value = client = mock.Mock()
-    with mock.patch.object(gadget, 'wait_for_host', return_value=True) as wait:
+    with mock.patch.object(gadget, 'wait_for_host', return_value=True) as wait, \
+         mock.patch.object(gadget, 'ios', return_value=True):
       assert backend._connect_patiently(link) is client
     assert wait.call_args.kwargs['bounce'] is None
     client.rebind.assert_not_called()

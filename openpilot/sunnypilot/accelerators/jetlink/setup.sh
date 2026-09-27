@@ -26,8 +26,15 @@ if [ ! -d "$REPO/jetlink" ]; then
   exit 0
 fi
 
+# An iPhone needs the composite gadget with a network interface; a Jetson or a
+# Mac the plain one. Accelerator Link "iOS" is JetlinkIOS
+MODE=""
+case "$(cat "${PARAMS_ROOT:-/data/params}/${OPENPILOT_PREFIX:-d}/JetlinkIOS" 2>/dev/null)" in
+  1|true|True) MODE="--ios" ;;
+esac
+
 # the endpoints must exist before jetlinkd or modeld can open them, and that
 # needs root. setup_gadget.sh leaves the reason in $STATUS for the offroad alert
-sudo -n bash "$REPO/scripts/setup_gadget.sh" >/dev/null ||
+sudo -n bash "$REPO/scripts/setup_gadget.sh" ${MODE:+"$MODE"} >/dev/null ||
   echo "jetlink: USB gadget setup failed" >&2
 exit 0

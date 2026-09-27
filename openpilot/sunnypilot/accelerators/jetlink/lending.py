@@ -398,10 +398,10 @@ class Lender:
 
   `lendable` says whether the gadget is in the state a borrower can take over
   from, bound with no endpoint file open here; while it is not, a borrow is
-  answered "retry" and the daemon's own loop puts it there. `holding` is the
-  window after a host enumerates in which a phone may still dial: "retry" too,
-  so nobody writes a hello over FunctionFS to a phone. With `cable` holding a
-  dial, the loan carries the phone's socket instead of the endpoint files.
+  answered "retry" and the daemon's own loop puts it there. `holding` says the
+  host is a phone (Accelerator Link iOS): "retry" until it dials, so nobody
+  writes a hello over FunctionFS to a phone. With `cable` holding a dial, the
+  loan carries the phone's socket instead of the endpoint files.
   """
 
   def __init__(self, lendable: Callable[[], bool], bounce: Callable[[], bool],

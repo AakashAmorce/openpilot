@@ -241,12 +241,12 @@ class TestTiciModelsPanel:
     # a kernel without the CC pin in sysfs claims nothing rather than an empty port
     with accelerator(installed=True), mock.patch(f"{link}.read", return_value=None):
       layout._refresh_accelerator_items()
-      assert layout.accelerator_link_item.description.endswith("accelerator.")
+      assert layout.accelerator_link_item.description.endswith("iOS for an iPhone.")
 
   def test_the_status_names_the_transport(self, params):
-    # the gadget is composite and the owner decides at runtime: a phone dials
-    # in over the gadget's network interface, a Jetson takes the vendor
-    # interface, and JetlinkEndpoint names one on ethernet
+    # the setting names the host: USB for a Jetson or a Mac, iOS for a phone
+    # dialed in over the gadget's network interface; JetlinkEndpoint names a
+    # Jetson on ethernet
     import tempfile
     from pathlib import Path
     from openpilot.selfdrive.ui.sunnypilot.accelerator_link import link_status
@@ -256,31 +256,36 @@ class TestTiciModelsPanel:
          mock.patch(f"{gadget}.LINK", record):
       assert link_status() == "Accelerator connected: USB."
       record.write_text("cable 192.168.60.3")
-      assert link_status() == "Accelerator connected: iPhone over USB (192.168.60.3)."
+      assert link_status() == "Accelerator connected: USB.", "the setting says which host, not a stale record"
+      with mock.patch(f"{gadget}.ios", return_value=True):
+        assert link_status() == "Accelerator connected: iOS over USB (192.168.60.3)."
       with mock.patch(f"{gadget}.link_endpoint", return_value=("10.0.0.5", 5599)):
         assert link_status() == "Accelerator connected: Ethernet (10.0.0.5:5599)."
     # a status that cannot be read is USB, never a crash on the panel's tick
     with accelerator(installed=True, present=True), mock.patch(f"{gadget}.link_kind", side_effect=OSError):
       assert link_status() == "Accelerator connected: USB."
 
-  def test_toggle_writes_the_param_and_leaves_the_runner_alone(self, params):
+  def test_the_modes_write_the_params_and_leave_the_runner_alone(self, params):
     # the small model is the model manager's: the link does not decide which modeld runs
     with accelerator(present=True), mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=True), \
          mock.patch.object(params, "remove", wraps=params.remove) as remove:
       layout = self._layout()
-      layout._set_link_state(True)
-      assert params.get_bool("JetlinkEnabled") is True
-      layout._set_link_state(False)
-      assert params.get_bool("JetlinkEnabled") is False
+      for index, (enabled, ios) in enumerate(((False, False), (True, False), (True, True))):
+        layout._set_link_mode(index)
+        assert (params.get_bool("JetlinkEnabled"), params.get_bool("JetlinkIOS")) == (enabled, ios)
+      layout._set_link_mode(1)
+      assert params.get_bool("JetlinkIOS") is False, "back to USB from iOS"
     assert "ModelRunnerTypeCache" not in {c.args[0] for c in remove.call_args_list}
 
-  def test_toggle_is_inert_onroad(self, params):
+  def test_the_modes_are_inert_onroad(self, params):
     params.remove("JetlinkEnabled")
+    params.remove("JetlinkIOS")
     with accelerator(present=True), mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=False):
       layout = self._layout()
-      layout._set_link_state(True)
-      assert params.get("JetlinkEnabled") is None
-      assert layout.accelerator_link_item.action_item.get_state() is False
+      layout.accelerator_link_item.action_item.set_selected_button(2)
+      layout._set_link_mode(2)
+      assert params.get("JetlinkEnabled") is None and params.get("JetlinkIOS") is None
+      assert layout.accelerator_link_item.action_item.get_selected_button() == 0
 
   def test_status_note_names_the_accelerator_not_the_chestnut(self, params):
     from openpilot.selfdrive.ui.sunnypilot.ui_state import AcceleratorView

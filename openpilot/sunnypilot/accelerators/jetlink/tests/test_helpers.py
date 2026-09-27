@@ -209,6 +209,17 @@ class TestConnect(unittest.TestCase):
     self.client = mock.patch('jetlink.client.JetlinkClient').start()
     self.addCleanup(mock.patch.stopall)
     mock.patch.object(gadget, 'link_endpoint', return_value=None).start()
+    self.ios = mock.patch.object(gadget, 'ios', return_value=False).start()
+
+  def test_ios_never_opens_the_endpoint_files(self):
+    # a phone does not read them, and a hello there blocks 15 s
+    from jetlink.transport.base import LinkError
+    self.ios.return_value = True
+    for loan in (None, mock.Mock(sock=None, mount='/dev/ffs-jetlink', udc='udc0')):
+      with self.assertRaises(LinkError):
+        helpers.connect(loan=loan)
+    self.client.open_ffs.assert_not_called()
+    self.client.open_borrowed_ffs.assert_not_called()
 
   def test_a_loan_with_a_dial_is_opened_over_the_socket(self):
     sock = mock.Mock(name='sock')

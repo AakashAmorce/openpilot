@@ -12,7 +12,8 @@ from openpilot.cereal import custom
 from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS, get_selected_bundle, resolve_bundle_by_ref
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.ui_state import device, ui_state
-from openpilot.selfdrive.ui.sunnypilot.accelerator_link import link_enabled, link_status, link_toggle_meaningful, set_link_enabled
+from openpilot.selfdrive.ui.sunnypilot.accelerator_link import LINK_MODES, LINK_MODE_TITLES, link_mode, link_status, \
+  link_toggle_meaningful, set_link_mode
 from openpilot.sunnypilot import accelerators
 from openpilot.selfdrive.ui.sunnypilot.model_info import (big_model_state, bundles_for_source, carrying_model, default_model_name,
                                                            model_cache_size_mb, queued_name, refresh_in_progress, refresh_model_list)
@@ -25,7 +26,7 @@ from openpilot.system.ui.widgets.toggle import ON_COLOR
 
 from openpilot.system.ui.sunnypilot.lib.styles import style
 from openpilot.system.ui.sunnypilot.lib.utils import NoElideButtonAction, ScrollingButtonAction
-from openpilot.system.ui.sunnypilot.widgets.list_view import ListItemSP, toggle_item_sp, option_item_sp
+from openpilot.system.ui.sunnypilot.widgets.list_view import ListItemSP, toggle_item_sp, option_item_sp, multiple_button_item_sp
 from openpilot.system.ui.sunnypilot.widgets.download_status import download_status_item
 from openpilot.system.ui.sunnypilot.widgets.tree_dialog import TreeOptionDialog, TreeNode, TreeFolder
 
@@ -70,12 +71,14 @@ class ModelsLayout(Widget):
       callback=lambda: self._open_source_dialog("chestnut")
     )
 
-    # not a param-bound toggle: the write is refused onroad, so it goes through
-    # accelerator_link by hand
-    self.accelerator_link_item = toggle_item_sp(
+    # not param-bound: the write is refused onroad and is two params, so it
+    # goes through accelerator_link by hand
+    self.accelerator_link_item = multiple_button_item_sp(
       tr("Accelerator Link"),
       self._link_description(""),
-      initial_state=link_enabled(), callback=self._set_link_state)
+      buttons=[lambda m=m: tr(LINK_MODE_TITLES[m]) for m in LINK_MODES],
+      selected_index=LINK_MODES.index(link_mode()),
+      button_width=300, callback=self._set_link_mode, inline=False)
 
     self.download_item = download_status_item(lambda: tr("Download") if self._downloading else tr("Model Status"))
 
@@ -122,20 +125,21 @@ class ModelsLayout(Widget):
                   self.lane_turn_desire_toggle, self.lane_turn_value_control, self.lagd_toggle, self.delay_control, self.camera_offset]
     self._refresh_accelerator_items()
 
-  def _set_link_state(self, enabled: bool):
+  def _set_link_mode(self, index: int):
     if not ui_state.is_offroad():
-      self.accelerator_link_item.action_item.set_state(link_enabled())
+      self.accelerator_link_item.action_item.set_selected_button(LINK_MODES.index(link_mode()))
       return
-    set_link_enabled(enabled)
+    set_link_mode(LINK_MODES[index])
 
   @staticmethod
   def _link_description(status: str) -> str:
-    return f"{tr('Run the big driving model on an attached accelerator.')} {status}".strip()
+    what = tr("Run the big driving model on an attached accelerator: USB for a Jetson or a Mac, iOS for an iPhone.")
+    return f"{what} {status}".strip()
 
   def _refresh_accelerator_items(self):
     # present() and unavailable_reason() read sysfs, so this rides the half-second tick
     self.accelerator_link_item.set_visible(link_toggle_meaningful())
-    self.accelerator_link_item.action_item.set_state(link_enabled())
+    self.accelerator_link_item.action_item.set_selected_button(LINK_MODES.index(link_mode()))
     status = link_status()
     if status != self._link_status:
       self._link_status = status

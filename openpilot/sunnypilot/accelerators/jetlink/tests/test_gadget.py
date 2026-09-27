@@ -94,13 +94,15 @@ class TestParamsOffTheFilesystem(unittest.TestCase):
 
 
 class TestLinkKind(unittest.TestCase):
-  """What carries the link. The explicit endpoint wins, then the owner's
-  record of a phone's dial, and USB is the absence of both."""
+  """What carries the link. The explicit endpoint wins, then the setting's
+  iOS, which is the phone's cable; else USB. The owner's record only says
+  which phone dialed."""
 
   def setUp(self):
     self.tmp = Path(tempfile.mkdtemp())
     for name, value in (('LINK', self.tmp / 'link'), ('UDC_PATH', self.tmp / 'udc'),
                         ('NET_STATUS', self.tmp / 'net'),
+                        ('ios', unittest.mock.Mock(return_value=False)),
                         ('link_endpoint', unittest.mock.Mock(return_value=None))):
       p = unittest.mock.patch.object(gadget, name, value)
       self.addCleanup(p.stop)
@@ -111,23 +113,23 @@ class TestLinkKind(unittest.TestCase):
     self.assertIsNone(gadget.link_peer())
     self.assertFalse(gadget.over_tcp())
 
+  def test_ios_is_the_cable_before_any_dial(self):
+    gadget.ios.return_value = True
+    self.assertEqual(gadget.link_kind(), 'cable')
+    self.assertTrue(gadget.over_tcp())
+    self.assertIsNone(gadget.link_peer())
+
+  def test_a_record_of_a_dial_does_not_make_usb_the_cable(self):
+    # the setting says which host; a stale record from an iOS drive does not
+    gadget.note_link('cable', '192.168.60.3')
+    self.assertEqual(gadget.link_kind(), 'usb')
+
   def test_a_dial_is_recorded_with_the_phone_and_cleared(self):
     gadget.note_link('cable', '192.168.60.3')
-    self.assertEqual(gadget.link_kind(), 'cable')
     self.assertEqual(gadget.link_peer(), '192.168.60.3')
-    self.assertTrue(gadget.over_tcp())
     gadget.clear_link()
-    self.assertEqual(gadget.link_kind(), 'usb')
+    self.assertIsNone(gadget.link_peer())
     gadget.clear_link()   # twice is not an error
-
-  def test_a_record_without_a_peer_is_still_the_cable(self):
-    gadget.note_link('cable')
-    self.assertEqual((gadget.link_kind(), gadget.link_peer()), ('cable', None))
-
-  def test_anything_else_in_the_record_is_usb(self):
-    for raw in ('', 'usb', 'garbage 1 2 3', '\n'):
-      gadget.LINK.write_text(raw)
-      self.assertEqual(gadget.link_kind(), 'usb', repr(raw))
 
   def test_the_endpoint_param_wins_over_the_record(self):
     gadget.note_link('cable', '192.168.60.3')
@@ -140,9 +142,9 @@ class TestLinkKind(unittest.TestCase):
     # UDC is configured by a phone, and it is the dial that proved it
     with unittest.mock.patch.object(gadget, 'udc_state', return_value='powered'), \
          unittest.mock.patch.object(gadget.time, 'sleep', side_effect=AssertionError('waited')):
-      gadget.note_link('cable', '192.168.60.3')
+      gadget.ios.return_value = True
       self.assertTrue(gadget.wait_for_host(5.0, report=lambda: self.fail('reported a wait')))
-      gadget.clear_link()
+      gadget.ios.return_value = False
       gadget.link_endpoint.return_value = ('10.0.0.5', 5599)
       self.assertTrue(gadget.wait_for_host(5.0))
       gadget.link_endpoint.return_value = None
@@ -174,3 +176,28 @@ class TestLinkKind(unittest.TestCase):
 
 if __name__ == '__main__':
   unittest.main()
+
+
+class TestTheTwoGadgets(unittest.TestCase):
+  """The setting picks the gadget: the plain one for USB, the composite one
+  with a network interface for iOS."""
+
+  def test_setup_passes_the_setting(self):
+    with unittest.mock.patch.object(gadget.subprocess, 'run') as run, \
+         unittest.mock.patch.object(gadget, 'link_configured', return_value=True), \
+         unittest.mock.patch.object(gadget, 'ios', return_value=True):
+      self.assertTrue(gadget.setup_gadget())
+      self.assertEqual(run.call_args.args[0][-1], '--ios')
+      gadget.ios.return_value = False
+      self.assertTrue(gadget.setup_gadget())
+      self.assertNotIn('--ios', run.call_args.args[0])
+
+  def test_the_built_gadget_is_read_from_its_config(self):
+    tmp = Path(tempfile.mkdtemp())
+    config = tmp / 'configs' / 'c.1'
+    config.mkdir(parents=True)
+    (config / 'ffs.jetlink').touch()
+    with unittest.mock.patch.object(gadget, 'GADGET_PATH', tmp):
+      self.assertFalse(gadget.built_for_ios())
+      (config / 'ncm.usb0').touch()
+      self.assertTrue(gadget.built_for_ios())

@@ -53,6 +53,7 @@ def set_logger(logger) -> None:
 P_ENABLED = "JetlinkEnabled"        # user toggle; only True enables
 P_READY = "JetlinkEngineReady"      # sha256 of the model the Jetson has built
 P_ENDPOINT = "JetlinkEndpoint"      # optional "host:port" to use TCP instead of USB
+P_IOS = "JetlinkIOS"                # Accelerator Link "iOS": an iPhone on the cable
 
 
 _dirs: dict[tuple[str, str], Path] = {}
@@ -131,41 +132,24 @@ def link_endpoint() -> tuple[str, int] | None:
 
 
 # -- what carries the link ------------------------------------------------
-# The gadget is composite: a FunctionFS vendor interface for a Jetson or a Mac,
-# and a CDC-NCM network interface for an iPhone, which gives apps no USB access.
-# The comma end of that network is 192.168.60.1 (setup_gadget.sh, which also
-# runs the DHCP server), and the phone dials CABLE_ADDR whenever its USB
-# ethernet is up. An accepted dial is the proof of a phone; the owner records
-# it here and hands the socket to whoever borrows the link. Nothing else can
-# tell the two hosts apart: both drive the UDC to configured, and a hello over
-# FunctionFS with a phone attached blocks 15 s and bounces the gadget.
+# The Accelerator Link setting names the host: USB (a Jetson or a Mac on the
+# FunctionFS vendor interface) or iOS (an iPhone, which gives apps no USB
+# access). For iOS the gadget is composite, with a CDC-NCM network interface
+# whose comma end is 192.168.60.1 (setup_gadget.sh --ios, which also runs the
+# DHCP server), and the phone dials CABLE_ADDR whenever its USB ethernet is up.
+# The owner hands the accepted socket to whoever borrows the link; nothing
+# writes to the endpoint files, which a phone never reads. The setting, not a
+# guess, says which: a hello over FunctionFS to a phone blocks 15 s and bounces
+# the gadget, and waiting to see whether a phone dials cost every Jetson
+# reconnect 5 to 10 s.
 LINK = Path("/dev/shm/jetlink-link")        # "cable <peer ip>" while a phone is dialed in
-NET_STATUS = Path("/dev/shm/jetlink-net")   # setup_gadget.sh: "ok 192.168.60.1", "error: ...", "net: unavailable"
+NET_STATUS = Path("/dev/shm/jetlink-net")   # setup_gadget.sh: "ok 192.168.60.1", "error: ...", "net: off"
 CABLE_ADDR = ('192.168.60.1', 5599)
-# after the UDC reaches configured, how long the owner keeps borrowers off
-# FunctionFS so a phone has had a chance to dial. A Jetson or a Mac never
-# dials, so after the hold the link is USB exactly as it was
-CABLE_HOLD = 5.0
-# A host that took an address on the cable's network is most likely a phone on
-# its way to dialing. macOS, iOS's network stack, leases about 4 s after
-# enumerating (a random wait before its first request), then probes the address
-# for 1.6 s before it is usable: on the bench a Mac dialed 2.7 s after its lease,
-# past CABLE_HOLD. So the hold runs on to CABLE_DIAL_GRACE after a lease taken in
-# this bind, never past CABLE_HOLD_MAX from the configured edge. A Jetson or a
-# Mac serving USB takes a lease too and never dials; it waits out the grace
-# once per enumeration.
-CABLE_DIAL_GRACE = 5.0
-CABLE_HOLD_MAX = 15.0
-DHCP_LEASES = Path("/dev/shm/jetlink-usb0.leases")   # dnsmasq's, from setup_gadget.sh
 
 
-def dhcp_lease_age() -> float | None:
-  """Seconds since dnsmasq last wrote a lease on the cable's network, or None.
-  An mtime is on the wall clock, so this is the one place that reads it."""
-  try:
-    return time.time() - DHCP_LEASES.stat().st_mtime  # noqa: TID251
-  except OSError:
-    return None
+def ios() -> bool:
+  """Is the link set to iOS? JetlinkIOS == True and nothing else."""
+  return param_bool(P_IOS) is True
 
 
 def _link_record() -> list[str]:
@@ -176,12 +160,11 @@ def _link_record() -> list[str]:
 
 
 def link_kind() -> str:
-  """'ethernet' for the explicit JetlinkEndpoint param, 'cable' while a phone
-  is dialed in over the gadget's network interface, else 'usb'."""
+  """'ethernet' for the explicit JetlinkEndpoint param, 'cable' for iOS (the
+  phone's network interface on the gadget), else 'usb'."""
   if link_endpoint() is not None:
     return 'ethernet'
-  record = _link_record()
-  return 'cable' if record[:1] == ['cable'] else 'usb'
+  return 'cable' if ios() else 'usb'
 
 
 def link_peer() -> str | None:
@@ -191,8 +174,7 @@ def link_peer() -> str | None:
 
 
 def note_link(kind: str, peer: str | None = None) -> None:
-  """The owner's record of what dialed in. Only 'cable' means anything to a
-  reader; the absence of the file is USB."""
+  """The owner's record of the phone that dialed in, for link_peer."""
   try:
     LINK.write_text(f"{kind} {peer}".strip() if peer else kind)
   except OSError:
@@ -410,19 +392,29 @@ def can_setup_gadget() -> bool:
 
 
 def setup_gadget() -> bool:
-  """Create the gadget the way boot does. The link was off at boot and is on now.
+  """Create the gadget the way boot does, for the host the setting names: the
+  link was off at boot and is on now, or it was switched between USB and iOS.
 
   The script records "ok" or the reason in GADGET_STATUS itself, so a failure
   here reaches the offroad alert the same way a failure at boot does.
   """
+  mode = ['--ios'] if ios() else []
   try:
-    subprocess.run(['sudo', '-n', 'bash', str(_gadget_script())], check=True,
+    subprocess.run(['sudo', '-n', 'bash', str(_gadget_script()), *mode], check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=GADGET_SETUP_TIMEOUT)
   except Exception:
     log.exception("jetlink: could not set up the gadget")
     return False
-  log.warning("jetlink: gadget set up, the link was turned on after boot")
+  log.warning("jetlink: gadget set up for %s", 'iOS' if mode else 'USB')
   return link_configured()
+
+
+def built_for_ios() -> bool:
+  """Does the gadget carry the network function, as setup_gadget.sh --ios builds it?"""
+  try:
+    return any((GADGET_PATH / 'configs' / 'c.1').glob('*.usb0'))
+  except OSError:
+    return False
 
 
 def net_up() -> bool:

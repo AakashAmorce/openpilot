@@ -11,9 +11,10 @@ import pyray as rl
 from openpilot.cereal import custom
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigConfirmationDialog, BigDialog
 from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS, get_selected_bundle
-from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigToggle
+from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigMultiToggle
 from openpilot.selfdrive.ui.ui_state import ui_state, device
-from openpilot.selfdrive.ui.sunnypilot.accelerator_link import link_enabled, link_status, link_toggle_meaningful, set_link_enabled
+from openpilot.selfdrive.ui.sunnypilot.accelerator_link import LINK_MODES, LINK_MODE_TITLES, link_mode, link_status, \
+  link_toggle_meaningful, set_link_mode
 from openpilot.selfdrive.ui.sunnypilot.model_info import (active_source, big_model_progress, big_model_state, bundles_for_source,
                                                            carrying_model, default_model_name, model_cache_size_mb, model_info,
                                                            queued_name, refresh_in_progress, refresh_model_list)
@@ -24,23 +25,40 @@ from openpilot.system.ui.widgets.label import UnifiedLabel
 from openpilot.system.ui.widgets.scroller import NavScroller
 
 
-class AcceleratorLinkToggle(BigToggle):
-  """not BigParamControl: the write is refused onroad"""
+class AcceleratorLinkToggle(BigMultiToggle):
+  """off, usb, ios, a pill each. Not BigMultiParamToggle: the write is two
+  params and refused onroad. The value line carries what is on the port as
+  well as the mode, so the pills follow the mode rather than the value."""
 
   def __init__(self):
-    super().__init__(tr("accelerator link"), initial_state=link_enabled(), toggle_callback=self._store)
+    super().__init__(tr("accelerator link"), [tr(LINK_MODE_TITLES[m]).lower() for m in LINK_MODES])
+    self._mode = link_mode()
+    self._status = ""
+    self._show()
 
-  def _store(self, checked: bool) -> None:
-    if not ui_state.is_offroad():
-      self.set_checked(link_enabled())
-      return
-    set_link_enabled(checked)
+  def _show(self) -> None:
+    title = self._options[LINK_MODES.index(self._mode)]
+    value = f"{title}: {self._status}" if self._status else title
+    if value != self.get_value():
+      self.set_value(value)
+
+  def _handle_mouse_release(self, mouse_pos) -> None:
+    BigButton._handle_mouse_release(self, mouse_pos)
+    if ui_state.is_offroad():
+      self._mode = LINK_MODES[(LINK_MODES.index(self._mode) + 1) % len(LINK_MODES)]
+      set_link_mode(self._mode)
+    self._show()
+
+  def _draw_content(self, btn_y: float) -> None:
+    BigButton._draw_content(self, btn_y)
+    x = self._rect.x + self._rect.width - self._txt_enabled_toggle.width
+    for i in range(len(LINK_MODES)):
+      self._draw_pill(x, btn_y + 35 * i, LINK_MODES[i] == self._mode)
 
   def refresh(self) -> None:
-    self.set_checked(link_enabled())
-    status = link_status().rstrip('.').lower()
-    if status != self.get_value():
-      self.set_value(status)
+    self._mode = link_mode()
+    self._status = link_status().rstrip('.').lower()
+    self._show()
 
 
 def _model_info() -> tuple[str, str, str]:

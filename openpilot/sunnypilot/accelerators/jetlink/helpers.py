@@ -29,7 +29,7 @@ from openpilot.sunnypilot.accelerators.jetlink.gadget import set_logger as _set_
 # than imported so there is one seam: gadget's own functions read these out of
 # gadget's namespace, and a test that patches them there is seen here too.
 _FORWARDED = frozenset((
-  'AGNOS', 'CABLE_ADDR', 'CABLE_HOLD', 'CC_ORIENTATION', 'DORMANT', 'FFS_MOUNT', 'GADGET_PATH',
+  'AGNOS', 'CABLE_ADDR', 'CC_ORIENTATION', 'DORMANT', 'FFS_MOUNT', 'GADGET_PATH',
   'GADGET_SETUP_TIMEOUT', 'GADGET_STATUS', 'HOST_POLL', 'LINK', 'NET_STATUS', 'P_ENABLED',
   'P_ENDPOINT', 'P_READY', 'SHUTDOWN_REQUEST',
   'STALLED_ENUMERATION', 'STALLED_STATES', 'UDC_PATH', 'bound_udc', 'can_setup_gadget',
@@ -150,6 +150,11 @@ def connect(deadline: float | None = None, name: str | None = None, loan=None):
   if loan is not None and loan.sock is not None:
     cloudlog.warning("jetlink: connecting over the phone's dial (%s)", gadget.link_peer())
     return JetlinkClient.open_socket(loan.sock, deadline=deadline, name=name)
+  if gadget.link_kind() == 'cable':
+    # iOS: the endpoint files are never the link, whoever holds them; a phone
+    # does not read them, and a hello there blocks 15 s
+    from jetlink.transport.base import LinkError
+    raise LinkError("waiting for the phone to dial")
   if loan is not None:
     return JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce,
                                            deadline=deadline, name=name)

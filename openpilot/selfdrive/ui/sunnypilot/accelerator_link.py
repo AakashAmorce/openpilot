@@ -16,6 +16,32 @@ from openpilot.sunnypilot.accelerators.jetlink import gadget
 from openpilot.system.ui.lib.multilang import tr
 
 LINK_PARAM = "JetlinkEnabled"
+IOS_PARAM = "JetlinkIOS"
+# Off, a Jetson or a Mac on the USB vendor interface, or an iPhone on the
+# gadget's network interface. Two bools rather than one mode: JetlinkEnabled is
+# read everywhere and an existing "on" is USB, unchanged
+LINK_MODES = ("off", "usb", "ios")
+LINK_MODE_TITLES = {"off": "Off", "usb": "USB", "ios": "iOS"}
+
+
+def link_mode() -> str:
+  """never raises, as link_enabled"""
+  try:
+    if not ui_state.params.get(LINK_PARAM):
+      return "off"
+    return "ios" if ui_state.params.get(IOS_PARAM) else "usb"
+  except Exception:
+    return "off"
+
+
+def set_link_mode(mode: str) -> None:
+  """The host first, then the switch, so the owner never sees the link on for
+  the wrong host. The gadget changes between USB and iOS once parked."""
+  try:
+    ui_state.params.put_bool(IOS_PARAM, mode == "ios", block=True)
+    ui_state.params.put_bool(LINK_PARAM, mode != "off", block=True)
+  except Exception:
+    pass  # same unknown-key case as the read
 
 
 def link_enabled() -> bool:
@@ -47,15 +73,15 @@ def link_toggle_meaningful() -> bool:
 
 
 def link_transport() -> str:
-  """What carries the link. The gadget is composite and the owner decides at
-  runtime: a phone dials in over the gadget's network interface, a Jetson or
-  a Mac takes the vendor interface, and JetlinkEndpoint names a Jetson on
-  ethernet. Never raises: this is read on the panel's tick."""
+  """What carries the link, as the setting names it: a Jetson or a Mac on the
+  vendor interface, an iPhone dialed in over the gadget's network interface,
+  or JetlinkEndpoint's Jetson on ethernet. Never raises: this is read on the
+  panel's tick."""
   try:
     kind = gadget.link_kind()
     if kind == 'cable':
       peer = gadget.link_peer()
-      return f"iPhone over USB ({peer})" if peer else "iPhone over USB"
+      return f"iOS over USB ({peer})" if peer else "iOS over USB"
     if kind == 'ethernet':
       host, port = gadget.link_endpoint()
       return f"Ethernet ({host}:{port})"

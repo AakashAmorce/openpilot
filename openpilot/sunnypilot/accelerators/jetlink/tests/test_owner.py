@@ -8,7 +8,6 @@ The process that holds the gadget: what it keeps, what it lets go of, and when
 it starts the heavy half.
 """
 import json
-import os
 import select
 import socket
 import tempfile
@@ -39,7 +38,6 @@ class OwnerTest(unittest.TestCase):
                         ('wait_for_host', mock.Mock(return_value=True)),
                         # the owner's own records, and a loopback stand-in for usb0
                         ('LINK', self.tmp / 'link'),
-                        ('DHCP_LEASES', self.tmp / 'leases'),
                         ('CABLE_ADDR', ('127.0.0.1', 0)),
                         ('net_up', mock.Mock(return_value=True)),
                         ('net_status', mock.Mock(return_value='ok 192.168.60.1')),
@@ -394,28 +392,53 @@ class TestTheToggle(OwnerTest):
       self.assertIsNone(o.transport)
 
 
-class TestCable(OwnerTest):
-  """A phone on the cable is on the gadget's network interface and dials the
-  owner; the dial is the proof of a phone. A Jetson or a Mac never dials."""
+class TestUsb(OwnerTest):
+  """Accelerator Link USB: a Jetson or a Mac. The plain gadget, lent at once;
+  nothing waits for a phone and nothing of the phone's runs."""
 
-  def test_a_host_enumerating_opens_the_hold(self):
-    # nothing may write a hello over FunctionFS until a phone has had its
-    # chance to dial: to a phone that is a 15 s block and a bounce
+  def test_borrowers_are_never_held_off(self):
     o = self.owner()
-    self.assertFalse(o.holding())
     o.step()
-    self.assertTrue(o.holding())
-    self.assertAlmostEqual(o.cable_hold_until, time.monotonic() + gadget.CABLE_HOLD, delta=1.0)
+    self.assertFalse(o.holding())
     self.assertEqual(gadget.link_kind(), 'usb')
 
-  def test_a_dial_ends_the_hold_and_the_link_is_the_cable(self):
+  def test_no_network_and_no_listener(self):
+    o = self.owner()
+    o.step()
+    o.step()
+    gadget.net_up.assert_not_called()
+    self.assertFalse(o.cable.listening)
+
+
+class IosTest(OwnerTest):
+  """Accelerator Link iOS: an iPhone on the gadget's network interface."""
+
+  def setUp(self):
+    super().setUp()
+    self.write('JetlinkIOS', b'1')
+
+  def owner(self, **kw):
+    o = super().owner(**kw)
+    o.built_ios = True
+    return o
+
+
+class TestCable(IosTest):
+  """The phone dials the owner, and a borrower gets its socket; nothing is
+  ever lent the endpoint files, which a phone does not read."""
+
+  def test_borrowers_wait_for_the_phone(self):
+    o = self.owner()
+    o.step()
+    self.assertTrue(o.holding())
+    self.assertEqual(gadget.link_kind(), 'cable')
+
+  def test_a_dial_is_the_link(self):
     o = self.owner()
     o.step()
     self.dial(o)
     o.step()
-    self.assertEqual(gadget.link_kind(), 'cable')
     self.assertEqual(gadget.link_peer(), '127.0.0.1')
-    self.assertFalse(o.holding())
     self.assertTrue(o.cable.held)
     o.spawn_worker.assert_called_once()
     self.assertIn('phone', o.spawn_worker.call_args.args[0])
@@ -428,7 +451,6 @@ class TestCable(OwnerTest):
     o.cable.redial_expected = True
     self.dial(o)
     o.step()
-    self.assertEqual(gadget.link_kind(), 'cable')
     o.spawn_worker.assert_not_called()
     self.assertFalse(o.dialed)
 
@@ -440,91 +462,48 @@ class TestCable(OwnerTest):
     o.worker = mock.Mock(**{'poll.return_value': None})
     self.dial(o)
     o.step()
-    self.assertEqual(gadget.link_kind(), 'cable')
     self.assertFalse(o.dialed)
     o.worker.poll.return_value = 0
     o.worker.returncode = 0
     o.step()
     o.spawn_worker.assert_not_called()
 
-  def test_no_dial_leaves_the_link_usb_after_the_hold(self):
-    o = self.owner()
-    o.step()
-    o.cable_hold_until = time.monotonic() - 1.0
-    o.step()
-    self.assertFalse(o.holding())
-    self.assertEqual(gadget.link_kind(), 'usb')
-    o.spawn_worker.assert_not_called()
-
-  def test_over_the_cable_the_owner_never_sleeps_or_settles(self):
+  def test_the_owner_never_sleeps_or_settles(self):
     # every unbind takes the phone's network interface down with it
     o = self.owner(lendable=False)
     o.step()
     self.dial(o)
     o.step()
-    self.assertEqual(gadget.link_kind(), 'cable')
-    # what happened while the link was still USB (the hold settles) is not the point
-    o.spawn_worker.reset_mock()
-    o.transport.release_endpoints.reset_mock()
     o.idle_since = time.monotonic() - owner.DORMANT_HOLD
     o.step()
     self.assertFalse(o.dormant)
     o.close_link.assert_not_called()
     o.transport.release_endpoints.assert_not_called()
 
-  def test_a_borrower_stuck_on_functionfs_is_freed_with_a_phone_dialed(self):
-    # a phone that dials just after the hold finds modeld already writing a
-    # hello over FunctionFS that nothing reads; only an unbind frees it, and
-    # the phone dials again after it (the bench, 2026-09-27)
+  def test_a_phone_that_hung_up_is_let_go_and_waited_for(self):
     o = self.owner()
     o.step()
-    self.dial(o)
+    phone = self.dial(o)
     o.step()
-    self.assertEqual(gadget.link_kind(), 'cable')
-    o.transport.rebind.return_value = True
-    self.assertTrue(o.bounce_gadget())
-    o.transport.rebind.assert_called_once()
+    phone.close()
+    o.step()
+    self.assertFalse(o.cable.held)
+    self.assertIsNone(gadget.link_peer())
+    self.assertTrue(o.holding(), 'lent the endpoint files to a phone between its dials')
 
-  def lease(self, age: float) -> None:
-    """dnsmasq writing a lease on the cable's network `age` seconds ago."""
-    path = self.tmp / 'leases'
-    path.write_text('1 aa:bb 192.168.60.5 iPhone *\n')
-    when = time.time() - age  # noqa: TID251  an mtime is on the wall clock
-    os.utime(path, (when, when))
-
-  def past_the_first_hold(self, configured_ago: float = 6.0):
+  def test_a_phone_that_hung_up_does_not_send_the_owner_dormant(self):
+    # the record says the far end sleeps (a run with nothing to do never
+    # asks), but for iOS the gadget stays up: letting go would take the
+    # network interface the phone dials back over
     o = self.owner()
     o.step()
-    now = time.monotonic()
-    o.cable_hold_until = now - 0.1
-    o.configured_at = now - configured_ago
-    return o
-
-  def test_a_lease_holds_on_for_the_phone_to_dial(self):
-    # on the bench a Mac leased 3.9 s after enumerating and dialed 1.8 s later
-    o = self.past_the_first_hold()
-    self.lease(age=1.0)
-    self.assertTrue(o.holding())
-    self.assertAlmostEqual(o.cable_hold_until, time.monotonic() + gadget.CABLE_DIAL_GRACE - 1.0, delta=0.5)
-
-  def test_a_host_that_leased_and_never_dialed_is_usb_after_the_grace(self):
-    o = self.past_the_first_hold(configured_ago=8.0)
-    self.lease(age=gadget.CABLE_DIAL_GRACE + 0.5)
-    self.assertFalse(o.holding())
-
-  def test_no_lease_ends_the_hold_on_time(self):
-    o = self.past_the_first_hold()
-    self.assertFalse(o.holding())
-
-  def test_a_lease_from_an_earlier_bind_does_not_count(self):
-    o = self.past_the_first_hold(configured_ago=2.0)
-    self.lease(age=5.0)
-    self.assertFalse(o.holding())
-
-  def test_the_hold_never_outlasts_its_cap(self):
-    o = self.past_the_first_hold(configured_ago=gadget.CABLE_HOLD_MAX + 1.0)
-    self.lease(age=0.0)
-    self.assertFalse(o.holding())
+    phone = self.dial(o)
+    o.step()
+    phone.close()
+    o.step()
+    o.idle_since = time.monotonic() - owner.DORMANT_HOLD
+    o.step()
+    self.assertFalse(o.dormant)
 
   def test_the_host_going_away_clears_the_cable_link(self):
     o = self.owner()
@@ -533,62 +512,9 @@ class TestCable(OwnerTest):
     o.step()
     gadget.host_attached.return_value = False
     o.step()
-    self.assertEqual(gadget.link_kind(), 'usb')
+    self.assertIsNone(gadget.link_peer())
     self.assertFalse(o.cable.held)
-    self.assertFalse(o.holding())
     self.assertEqual(phone.recv(1), b'', 'the phone was left talking to nobody')
-
-  def test_a_phone_that_hung_up_is_let_go(self):
-    o = self.owner()
-    o.step()
-    phone = self.dial(o)
-    o.step()
-    phone.close()
-    o.step()
-    self.assertFalse(o.cable.held)
-    self.assertEqual(gadget.link_kind(), 'usb')
-
-  def test_a_phone_between_dials_is_waited_for_not_lent_the_endpoints(self):
-    # its session ended (a borrower finished, the app restarted): a borrower
-    # asking now would write a hello to a phone, 15 s and a bounce
-    o = self.owner()
-    o.step()
-    phone = self.dial(o)
-    o.step()
-    phone.close()
-    o.step()
-    self.assertTrue(o.holding())
-    self.dial(o)
-    o.step()
-    self.assertFalse(o.holding(), 'its dial is in hand, to lend')
-    gadget.host_attached.return_value = False
-    o.step()
-    self.assertFalse(o.holding())
-
-  def test_a_phone_that_hung_up_does_not_send_the_owner_dormant(self):
-    # the record says the far end sleeps (a run with nothing to do never asks),
-    # but the host dialed: a phone, and letting go would take the network
-    # interface it dials back over
-    o = self.owner()
-    o.step()
-    phone = self.dial(o)
-    o.step()
-    phone.close()
-    o.step()
-    self.assertEqual(gadget.link_kind(), 'usb')
-    o.idle_since = time.monotonic() - owner.DORMANT_HOLD
-    o.step()
-    self.assertFalse(o.dormant)
-
-  def test_once_the_phone_is_unplugged_the_record_decides_again(self):
-    o = self.owner()
-    o.step()
-    self.dial(o)
-    o.step()
-    self.assertTrue(o.phone_host)
-    gadget.host_attached.return_value = False
-    o.step()
-    self.assertFalse(o.phone_host)
 
   def test_a_newer_dial_replaces_an_older_one(self):
     # the app restarted: its old connection must not keep the new one out
@@ -599,12 +525,12 @@ class TestCable(OwnerTest):
     self.dial(o)
     o.step()
     self.assertTrue(o.cable.held)
+    first.settimeout(3.0)
     self.assertEqual(first.recv(1), b'')
 
   def test_the_shutdown_path_still_presents_the_gadget(self):
     # the phone is on the gadget's network interface: no gadget, no phone
     o = self.owner(presented=False)
-    gadget.note_link('cable', '192.168.60.3')
     gadget.SHUTDOWN_REQUEST.write_text(json.dumps({'reason': 'car battery'}))
     o.step()
     o.open_link.assert_called_once()
@@ -618,11 +544,11 @@ class TestCable(OwnerTest):
     gadget.note_link('cable', '192.168.60.3')
     o.close_link()
     self.assertFalse(o.cable.listening)
-    self.assertEqual(gadget.link_kind(), 'usb')
+    self.assertIsNone(gadget.link_peer())
     o.transport = None
 
 
-class TestTheGadgetNetwork(OwnerTest):
+class TestTheGadgetNetwork(IosTest):
   """usb0 exists only once the UDC is bound, so the owner brings it up after
   its bind, and listens for a phone only once it is there."""
 
@@ -633,37 +559,23 @@ class TestTheGadgetNetwork(OwnerTest):
     gadget.net_up.assert_called_once()
     self.assertTrue(o.cable.listening)
 
-  def test_a_failed_bring_up_is_retried_after_a_backoff(self):
+  def test_a_failed_bring_up_is_retried_after_a_backoff_and_nothing_listens(self):
     gadget.net_up.return_value = False
     o = self.owner()
     for _ in range(3):
       o.step()
     gadget.net_up.assert_called_once()
+    self.assertFalse(o.cable.listening, 'the bind to 192.168.60.1 fails without usb0')
+    gadget.net_up.return_value = True
     o.next_net_attempt = 0.0
     o.step()
     self.assertEqual(gadget.net_up.call_count, 2)
+    self.assertTrue(o.cable.listening)
 
   def test_nothing_presented_brings_nothing_up(self):
     o = self.owner(presented=False)
     o.step()
     gadget.net_up.assert_not_called()
-
-  def test_the_listener_waits_for_the_network(self):
-    # the bind to 192.168.60.1 fails until usb0 has the address
-    gadget.net_status.return_value = 'error: no usb0 yet'
-    o = self.owner()
-    o.step()
-    self.assertFalse(o.cable.listening)
-    gadget.net_status.return_value = 'ok 192.168.60.1'
-    o.step()
-    self.assertTrue(o.cable.listening)
-
-  def test_a_kernel_without_the_network_is_usb_only(self):
-    gadget.net_status.return_value = 'net: unavailable'
-    o = self.owner()
-    o.step()
-    self.assertFalse(o.cable.listening)
-    self.assertFalse(o.holding(), 'held borrowers off for a phone that cannot dial')
 
   def test_a_bounce_brings_the_network_up_again(self):
     # the unbind took usb0 with it and the rebind made a bare one
@@ -675,7 +587,7 @@ class TestTheGadgetNetwork(OwnerTest):
     self.assertEqual(gadget.net_up.call_count, 2)
 
   def test_an_address_that_is_not_there_yet_does_not_stop_the_owner(self):
-    # the status said ok but the address is not local (a race with the
+    # the network said ok but the address is not local (a race with the
     # script): the bind fails, is noted, and is tried again later
     gadget.CABLE_ADDR = ('192.0.2.1', 0)
     o = self.owner()
@@ -688,6 +600,55 @@ class TestTheGadgetNetwork(OwnerTest):
     o.cable.next_open = 0.0
     o.step()
     self.assertTrue(o.cable.listening)
+
+
+class TestSwitchingMode(OwnerTest):
+  """USB and iOS are different gadgets; moving the setting rebuilds it, and
+  only while parked with nobody on the link: the rebuild is an unplug."""
+
+  def setUp(self):
+    super().setUp()
+    p = mock.patch.object(gadget, 'setup_gadget', mock.Mock(return_value=True))
+    self.addCleanup(p.stop)
+    self.setup_gadget = p.start()
+
+  def switched(self, **kw):
+    o = self.owner(**kw)
+    o.built_ios = False
+    self.write('JetlinkIOS', b'1')
+    return o
+
+  def test_parked_it_rebuilds_for_the_new_host(self):
+    o = self.switched()
+    o.step()
+    o.close_link.assert_called_once()
+    self.setup_gadget.assert_called_once()
+    self.assertTrue(o.built_ios)
+    o.step()
+    self.setup_gadget.assert_called_once()
+
+  def test_onroad_it_waits_for_the_car_to_park(self):
+    self.write('IsOffroad', b'0')
+    o = self.switched()
+    o.step()
+    self.setup_gadget.assert_not_called()
+    self.write('IsOffroad', b'1')
+    o.step()
+    self.setup_gadget.assert_called_once()
+
+  def test_a_borrower_on_the_link_is_not_unplugged(self):
+    o = self.switched()
+    o.lender.lent = True
+    o.step()
+    self.setup_gadget.assert_not_called()
+
+  def test_a_failed_rebuild_is_retried_after_a_backoff(self):
+    self.setup_gadget.return_value = False
+    o = self.switched()
+    for _ in range(3):
+      o.step()
+    self.setup_gadget.assert_called_once()
+    self.assertFalse(o.built_ios)
 
 
 class TestEthernet(OwnerTest):
