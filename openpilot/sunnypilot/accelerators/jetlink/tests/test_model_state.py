@@ -95,20 +95,21 @@ class TestWire(unittest.TestCase):
     # the socket copies the mapping while the first segments are on the wire;
     # no host copy first
     client = FakeClient()
-    client.t = SimpleNamespace(on_the_cable=lambda: True)
     spec = spec_for(STATEFUL)
     frame = np.arange(np.prod(spec.warped_shape), dtype=np.uint64).astype(np.uint8)
     mapping = SimpleNamespace(as_memoryview=mock.Mock(return_value=memoryview(frame)))
     warp_output = SimpleNamespace(data=mock.Mock(side_effect=AssertionError('copied on the host')),
                                   _buffer=lambda: mapping)
-    _, state, client, _ = self.run_frames(STATEFUL, client=client, warp_output=warp_output)
+    with mock.patch.object(model_state.gadget, 'link_kind', return_value='cable'):
+      _, state, client, _ = self.run_frames(STATEFUL, client=client, warp_output=warp_output)
     self.assertTrue(state.send_from_gpu)
     mapping.as_memoryview.assert_called_with(allow_zero_copy=True)
     for data, *_ in client.sent:
       np.testing.assert_array_equal(data, frame)
 
   def test_usb_keeps_the_host_copy(self):
-    _, state, _, _ = self.run_frames(STATEFUL)
+    with mock.patch.object(model_state.gadget, 'link_kind', return_value='usb'):
+      _, state, _, _ = self.run_frames(STATEFUL)
     self.assertFalse(state.send_from_gpu)
 
   def test_a_queued_model_still_sends_the_hidden_state_back(self):

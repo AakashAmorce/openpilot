@@ -29,12 +29,12 @@ from openpilot.sunnypilot.accelerators.jetlink.gadget import set_logger as _set_
 # than imported so there is one seam: gadget's own functions read these out of
 # gadget's namespace, and a test that patches them there is seen here too.
 _FORWARDED = frozenset((
-  'AGNOS', 'CABLE_ADDR', 'CC_ORIENTATION', 'DORMANT', 'FFS_MOUNT', 'GADGET_PATH',
-  'GADGET_SETUP_TIMEOUT', 'GADGET_STATUS', 'HOST_POLL', 'LINK', 'NET_STATUS', 'P_ENABLED',
+  'AGNOS', 'CC_ORIENTATION', 'DORMANT', 'FFS_MOUNT', 'GADGET_PATH',
+  'GADGET_SETUP_TIMEOUT', 'GADGET_STATUS', 'HOST_POLL', 'P_ENABLED',
   'P_ENDPOINT', 'P_READY', 'SHUTDOWN_REQUEST',
   'STALLED_ENUMERATION', 'STALLED_STATES', 'UDC_PATH', 'bound_udc', 'can_setup_gadget',
-  'clear_link', 'dormant', 'enabled', 'finish_shutdown', 'gadget_error', 'host_attached',
-  'link_configured', 'link_kind', 'link_peer', 'net_status', 'net_up', 'note_link', 'offroad', 'over_tcp',
+  'dormant', 'enabled', 'finish_shutdown', 'gadget_error', 'host_attached',
+  'link_configured', 'net_up', 'offroad',
   'link_endpoint', 'package_installed', 'params_dir', 'pending_shutdown', 'port_has_host',
   'repo_root', 'request_shutdown', 'set_dormant', 'setup_gadget', 'udc_state', 'usb_speed',
   'wait_for_host',

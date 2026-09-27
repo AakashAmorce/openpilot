@@ -642,6 +642,19 @@ class TestSwitchingMode(OwnerTest):
     o.step()
     self.setup_gadget.assert_not_called()
 
+  def test_what_is_built_is_learned_onroad_too(self):
+    # an owner starting mid-drive on an iOS gadget must not take it for USB:
+    # that would lend a phone the endpoint files
+    self.write('IsOffroad', b'0')
+    o = self.owner()
+    o.built_ios = None
+    with mock.patch.object(gadget, 'built_for_ios', return_value=True):
+      o.step()
+    self.assertTrue(o.built_ios)
+    self.assertTrue(o.holding())
+    self.assertEqual(gadget.link_kind(), 'cable')
+    self.setup_gadget.assert_not_called()
+
   def test_a_failed_rebuild_is_retried_after_a_backoff(self):
     self.setup_gadget.return_value = False
     o = self.switched()

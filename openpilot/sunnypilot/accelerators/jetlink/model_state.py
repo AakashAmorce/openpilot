@@ -37,7 +37,7 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS, LONG_SMOOTH_SECONDS, get_action_from_model
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
 from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
-from openpilot.sunnypilot.accelerators.jetlink import warp_cache
+from openpilot.sunnypilot.accelerators.jetlink import gadget, warp_cache
 from openpilot.sunnypilot.modeld_v2.constants import ModelConstants as V2ModelConstants
 from openpilot.sunnypilot.modeld_v2.modeld_base import ModelStateBase
 
@@ -71,7 +71,7 @@ class JetlinkModelState(ModelStateBase):
     # copying it here first held the send back 2.5 ms. On the Mac stand-in the
     # comma's side of a frame was 0.6 ms faster at p50 and 2 ms at p99. USB and
     # Ethernet keep the host copy they were measured with.
-    self.send_from_gpu = getattr(getattr(client, 't', None), 'on_the_cable', lambda: False)() is True
+    self.send_from_gpu = gadget.link_kind() == 'cable'
     # not chestnut hardware, but the same role: modelV2.big, the UI and the
     # model manager key off this flag
     self.chestnut = True

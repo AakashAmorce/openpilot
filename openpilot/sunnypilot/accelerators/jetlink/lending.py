@@ -134,7 +134,7 @@ class Loan:
     """Ask again which link this loan is for, before another attempt at a join.
 
     The owner answers as it would a new borrower: the phone's dial if it holds
-    one, "retry" through the hold, else the endpoint files. The loan lasts the
+    one, "retry" while it waits for a phone, else the endpoint files. The loan lasts the
     drive and the answer changes under it: a phone that dialed after the first
     answer was never used, and a dial whose session ended with the last
     attempt is spent. Without this a borrower that took the endpoint files

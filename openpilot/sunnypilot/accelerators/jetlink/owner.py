@@ -12,12 +12,12 @@ with the UDC bound. This is that process, for as long as the link is enabled,
 onroad and offroad alike. Whoever wants to move bytes borrows the endpoint
 files over a unix socket (lending.py) and the gadget never leaves the bus.
 
-The gadget is composite: a phone on the cable is on its network interface and
-dials this process (lending.CableListener), which is how the transport is
-decided. An accepted dial is a phone and the loan carries its socket; a host
-that never dials within the hold after enumerating is a Jetson or a Mac on
-FunctionFS, exactly as before. Over TCP the gadget is never released, settled
-or bounced: every unbind drops the phone's network interface with it.
+The Accelerator Link setting names the host. For USB (a Jetson or a Mac) the
+gadget is FunctionFS alone and the endpoint files are lent at once. For iOS
+the gadget is composite: the phone is on its network interface and dials this
+process (lending.CableListener), and the loan carries its socket; the endpoint
+files are never lent, and the gadget is never released, settled or bounced,
+since every unbind drops the phone's network interface with it.
 
 It is deliberately small. Everything heavy jetlink does is episodic, so none of
 it lives here: a download, an upload, a TensorRT build and a warp compile all
@@ -112,6 +112,7 @@ class Owner:
     self.configured = False             # attached, as of the last step: for the edges
     self.dialed = False                 # a phone dialed in since the last run
     self.built_ios: bool | None = None  # what the gadget was built for; None until looked at
+    self._peer: str | None = None       # the phone published as dialed in
     self.net_ready = False              # usb0 configured for this bind
     self.next_net_attempt = 0.0
     self.worker: subprocess.Popen | None = None
@@ -131,7 +132,7 @@ class Owner:
     # the phone's network interface goes with the gadget, and its dial with it
     self.cable.close()
     self.net_ready = False
-    gadget.clear_link()
+    self.publish()
     if transport is not None:
       try:
         transport.close()
@@ -143,10 +144,20 @@ class Owner:
     return self.transport is not None and self.transport.lendable
 
   def holding(self) -> bool:
-    """Should a borrower wait rather than take the endpoint files? For iOS,
-    always: the host is a phone, which never reads them, so a borrower waits
-    for its dial (the lender hands that over first). For USB, never."""
-    return gadget.ios()
+    """Should a borrower wait rather than take the endpoint files? On a gadget
+    built for iOS, always: the host is a phone, which never reads them, so a
+    borrower waits for its dial (the lender hands that over first). The build,
+    not the setting: a setting moved while somebody borrowed waits for them."""
+    return bool(self.built_ios)
+
+  def publish(self, peer: str | None = None) -> None:
+    """What the gadget is, for every other process's link_kind, and on the
+    cable which phone dialed in."""
+    self._peer = peer
+    if self.built_ios is None:
+      gadget.clear_link()
+    else:
+      gadget.note_link('cable' if self.built_ios else 'usb', peer)
 
   def bounce_gadget(self) -> bool:
     """One unplug and replug, for a borrower whose write has no reader.
@@ -201,12 +212,19 @@ class Owner:
       return True
     if not gadget.can_setup_gadget():
       return True
-    if time.monotonic() < self.next_gadget_attempt:
+    return self.build(gadget.ios())
+
+  def build(self, ios: bool) -> bool:
+    """Set the gadget up for USB or iOS, on a backoff: the script is sudo,
+    configfs and for iOS the network."""
+    now = time.monotonic()
+    if now < self.next_gadget_attempt:
       return False
-    self.next_gadget_attempt = time.monotonic() + GADGET_SETUP_BACKOFF
-    if not gadget.setup_gadget():
+    self.next_gadget_attempt = now + GADGET_SETUP_BACKOFF
+    if not gadget.setup_gadget(ios):
       return False
-    self.built_ios = gadget.ios()
+    self.built_ios = ios
+    self.publish()
     return True
 
   def ensure_net(self) -> None:
@@ -237,7 +255,7 @@ class Owner:
     is open on the endpoints, and the re-enumeration it may cost would drop
     the phone's network interface.
     """
-    if self.transport is None or self.lendable() or gadget.link_kind() == 'cable':
+    if self.transport is None or self.lendable() or self.built_ios:
       return
     gadget.log.warning("jetlink: putting the endpoints down, keeping the gadget bound")
     if not self.transport.release_endpoints():
@@ -382,7 +400,6 @@ class Owner:
     if self.switch_mode(offroad):
       return
     self.attached = gadget.host_attached()
-    state = gadget.owner_state()
     self.watch_the_port()
 
     # before the worker gate: hardwared waits 25 s for this and a build in
@@ -422,6 +439,7 @@ class Owner:
     if time.monotonic() < max(self.next_attempt, self.lease_settled):
       return
 
+    state = gadget.owner_state()
     why = self.wanted(state)
     if why is not None:
       if not self.ensure_gadget():
@@ -440,7 +458,8 @@ class Owner:
       if not sleeps and self.ensure_gadget():
         self.open_link()
       return
-    if sleeps and not gadget.over_tcp() and time.monotonic() - self.idle_since >= DORMANT_HOLD:
+    # never over ethernet, where the gadget is not the link
+    if sleeps and gadget.link_endpoint() is None and time.monotonic() - self.idle_since >= DORMANT_HOLD:
       self.go_dormant()
     else:
       self.settle()
@@ -458,7 +477,7 @@ class Owner:
       gadget.log.warning("jetlink: the host went away, the cable link with it")
       self.cable.release()
       self.dialed = False
-      gadget.clear_link()
+      self.publish()
     self.configured = self.attached
     if not self.built_ios:
       return
@@ -467,7 +486,7 @@ class Owner:
       self.cable.open()   # not before: the bind to 192.168.60.1 fails without usb0
     peer = self.cable.poll()
     if peer is not None:
-      gadget.note_link('cable', peer)
+      self.publish(peer)
       gadget.log.warning("jetlink: cable link from %s", peer)
       self.had_host = True
       self.idle_since = time.monotonic()
@@ -476,31 +495,30 @@ class Owner:
       running = self.worker is not None and self.worker.poll() is None
       if self.cable.news and not running:
         self.dialed = True
-    elif not self.cable.held and gadget.link_peer() is not None:
-      gadget.clear_link()   # the phone hung up, or its borrower finished
+    elif not self.cable.held and self._peer is not None:
+      self.publish()   # the phone hung up, or its borrower finished
 
   def switch_mode(self, offroad: bool) -> bool:
     """Rebuild the gadget when the setting moved between USB and iOS: they are
     different devices. Only while parked and with nobody on the link, since
-    the rebuild is an unplug. True when this step went on it."""
-    ios = gadget.ios()
-    if self.built_ios is None:
-      self.built_ios = gadget.built_for_ios() if gadget.link_configured() else ios
-    if ios == self.built_ios or gadget.link_endpoint() is not None:
+    the rebuild is an unplug. True when this step went on it.
+
+    What is built is learned once, onroad too: an iOS gadget taken for USB
+    would lend a phone the endpoint files."""
+    if gadget.link_endpoint() is not None:
       return False
+    if self.built_ios is None:
+      self.built_ios = gadget.built_for_ios() if gadget.link_configured() else gadget.ios()
+      self.publish()
     if not offroad or self.lender.lent or self.worker_running():
       return False
-    now = time.monotonic()
-    if now < self.next_gadget_attempt:
-      return True
-    self.next_gadget_attempt = now + GADGET_SETUP_BACKOFF
+    ios = gadget.ios()
+    if ios == self.built_ios:
+      return False
     gadget.log.warning("jetlink: Accelerator Link is now %s, rebuilding the gadget", 'iOS' if ios else 'USB')
     self.close_link()
-    self.cable.close()
     self.dialed = False
-    gadget.clear_link()
-    if gadget.setup_gadget():
-      self.built_ios = ios
+    self.build(ios)
     return True
 
   def run(self) -> None:

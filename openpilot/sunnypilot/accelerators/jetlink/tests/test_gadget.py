@@ -119,10 +119,17 @@ class TestLinkKind(unittest.TestCase):
     self.assertTrue(gadget.over_tcp())
     self.assertIsNone(gadget.link_peer())
 
-  def test_a_record_of_a_dial_does_not_make_usb_the_cable(self):
-    # the setting says which host; a stale record from an iOS drive does not
-    gadget.note_link('cable', '192.168.60.3')
+  def test_the_owners_record_decides_over_the_setting(self):
+    # a setting moved while somebody borrowed waits for the car to park; until
+    # the owner rebuilds, the gadget is what it built
+    gadget.ios.return_value = True
+    gadget.note_link('usb')
     self.assertEqual(gadget.link_kind(), 'usb')
+    gadget.ios.return_value = False
+    gadget.note_link('cable', '192.168.60.3')
+    self.assertEqual(gadget.link_kind(), 'cable')
+    gadget.clear_link()
+    self.assertEqual(gadget.link_kind(), 'usb', 'no owner yet: the setting')
 
   def test_a_dial_is_recorded_with_the_phone_and_cleared(self):
     gadget.note_link('cable', '192.168.60.3')
@@ -184,12 +191,10 @@ class TestTheTwoGadgets(unittest.TestCase):
 
   def test_setup_passes_the_setting(self):
     with unittest.mock.patch.object(gadget.subprocess, 'run') as run, \
-         unittest.mock.patch.object(gadget, 'link_configured', return_value=True), \
-         unittest.mock.patch.object(gadget, 'ios', return_value=True):
-      self.assertTrue(gadget.setup_gadget())
+         unittest.mock.patch.object(gadget, 'link_configured', return_value=True):
+      self.assertTrue(gadget.setup_gadget(True))
       self.assertEqual(run.call_args.args[0][-1], '--ios')
-      gadget.ios.return_value = False
-      self.assertTrue(gadget.setup_gadget())
+      self.assertTrue(gadget.setup_gadget(False))
       self.assertNotIn('--ios', run.call_args.args[0])
 
   def test_the_built_gadget_is_read_from_its_config(self):

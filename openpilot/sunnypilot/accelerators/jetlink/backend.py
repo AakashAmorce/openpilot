@@ -74,7 +74,7 @@ class _Link:
     """The client, opening one if we have not got one yet, or if the one held
     is dead: a big model retired after a link loss closes its client, and
     reusing it failed the next attempt with EBADF, 5 s after every loss."""
-    if self.client is not None and getattr(self.client, 'dead', False) is True:
+    if self.client is not None and self.client.dead:
       self.close()
     if self.client is None:
       self.client = helpers.connect(name=self.name, loan=self._borrow(deadline))
@@ -180,10 +180,9 @@ def _connect_patiently(link: _Link):
     except Exception as e:
       client, last = None, e
     if client is not None:
-      # no bounce over TCP: there is no stuck FunctionFS write to free, and an
-      # unbind would take the phone's network interface down with it
-      bounce = None if helpers.over_tcp() else client.rebind
-      if helpers.wait_for_host(max(0.0, deadline - time.monotonic()), bounce=bounce,
+      # over TCP wait_for_host returns at once and a TCP client's rebind is a
+      # no-op, so the phone's network interface is never bounced
+      if helpers.wait_for_host(max(0.0, deadline - time.monotonic()), bounce=client.rebind,
                                report=_waiting_for_the_jetson):
         return client
       # the link stays on `link`, still bound, for the next attempt

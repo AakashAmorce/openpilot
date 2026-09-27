@@ -83,7 +83,7 @@ class TestGadgetSetup(unittest.TestCase):
   def test_setup_runs_the_boot_script_as_root_and_reports_the_result(self):
     with mock.patch.object(gadget.subprocess, 'run') as run, \
          mock.patch.object(gadget, 'link_configured', return_value=True):
-      assert helpers.setup_gadget()
+      assert helpers.setup_gadget(False)
     (argv,), kwargs = run.call_args
     assert argv[:3] == ['sudo', '-n', 'bash'] and argv[3] == str(self.script)
     assert kwargs['check'] and kwargs['timeout'] == helpers.GADGET_SETUP_TIMEOUT
@@ -92,7 +92,7 @@ class TestGadgetSetup(unittest.TestCase):
     # the script has already written the reason to the status file
     with mock.patch.object(gadget.subprocess, 'run', side_effect=gadget.subprocess.CalledProcessError(1, 'bash')), \
          mock.patch.object(helpers.cloudlog, 'exception') as log:
-      assert not helpers.setup_gadget()
+      assert not helpers.setup_gadget(False)
     assert log.call_count == 1
 
   def test_the_network_is_brought_up_by_the_same_script_and_judged_by_its_status(self):

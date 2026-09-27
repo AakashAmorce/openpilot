@@ -143,7 +143,7 @@ def link_endpoint() -> tuple[str, int] | None:
 # the gadget, and waiting to see whether a phone dials cost every Jetson
 # reconnect 5 to 10 s.
 LINK = Path("/dev/shm/jetlink-link")        # "cable <peer ip>" while a phone is dialed in
-NET_STATUS = Path("/dev/shm/jetlink-net")   # setup_gadget.sh: "ok 192.168.60.1", "error: ...", "net: off"
+NET_STATUS = Path("/dev/shm/jetlink-net")   # setup_gadget.sh: "ok 192.168.60.1", "error: ...", "net: off" (USB), "net: unavailable"
 CABLE_ADDR = ('192.168.60.1', 5599)
 
 
@@ -160,11 +160,23 @@ def _link_record() -> list[str]:
 
 
 def link_kind() -> str:
-  """'ethernet' for the explicit JetlinkEndpoint param, 'cable' for iOS (the
-  phone's network interface on the gadget), else 'usb'."""
+  """'ethernet' for the explicit JetlinkEndpoint param; otherwise the gadget
+  the owner built and published, 'cable' for iOS (the phone's network
+  interface on the gadget) or 'usb'. The setting stands in only until the
+  owner has said: it may have moved and be waiting for the car to park."""
   if link_endpoint() is not None:
     return 'ethernet'
+  record = _link_record()
+  if record[:1] in (['cable'], ['usb']):
+    return record[0]
   return 'cable' if ios() else 'usb'
+
+
+def link_mode() -> str:
+  """The setting, for the panels: 'off', 'usb' or 'ios'."""
+  if not enabled():
+    return 'off'
+  return 'ios' if ios() else 'usb'
 
 
 def link_peer() -> str | None:
@@ -174,7 +186,8 @@ def link_peer() -> str | None:
 
 
 def note_link(kind: str, peer: str | None = None) -> None:
-  """The owner's record of the phone that dialed in, for link_peer."""
+  """The owner's record of the gadget it built, 'usb' or 'cable', and on the
+  cable the phone that dialed in; see link_kind and link_peer."""
   try:
     LINK.write_text(f"{kind} {peer}".strip() if peer else kind)
   except OSError:
@@ -391,21 +404,25 @@ def can_setup_gadget() -> bool:
   return AGNOS and _gadget_script().is_file()
 
 
-def setup_gadget() -> bool:
-  """Create the gadget the way boot does, for the host the setting names: the
-  link was off at boot and is on now, or it was switched between USB and iOS.
-
-  The script records "ok" or the reason in GADGET_STATUS itself, so a failure
-  here reaches the offroad alert the same way a failure at boot does.
-  """
-  mode = ['--ios'] if ios() else []
+def _run_script(*args: str) -> bool:
+  """setup_gadget.sh as root. It records "ok" or the reason itself (in
+  GADGET_STATUS, or NET_STATUS for --net), so a failure here reaches the
+  offroad alert the same way a failure at boot does."""
   try:
-    subprocess.run(['sudo', '-n', 'bash', str(_gadget_script()), *mode], check=True,
+    subprocess.run(['sudo', '-n', 'bash', str(_gadget_script()), *args], check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=GADGET_SETUP_TIMEOUT)
+    return True
   except Exception:
-    log.exception("jetlink: could not set up the gadget")
+    log.exception("jetlink: setup_gadget.sh %s failed", ' '.join(args))
     return False
-  log.warning("jetlink: gadget set up for %s", 'iOS' if mode else 'USB')
+
+
+def setup_gadget(ios: bool) -> bool:
+  """Create the gadget the way boot does, for USB or iOS: the link was off at
+  boot and is on now, or the setting moved between the two."""
+  if not _run_script(*(['--ios'] if ios else [])):
+    return False
+  log.warning("jetlink: gadget set up for %s", 'iOS' if ios else 'USB')
   return link_configured()
 
 
@@ -427,13 +444,7 @@ def net_up() -> bool:
   NET_STATUS written as "ok 192.168.60.1", "error: <reason>" or
   "net: unavailable" on a kernel without NCM or ECM.
   """
-  if not can_setup_gadget():
-    return False
-  try:
-    subprocess.run(['sudo', '-n', 'bash', str(_gadget_script()), '--net'], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=GADGET_SETUP_TIMEOUT)
-  except Exception:
-    log.exception("jetlink: could not bring the gadget's network up")
+  if not can_setup_gadget() or not _run_script('--net'):
     return False
   status = net_status() or ''
   log.warning("jetlink: gadget network: %s", status or 'no status written')

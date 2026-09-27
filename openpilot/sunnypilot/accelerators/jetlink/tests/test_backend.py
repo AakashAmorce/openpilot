@@ -145,11 +145,10 @@ class WaitForHost(ClockedTest):
     self.bus('configured')
     link = mock.Mock()
     link.open.return_value = client = mock.Mock()
-    with mock.patch.object(gadget, 'wait_for_host', return_value=True) as wait, \
-         mock.patch.object(gadget, 'ios', return_value=True):
+    with mock.patch.object(gadget, 'link_kind', return_value='cable'):
       assert backend._connect_patiently(link) is client
-    assert wait.call_args.kwargs['bounce'] is None
     client.rebind.assert_not_called()
+    assert self.clock.slept == 0.0
 
 
 class HoldingTheLink(ClockedTest):
@@ -162,7 +161,7 @@ class HoldingTheLink(ClockedTest):
 
   def setUp(self):
     super().setUp()
-    self.client = mock.Mock()
+    self.client = mock.Mock(dead=False)
     self.link = backend._Link()
     self.link.client = self.client
     self.bus('powered', cc=False)
