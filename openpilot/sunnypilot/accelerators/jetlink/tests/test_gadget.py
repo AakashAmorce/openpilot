@@ -43,6 +43,11 @@ class TestNothingHeavyIsReachable(unittest.TestCase):
     self.assertEqual(sorted(found & set(HEAVY)), [],
                      'the gadget owner has to stay small; see the module docstring')
 
+  def test_the_owner_itself_stays_out_of_the_heavy_half(self):
+    found = self.imported_by('openpilot.sunnypilot.accelerators.jetlink.owner')
+    self.assertEqual(sorted(found & set(HEAVY)), [],
+                     'everything the owner imports runs for the whole drive')
+
   def test_the_transport_the_owner_opens_is_light_too(self):
     try:
       import jetlink  # noqa: F401
