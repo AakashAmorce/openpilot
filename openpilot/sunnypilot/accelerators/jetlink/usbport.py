@@ -31,10 +31,10 @@ on every unplug and refuses a role written through the power supply once
 nothing is attached, so the policy engine's rev3_sink_only and dual_role/mode
 last one plug at most; a forced voter gates all of those writes.
 
-USB PD is off for the length of a hold, so the host that comes back gets what
-an A-to-C cable gives it: no contract, and no request from the comma for 3 A.
-Apple hosts have also dropped PD sinks that do not answer their revision 3
-messages (raspberrypi/linux#6569). None of it survives a reboot.
+USB PD is left alone. Against an M1 Pro the comma took an explicit 3 A
+contract, answered the Mac's identity query and enumerated at 5 Gb/s, drawing
+0.25 A, the same as from a Jetson's USB-A port. The hold does not survive a
+reboot.
 """
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ RELEASE_AFTER = 5.0
 # how long the port reads empty before a plug counts as gone. A device let go
 # by a hold reattaches in a DRP toggle and a CC debounce, well under this
 UNPLUGGED = 1.5
-# sudo and three echos take tens of ms. Short, because the one in run()'s finally
+# sudo and two echos take tens of ms. Short, because the one in run()'s finally
 # comes before the FunctionFS close inside manager's 5 s
 SCRIPT_TIMEOUT = 2.0
 UNSUPPORTED = 3
