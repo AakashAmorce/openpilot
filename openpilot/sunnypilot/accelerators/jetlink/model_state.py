@@ -66,6 +66,12 @@ class JetlinkModelState(ModelStateBase):
     ModelStateBase.__init__(self)
     self.client = client
     self.spec = spec
+    # Over a phone's cable, hand the socket the warp's GPU mapping itself: the
+    # kernel copies it while the first segments are already on the wire, where
+    # copying it here first held the send back 2.5 ms. On the Mac stand-in the
+    # comma's side of a frame was 0.6 ms faster at p50 and 2 ms at p99. USB and
+    # Ethernet keep the host copy they were measured with.
+    self.send_from_gpu = getattr(getattr(client, 't', None), 'on_the_cable', lambda: False)() is True
     # not chestnut hardware, but the same role: modelV2.big, the UI and the
     # model manager key off this flag
     self.chestnut = True
@@ -135,8 +141,13 @@ class JetlinkModelState(ModelStateBase):
                                   frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
     t1 = time.perf_counter()
     # .data() rather than .numpy(): same ~2.5 ms mean (a write-combined GPU
-    # mapping read), but no per-frame allocation and no 52 ms outlier
-    data = warped.data()
+    # mapping read), but no per-frame allocation and no 52 ms outlier. The
+    # mapping is safe to send: infer_begin returns only once the socket has
+    # copied all of it, before the next warp can write it
+    if self.send_from_gpu:
+      data = warped._buffer().as_memoryview(allow_zero_copy=True)
+    else:
+      data = warped.data()
     t2 = time.perf_counter()
 
     self._frame_id += 1

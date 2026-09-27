@@ -61,11 +61,12 @@ class FakeClient:
 
 
 class TestWire(unittest.TestCase):
-  def run_frames(self, inputs: dict, n: int = 3):
+  def run_frames(self, inputs: dict, n: int = 3, client=None, warp_output=None):
     spec = spec_for(inputs)
-    client = FakeClient()
+    client = client or FakeClient()
     warped = np.arange(np.prod(spec.warped_shape), dtype=np.uint64).astype(np.uint8)
-    with mock.patch.object(model_state.warp_cache, 'call_warp', return_value=SimpleNamespace(data=lambda: warped)), \
+    warp_output = warp_output or SimpleNamespace(data=lambda: warped)
+    with mock.patch.object(model_state.warp_cache, 'call_warp', return_value=warp_output), \
          mock.patch.object(model_state.Tensor, 'from_blob', return_value=object()):
       state = model_state.JetlinkModelState(1928, 1208, client, spec, warp=object())
       bufs = {k: SimpleNamespace(data=np.zeros(8, np.uint8)) for k in ('img', 'big_img')}
@@ -89,6 +90,26 @@ class TestWire(unittest.TestCase):
       np.testing.assert_array_equal(packed[8:], np.array([1, 0, 0.1, 0.2], np.float32))
     # the desire pulse is the rising edge, as openpilot's own ModelState sends it
     self.assertEqual([p[3] for _, p, _, _ in client.sent], [0.0, 1.0, 0.0])
+
+  def test_over_the_cable_the_frame_goes_out_of_the_gpu_mapping(self):
+    # the socket copies the mapping while the first segments are on the wire;
+    # no host copy first
+    client = FakeClient()
+    client.t = SimpleNamespace(on_the_cable=lambda: True)
+    spec = spec_for(STATEFUL)
+    frame = np.arange(np.prod(spec.warped_shape), dtype=np.uint64).astype(np.uint8)
+    mapping = SimpleNamespace(as_memoryview=mock.Mock(return_value=memoryview(frame)))
+    warp_output = SimpleNamespace(data=mock.Mock(side_effect=AssertionError('copied on the host')),
+                                  _buffer=lambda: mapping)
+    _, state, client, _ = self.run_frames(STATEFUL, client=client, warp_output=warp_output)
+    self.assertTrue(state.send_from_gpu)
+    mapping.as_memoryview.assert_called_with(allow_zero_copy=True)
+    for data, *_ in client.sent:
+      np.testing.assert_array_equal(data, frame)
+
+  def test_usb_keeps_the_host_copy(self):
+    _, state, _, _ = self.run_frames(STATEFUL)
+    self.assertFalse(state.send_from_gpu)
 
   def test_a_queued_model_still_sends_the_hidden_state_back(self):
     spec, state, client, _ = self.run_frames(QUEUED)
