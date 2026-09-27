@@ -320,9 +320,8 @@ class Owner:
       vmtune.apply_vm_tuning()
       self.vm_tuned = True
     # before anything is presented: a C-to-C host has to find a device here.
-    # Ethernet needs the port as it boots, to host the adapter. A transport is
-    # only ever opened for USB, so holding one saves the param read
-    self.port.update(self.transport is not None or gadget.link_endpoint() is None)
+    # Ethernet needs the port as it boots, to host the adapter
+    self.port.update(gadget.link_endpoint() is None)
 
     # each read is a file; take them once and pass them down
     offroad = gadget.offroad()

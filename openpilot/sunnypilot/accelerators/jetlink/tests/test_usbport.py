@@ -27,7 +27,9 @@ JETSON_GADGET = (0x0955, 0x7020)
 
 class PortTest(unittest.TestCase):
   def setUp(self):
-    self.tmp = Path(tempfile.mkdtemp())
+    tmp = tempfile.TemporaryDirectory()
+    self.addCleanup(tmp.cleanup)
+    self.tmp = Path(tmp.name)
     self.role = self.tmp / 'current_pr'
     self.devices = self.tmp / 'devices'
     self.devices.mkdir()
@@ -85,14 +87,17 @@ class TestHosts(PortTest):
     self.run_for(60)
     self.assertEqual(self.commands(), ['off', 'hold'], "held for as long as the host stays plugged in")
 
-  def test_an_iphone_or_a_jetson_that_came_up_as_the_device_is_made_the_host(self):
-    for ids in (IPHONE, JETSON_GADGET):
-      with self.subTest(ids=ids):
-        self.setUp()
-        self.plug('source')
-        self.enumerate('2-1', ids)
-        self.run_for(SWAP + 1)
-        self.assertEqual(self.commands(), ['off', 'hold'])
+  def came_up_as_the_device(self, ids: tuple[int, int]) -> None:
+    self.plug('source')
+    self.enumerate('2-1', ids)
+    self.run_for(SWAP + 1)
+    self.assertEqual(self.commands(), ['off', 'hold'])
+
+  def test_an_iphone_that_came_up_as_the_device_is_made_the_host(self):
+    self.came_up_as_the_device(IPHONE)
+
+  def test_a_jetsons_usb_c_port_that_came_up_as_the_device_is_made_the_host(self):
+    self.came_up_as_the_device(JETSON_GADGET)
 
   def test_unplugging_the_host_lets_the_port_go(self):
     self.plug('source')
@@ -121,16 +126,19 @@ class TestAccessories(PortTest):
   """A chestnut is never taken for a host; anything else that cannot host is
   let go without being cycled."""
 
+  def left_alone(self, ids: tuple[int, int]) -> None:
+    self.plug('source')
+    self.enumerate('2-1', ids)
+    with mock.patch.object(usbport, 'chestnut_attached', wraps=usbport.chestnut_attached) as scan:
+      self.run_for(60)
+    self.assertEqual(self.commands(), ['off'])
+    self.assertEqual(scan.call_count, 1, "one sysfs read a cycle, not a directory walk")
+
   def test_a_chestnut_is_left_alone_and_looked_for_once(self):
-    for ids in (CHESTNUT, CHESTNUT_ROM):
-      with self.subTest(ids=ids):
-        self.setUp()
-        self.plug('source')
-        self.enumerate('2-1', ids)
-        with mock.patch.object(usbport, 'chestnut_attached', wraps=usbport.chestnut_attached) as scan:
-          self.run_for(60)
-        self.assertEqual(self.commands(), ['off'])
-        self.assertEqual(scan.call_count, 1, "one sysfs read a cycle, not a directory walk")
+    self.left_alone(CHESTNUT)
+
+  def test_a_chestnut_being_flashed_is_left_alone(self):
+    self.left_alone(CHESTNUT_ROM)
 
   def test_a_sink_that_cannot_host_is_not_cycled(self):
     self.plug('source')

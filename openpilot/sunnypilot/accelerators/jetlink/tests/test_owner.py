@@ -344,18 +344,11 @@ class TestTheToggle(OwnerTest):
     o.port.update.assert_called_once_with(True)
 
   def test_ethernet_gives_the_port_back(self):
-    o = self.owner(presented=False)
+    o = self.owner()
     with mock.patch.object(gadget, 'link_endpoint', return_value=('10.0.0.2', 5599)):
       o.step()
     o.port.update.assert_called_once_with(False)
 
-  def test_a_held_gadget_is_usb_without_reading_the_endpoint(self):
-    o = self.owner()
-    with mock.patch.object(gadget, 'link_endpoint') as endpoint:
-      o.port.update.side_effect = lambda usb: self.assertTrue(usb)
-      o.step()
-    o.port.update.assert_called_once_with(True)
-    self.assertEqual(endpoint.call_count, 0)
 
   def test_turning_it_off_gives_the_port_back(self):
     o = self.owner()
