@@ -32,10 +32,9 @@ NEWER = {'tinygrad_ref': 'next', 'bundles': [bundle(OLD, 12, '20', 'Cinque Terre
 
 
 class TestBigCatalog(unittest.TestCase):
-  def merged(self, installed=True, chestnut=False, newer=NEWER):
-    with mock.patch.object(backend.helpers, 'package_installed', return_value=installed), \
-         mock.patch.object(backend, '_chestnut_fitted', return_value=chestnut), \
-         mock.patch('jetlink.registry.catalog.fetch_catalogs', return_value=newer) as probe:
+  def merged(self, newer=NEWER):
+    probe_result = {'side_effect': newer} if isinstance(newer, Exception) else {'return_value': newer}
+    with mock.patch('jetlink.registry.catalog.fetch_catalogs', **probe_result) as probe:
       out = backend.big_catalog(PINNED)
     return out, probe
 
@@ -56,57 +55,60 @@ class TestBigCatalog(unittest.TestCase):
     self.assertIs(out['bundles'][0], PINNED['bundles'][0])
     self.assertEqual(out['tinygrad_ref'], 'pinned')
 
-  def test_the_link_toggle_does_not_change_it(self):
-    # the model manager drops a pick its catalog does not list, so a catalog that
-    # followed the toggle wiped a newer-catalog pick on every boot with the link off
-    with mock.patch.object(backend.helpers, 'enabled', return_value=False):
-      out, probe = self.merged()
-    probe.assert_called_once_with()
-    self.assertEqual(len(out['bundles']), 2)
-
-  def test_a_chestnut_or_no_package_leaves_the_catalog_alone(self):
-    for kwargs in ({'installed': False}, {'chestnut': True}):
-      with self.subTest(**kwargs):
-        out, probe = self.merged(**kwargs)
-        self.assertIs(out, PINNED)
-        probe.assert_not_called()
-
   def test_nothing_newer_or_a_failed_probe_leaves_it_alone(self):
     self.assertIs(self.merged(newer=PINNED)[0], PINNED)
-    with mock.patch.object(backend, 'extends_catalog', return_value=True), \
-         mock.patch('jetlink.registry.catalog.fetch_catalogs', side_effect=OSError('offline')):
-      self.assertIs(backend.big_catalog(PINNED), PINNED)
+    self.assertIs(self.merged(newer=OSError('offline'))[0], PINNED)
+
+
+class TestExtendsCatalog(unittest.TestCase):
+  """Hardware, not the link toggle: the model manager drops a pick its catalog does
+  not list, so a catalog that followed the toggle lost one on a boot with it off."""
+
+  def extends(self, installed=True, chestnut=False, link=False):
+    with mock.patch.object(backend.helpers, 'package_installed', return_value=installed), \
+         mock.patch.object(backend, '_chestnut_fitted', return_value=chestnut), \
+         mock.patch.object(backend.helpers, 'enabled', return_value=link):
+      return backend.extends_catalog()
+
+  def test_installed_without_a_chestnut_extends_it_whatever_the_toggle(self):
+    self.assertTrue(self.extends(link=False))
+    self.assertTrue(self.extends(link=True))
+
+  def test_a_chestnut_or_no_package_leaves_it_as_fetched(self):
+    self.assertFalse(self.extends(chestnut=True, link=True))
+    self.assertFalse(self.extends(installed=False))
 
 
 class TestFetcherHook(unittest.TestCase):
-  """The model manager asks once per fetch, for the big-model source only."""
+  """The model manager asks once per fetch, for the big-model source only, and the
+  cache records the answer."""
 
   def fetch(self, source, extends=True):
     response = mock.MagicMock(status_code=200)
-    response.json.return_value = dict(PINNED)
+    response.json.return_value = PINNED
     params = mock.MagicMock()
     with mock.patch('openpilot.sunnypilot.models.fetcher.requests.get', return_value=response), \
-         mock.patch('openpilot.sunnypilot.accelerators.extends_catalog', return_value=extends), \
+         mock.patch('openpilot.sunnypilot.accelerators.extends_catalog', return_value=extends) as asked, \
          mock.patch('openpilot.sunnypilot.accelerators.big_catalog', side_effect=lambda c: c) as hook:
-      fetcher = ModelFetcher(params)
-      fetcher._fetch_and_cache_models(source)
-    return hook, fetcher
+      ModelFetcher(params)._fetch_and_cache_models(source)
+    cached = next((c.args[1] for c in params.put.call_args_list if c.args[0] == 'ModelManager_ModelsCache_Chestnut'), None)
+    return hook, asked, cached
 
-  def test_the_big_model_source_is_extended(self):
-    hook, _ = self.fetch('chestnut')
-    hook.assert_called_once()
-    self.assertEqual(hook.call_args.args[0]['bundles'], PINNED['bundles'])
+  def test_the_big_model_source_is_extended_and_says_so(self):
+    hook, asked, cached = self.fetch('chestnut')
+    hook.assert_called_once_with(PINNED)
+    asked.assert_called_once_with()
+    self.assertIs(cached[ModelFetcher.EXTENDED_KEY], True)
+
+  def test_beside_a_chestnut_it_is_cached_as_fetched(self):
+    hook, _, cached = self.fetch('chestnut', extends=False)
+    hook.assert_not_called()
+    self.assertEqual(cached, {**PINNED, ModelFetcher.EXTENDED_KEY: False})
 
   def test_the_small_model_source_is_not(self):
-    self.fetch('qcom')[0].assert_not_called()
-
-  def test_the_big_model_cache_records_whether_it_was_extended(self):
-    for extends in (True, False):
-      with self.subTest(extends=extends):
-        _, fetcher = self.fetch('chestnut', extends=extends)
-        puts = fetcher.params.put.call_args_list
-        cached = next(c.args[1] for c in puts if c.args[0] == 'ModelManager_ModelsCache_Chestnut')
-        self.assertIs(cached[ModelFetcher.ACCELERATOR_KEY], extends)
+    hook, asked, _ = self.fetch('qcom')
+    hook.assert_not_called()
+    asked.assert_not_called()
 
 
 class TestCatalogFollowsTheHardware(unittest.TestCase):
@@ -119,12 +121,12 @@ class TestCatalogFollowsTheHardware(unittest.TestCase):
     self.addCleanup(mock.patch.stopall)
 
   def bundles(self, stamped, extends):
-    cached = {**PINNED, ModelFetcher.ACCELERATOR_KEY: stamped}
+    cached = {**PINNED, ModelFetcher.EXTENDED_KEY: stamped}
     with mock.patch.object(self.fetcher.model_caches['chestnut'], 'get', return_value=(cached, False)), \
          mock.patch('openpilot.sunnypilot.accelerators.extends_catalog', return_value=extends):
       self.fetcher.get_bundles_for_source('chestnut')
 
-  def test_a_cache_from_the_same_state_is_used(self):
+  def test_a_cache_from_the_same_hardware_is_used(self):
     self.bundles(stamped=True, extends=True)
     self.bundles(stamped=False, extends=False)
     self.refetch.assert_not_called()

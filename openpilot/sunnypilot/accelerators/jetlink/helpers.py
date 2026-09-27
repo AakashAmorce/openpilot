@@ -168,8 +168,8 @@ _REF = re.compile(r'[0-9a-f]{40}')
 # the index and the slot are JSON params, and the UI names the active model
 # every frame; the status line can lag a new pick by this long
 INDEX_TTL = 2.0
-_index_cache: tuple[float, list[dict]] | None = None
-_slot_cache: tuple[float, tuple[str, str] | None] | None = None
+_index_cache: tuple[float, list[dict], dict[str, dict]] | None = None
+_slot_cache: tuple[float, dict | None] | None = None
 
 
 def catalog() -> list[dict]:
@@ -221,26 +221,30 @@ def resolve_pointer(ref: str) -> tuple[str, int]:
   return oid, size
 
 
+def _row(name: str, ref: str, known: dict[str, dict]) -> dict:
+  p = known.get(ref) or {}
+  return {'name': name, 'ref': ref, 'oid': p.get('oid'), 'size': int(p['size']) if p.get('size') else None}
+
+
+def _index() -> tuple[list[dict], dict[str, dict]]:
+  """The catalog's rows and the pointers behind them, read together once per INDEX_TTL."""
+  global _index_cache
+  now = time.monotonic()
+  if _index_cache is None or now - _index_cache[0] >= INDEX_TTL:
+    known = pointers()
+    _index_cache = (now, [_row(b['name'], b['ref'], known) for b in catalog()], known)
+  return _index_cache[1], _index_cache[2]
+
+
 def model_index() -> list[dict]:
   """Every catalog model, {name, ref, oid, size}. oid and size are None until
   the model has been selected and resolved. No network."""
-  global _index_cache
-  now = time.monotonic()
-  if _index_cache is not None and now - _index_cache[0] < INDEX_TTL:
-    return _index_cache[1]
-  known = pointers()
-  out = []
-  for b in catalog():
-    p = known.get(b['ref']) or {}
-    out.append({**b, 'oid': p.get('oid'), 'size': int(p['size']) if p.get('size') else None})
-  _index_cache = (now, out)
-  return out
+  return _index()[0]
 
 
-def selected_slot() -> tuple[str, str] | None:
-  """The big-model slot's pick as (ref, name). The raw dict, not a parsed bundle,
-  and memoised: the slot is the model manager's to validate, and the UI asks
-  every frame."""
+def selected_slot() -> dict | None:
+  """The big-model slot's pick as {name, ref}, from the raw param rather than a
+  parsed bundle, and memoised: the UI asks every frame."""
   global _slot_cache
   now = time.monotonic()
   if _slot_cache is not None and now - _slot_cache[0] < INDEX_TTL:
@@ -250,39 +254,18 @@ def selected_slot() -> tuple[str, str] | None:
   ref = slot.get('ref') if isinstance(slot, dict) else None
   pick = None
   if isinstance(ref, str) and ref:
-    pick = (ref, str(slot.get('displayName') or ref[:10]))
+    pick = {'name': str(slot.get('displayName') or ref[:10]), 'ref': ref}
   _slot_cache = (now, pick)
   return pick
 
 
-def selected_ref() -> str | None:
-  pick = selected_slot()
-  return pick[0] if pick else None
-
-
 def selected_model() -> dict | None:
-  """The big model the device picked, or the fork's default big model, or the newest.
-
-  The pick is the model manager's big-model slot, the one the settings screen
-  shows and a chestnut runs, whether or not the catalog lists it: a model's
-  identity is its commit's LFS pointer, which needs only the ref. The catalog
-  lists the choices. Missing from it, a pick is one sunnypilot dropped or one
-  a newer catalog carries that was not merged in when the model manager last
-  fetched, and running the default instead would run what the screen does not
-  show. The default is for a device with no pick.
-  """
-  models = model_index()
-  pick = selected_slot()
-  if pick is not None:
-    ref, name = pick
-    for m in models:
-      if m['ref'] == ref:
-        return m
-    p = pointers().get(ref) or {}
-    return {'name': name, 'ref': ref, 'oid': p.get('oid'), 'size': int(p['size']) if p.get('size') else None}
-  if not models:
-    return None
-  return next((m for m in models if m['ref'] == DEFAULT_BIG_MODEL_REF), models[0])
+  """The slot's pick, listed in the catalog or not: a ref is enough to find its
+  pointer. With no pick, the fork's default big model, else the newest."""
+  models, known = _index()
+  if (pick := selected_slot()) is not None:
+    return _row(pick['name'], pick['ref'], known)
+  return next((m for m in models if m['ref'] == DEFAULT_BIG_MODEL_REF), models[0] if models else None)
 
 
 def migrate_selection() -> None:
@@ -299,7 +282,7 @@ def migrate_selection() -> None:
   if not wanted:
     return
   store = params()
-  if selected_ref() is None:
+  if selected_slot() is None:
     ref = wanted if _REF.fullmatch(wanted) else None
     if ref is None and (ready := _get(gadget.P_READY)):
       for m in catalog():

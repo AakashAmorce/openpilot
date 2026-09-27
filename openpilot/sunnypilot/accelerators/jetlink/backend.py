@@ -354,22 +354,17 @@ def make_status_publisher(pm, model):
 
 
 def extends_catalog() -> bool:
-  """Whether big_catalog folds the newer catalogs in: with jetlink installed and
-  no chestnut fitted. Not the link toggle. The model manager validates the
-  big-model pick against this catalog and drops a pick it does not list, so a
-  catalog that followed the toggle lost a pick only newer catalogs carry on
-  every boot with the link off. A chestnut sees sunnypilot's list as fetched."""
-  return helpers.package_installed() and not _chestnut_fitted()
+  """Whether the big-model catalog carries the newer catalogs' models: with jetlink
+  installed and no chestnut fitted. Not the link toggle, since the model manager
+  drops a pick its catalog does not list."""
+  return installed() and not _chestnut_fitted()
 
 
 def big_catalog(catalog: dict) -> dict:
-  """The big-model catalog with jetlink's pinned one and every newer one
-  sunnypilot has published folded in, when a Jetson could run the big model. It
-  runs the commit's ONNX, so a model sunnypilot only builds for its next
+  """The big-model catalog with every newer one sunnypilot has published folded in.
+  A Jetson runs the commit's ONNX, so a model sunnypilot only builds for its next
   runtime is still one it can run; see jetlink.registry.catalog.fetch_catalogs.
   Never raises: a probe that fails leaves the catalog as it was."""
-  if not extends_catalog():
-    return catalog
   try:
     from jetlink.registry.catalog import fetch_catalogs, merge_catalogs
     from openpilot.sunnypilot.models.helpers import REQUIRED_JSON_VERSION

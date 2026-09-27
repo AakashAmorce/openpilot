@@ -250,7 +250,7 @@ class TestResolvePointer(unittest.TestCase):
   def setUp(self):
     self.params = mock.patch.object(helpers, 'params').start()
     self.addCleanup(mock.patch.stopall)
-    helpers._index_cache = (float('inf'), [])   # a stale index must be dropped on a hit
+    helpers._index_cache = (float('inf'), [], {})   # a stale index must be dropped on a hit
     self.addCleanup(setattr, helpers, '_index_cache', None)
 
   def response(self, body: bytes):
@@ -294,38 +294,35 @@ class TestResolvePointer(unittest.TestCase):
 
 
 class TestSelectedModel(unittest.TestCase):
-  """The pick is the model manager's big-model slot, the same one a chestnut runs from."""
+  """The pick is the model manager's big-model slot, the same one a chestnut runs
+  from, listed in the catalog or not; the catalog only supplies the default."""
 
   INDEX = [
     {'name': 'Alpha', 'ref': REF_A, 'oid': 'a' * 64, 'size': 10},
     {'name': 'Beta', 'ref': REF_B, 'oid': 'b' * 64, 'size': 20},
   ]
 
-  def select_with(self, slot_ref, default=REF_B, index=None, pointers=None):
-    pick = (slot_ref, 'Picked') if slot_ref else None
-    with mock.patch.object(helpers, 'model_index', return_value=self.INDEX if index is None else index), \
+  def select_with(self, slot_ref, default=REF_B, index=None, known=None):
+    pick = {'name': 'Picked', 'ref': slot_ref} if slot_ref else None
+    with mock.patch.object(helpers, '_index', return_value=(self.INDEX if index is None else index, known or {})), \
          mock.patch.object(helpers, 'DEFAULT_BIG_MODEL_REF', default), \
-         mock.patch.object(helpers, 'pointers', return_value=pointers or {}), \
          mock.patch.object(helpers, 'selected_slot', return_value=pick):
       return helpers.selected_model()
 
   def test_an_empty_slot_takes_the_forks_default_big_model(self):
     assert self.select_with(None)['name'] == 'Beta'
 
-  def test_the_slots_ref_selects_it(self):
-    assert self.select_with(REF_A)['name'] == 'Alpha'
-
   def test_a_default_not_in_the_catalog_falls_to_the_newest(self):
     assert self.select_with(None, default='f' * 40)['name'] == 'Alpha'
 
-  def test_a_pick_the_catalog_does_not_list_is_still_the_pick(self):
-    # the screen shows the slot; running the default would run something else.
-    # The worker resolves the oid from the ref, as for any catalog model
-    assert self.select_with(REF_C) == {'name': 'Picked', 'ref': REF_C, 'oid': None, 'size': None}
+  def test_the_pick_is_the_slot_with_its_pointer(self):
+    for ref in (REF_A, REF_C):   # listed or not
+      known = {ref: {'oid': 'c' * 64, 'size': '30'}}
+      assert self.select_with(ref, known=known) == {'name': 'Picked', 'ref': ref, 'oid': 'c' * 64, 'size': 30}
 
-  def test_an_uncatalogued_pick_keeps_a_pointer_already_resolved(self):
-    known = {REF_C: {'oid': 'c' * 64, 'size': '30'}}
-    assert self.select_with(REF_C, pointers=known) == {'name': 'Picked', 'ref': REF_C, 'oid': 'c' * 64, 'size': 30}
+  def test_a_pick_not_yet_resolved_has_no_oid(self):
+    # the worker resolves it from the ref, as for any catalog model
+    assert self.select_with(REF_C) == {'name': 'Picked', 'ref': REF_C, 'oid': None, 'size': None}
 
   def test_a_pick_needs_no_catalog(self):
     assert self.select_with(REF_C, index=[])['ref'] == REF_C
@@ -334,7 +331,7 @@ class TestSelectedModel(unittest.TestCase):
     assert self.select_with(None, index=[]) is None
 
 
-class TestSelectedRef(unittest.TestCase):
+class TestSelectedSlot(unittest.TestCase):
   def setUp(self):
     helpers._slot_cache = None
     self.addCleanup(setattr, helpers, '_slot_cache', None)
@@ -342,26 +339,19 @@ class TestSelectedRef(unittest.TestCase):
   def read_with(self, slot):
     helpers._slot_cache = None
     with mock.patch.object(helpers, '_get', return_value=slot):
-      return helpers.selected_ref()
+      return helpers.selected_slot()
 
   def test_a_second_read_within_the_ttl_costs_nothing(self):
     # the UI names the active model every frame
     with mock.patch.object(helpers, '_get', return_value={'ref': REF_A}) as read:
       helpers._slot_cache = None
-      assert helpers.selected_ref() == REF_A
-      assert helpers.selected_ref() == REF_A
+      assert helpers.selected_slot()['ref'] == REF_A
+      assert helpers.selected_slot()['ref'] == REF_A
     assert read.call_count == 1
 
-  def test_reads_the_slots_ref(self):
-    assert self.read_with({'ref': REF_A, 'displayName': 'Alpha'}) == REF_A
-
-  def test_the_slot_carries_its_name(self):
-    helpers._slot_cache = None
-    with mock.patch.object(helpers, '_get', return_value={'ref': REF_A, 'displayName': 'Alpha'}):
-      assert helpers.selected_slot() == (REF_A, 'Alpha')
-    helpers._slot_cache = None
-    with mock.patch.object(helpers, '_get', return_value={'ref': REF_A}):
-      assert helpers.selected_slot() == (REF_A, REF_A[:10])
+  def test_reads_the_slots_ref_and_name(self):
+    assert self.read_with({'ref': REF_A, 'displayName': 'Alpha'}) == {'name': 'Alpha', 'ref': REF_A}
+    assert self.read_with({'ref': REF_A}) == {'name': REF_A[:10], 'ref': REF_A}
 
   def test_anything_else_is_no_pick(self):
     for slot in (None, {}, {'ref': ''}, {'ref': 7}, 'junk'):
@@ -381,7 +371,7 @@ class TestMigrateSelection(unittest.TestCase):
     self.addCleanup(mock.patch.stopall)
     self.stored = mock.patch.object(helpers, '_store_slot', **({'side_effect': listed} if isinstance(listed, Exception) else {'return_value': listed})).start()
     with mock.patch.object(helpers, '_get', side_effect=lambda k, d=None: values.get(k, d)), \
-         mock.patch.object(helpers, 'selected_ref', return_value=slot_ref), \
+         mock.patch.object(helpers, 'selected_slot', return_value={'name': 'x', 'ref': slot_ref} if slot_ref else None), \
          mock.patch.object(helpers, 'catalog', return_value=self.CATALOG), \
          mock.patch.object(helpers, 'resolve_pointer', side_effect=resolve or (lambda ref: self.fail("nothing to look up"))):
       helpers.migrate_selection()
