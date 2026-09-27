@@ -88,5 +88,84 @@ class TestParamsOffTheFilesystem(unittest.TestCase):
       self.assertFalse(gadget.enabled())
 
 
+class TestLinkKind(unittest.TestCase):
+  """What carries the link. The explicit endpoint wins, then the owner's
+  record of a phone's dial, and USB is the absence of both."""
+
+  def setUp(self):
+    self.tmp = Path(tempfile.mkdtemp())
+    for name, value in (('LINK', self.tmp / 'link'), ('UDC_PATH', self.tmp / 'udc'),
+                        ('NET_STATUS', self.tmp / 'net'),
+                        ('link_endpoint', unittest.mock.Mock(return_value=None))):
+      p = unittest.mock.patch.object(gadget, name, value)
+      self.addCleanup(p.stop)
+      p.start()
+
+  def test_nothing_recorded_is_usb(self):
+    self.assertEqual(gadget.link_kind(), 'usb')
+    self.assertIsNone(gadget.link_peer())
+    self.assertFalse(gadget.over_tcp())
+
+  def test_a_dial_is_recorded_with_the_phone_and_cleared(self):
+    gadget.note_link('cable', '192.168.60.3')
+    self.assertEqual(gadget.link_kind(), 'cable')
+    self.assertEqual(gadget.link_peer(), '192.168.60.3')
+    self.assertTrue(gadget.over_tcp())
+    gadget.clear_link()
+    self.assertEqual(gadget.link_kind(), 'usb')
+    gadget.clear_link()   # twice is not an error
+
+  def test_a_record_without_a_peer_is_still_the_cable(self):
+    gadget.note_link('cable')
+    self.assertEqual((gadget.link_kind(), gadget.link_peer()), ('cable', None))
+
+  def test_anything_else_in_the_record_is_usb(self):
+    for raw in ('', 'usb', 'garbage 1 2 3', '\n'):
+      gadget.LINK.write_text(raw)
+      self.assertEqual(gadget.link_kind(), 'usb', repr(raw))
+
+  def test_the_endpoint_param_wins_over_the_record(self):
+    gadget.note_link('cable', '192.168.60.3')
+    gadget.link_endpoint.return_value = ('10.0.0.5', 5599)
+    self.assertEqual(gadget.link_kind(), 'ethernet')
+    self.assertTrue(gadget.over_tcp())
+
+  def test_over_tcp_there_is_no_host_to_wait_for(self):
+    # the connect already reached the phone or the Jetson; on the cable the
+    # UDC is configured by a phone, and it is the dial that proved it
+    with unittest.mock.patch.object(gadget, 'udc_state', return_value='powered'), \
+         unittest.mock.patch.object(gadget.time, 'sleep', side_effect=AssertionError('waited')):
+      gadget.note_link('cable', '192.168.60.3')
+      self.assertTrue(gadget.wait_for_host(5.0, report=lambda: self.fail('reported a wait')))
+      gadget.clear_link()
+      gadget.link_endpoint.return_value = ('10.0.0.5', 5599)
+      self.assertTrue(gadget.wait_for_host(5.0))
+      gadget.link_endpoint.return_value = None
+      self.assertFalse(gadget.wait_for_host(0.0))
+
+  def test_only_the_endpoint_bypasses_the_gadget(self):
+    # a phone on the cable is on the gadget's own network interface
+    with unittest.mock.patch.object(gadget, 'FFS_MOUNT', self.tmp / 'ffs'), \
+         unittest.mock.patch.object(gadget, 'GADGET_STATUS', self.tmp / 'status'):
+      gadget.note_link('cable', '192.168.60.3')
+      self.assertFalse(gadget.link_configured())
+      gadget.link_endpoint.return_value = ('10.0.0.5', 5599)
+      self.assertTrue(gadget.link_configured())
+
+  def test_the_bus_speed_is_read_off_the_bound_udc(self):
+    with unittest.mock.patch.object(gadget, 'bound_udc', return_value=None):
+      self.assertIsNone(gadget.usb_speed())
+    with unittest.mock.patch.object(gadget, 'bound_udc', return_value='a600000.dwc3'):
+      self.assertIsNone(gadget.usb_speed())
+      (gadget.UDC_PATH / 'a600000.dwc3').mkdir(parents=True)
+      (gadget.UDC_PATH / 'a600000.dwc3' / 'current_speed').write_text('super-speed\n')
+      self.assertEqual(gadget.usb_speed(), 'super-speed')
+
+  def test_the_network_status_is_the_scripts(self):
+    self.assertIsNone(gadget.net_status())
+    gadget.NET_STATUS.write_text('ok 192.168.60.1\n')
+    self.assertEqual(gadget.net_status(), 'ok 192.168.60.1')
+
+
 if __name__ == '__main__':
   unittest.main()

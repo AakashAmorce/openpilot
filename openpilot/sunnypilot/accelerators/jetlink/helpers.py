@@ -29,13 +29,15 @@ from openpilot.sunnypilot.accelerators.jetlink.gadget import set_logger as _set_
 # than imported so there is one seam: gadget's own functions read these out of
 # gadget's namespace, and a test that patches them there is seen here too.
 _FORWARDED = frozenset((
-  'AGNOS', 'CC_ORIENTATION', 'DORMANT', 'FFS_MOUNT', 'GADGET_PATH', 'GADGET_SETUP_TIMEOUT',
-  'GADGET_STATUS', 'HOST_POLL', 'P_ENABLED', 'P_ENDPOINT', 'P_READY', 'SHUTDOWN_REQUEST',
+  'AGNOS', 'CABLE_ADDR', 'CABLE_HOLD', 'CC_ORIENTATION', 'DORMANT', 'FFS_MOUNT', 'GADGET_PATH',
+  'GADGET_SETUP_TIMEOUT', 'GADGET_STATUS', 'HOST_POLL', 'LINK', 'NET_STATUS', 'P_ENABLED',
+  'P_ENDPOINT', 'P_READY', 'SHUTDOWN_REQUEST',
   'STALLED_ENUMERATION', 'STALLED_STATES', 'UDC_PATH', 'bound_udc', 'can_setup_gadget',
-  'dormant', 'enabled', 'finish_shutdown', 'gadget_error', 'host_attached',
-  'link_configured', 'offroad',
+  'clear_link', 'dormant', 'enabled', 'finish_shutdown', 'gadget_error', 'host_attached',
+  'link_configured', 'link_kind', 'link_peer', 'net_status', 'net_up', 'note_link', 'offroad', 'over_tcp',
   'link_endpoint', 'package_installed', 'params_dir', 'pending_shutdown', 'port_has_host',
-  'repo_root', 'request_shutdown', 'set_dormant', 'setup_gadget', 'udc_state', 'wait_for_host',
+  'repo_root', 'request_shutdown', 'set_dormant', 'setup_gadget', 'udc_state', 'usb_speed',
+  'wait_for_host',
 ))
 
 
@@ -111,7 +113,9 @@ def gadget_present() -> bool:
   """Is a Jetson actually on the other end right now?
 
   True once something holds the gadget open and a host has configured us,
-  held for PRESENCE_HOLD after that stops.
+  held for PRESENCE_HOLD after that stops. A phone on the cable is a host on
+  the gadget like any other; only the explicit ethernet endpoint has no
+  gadget to look at.
   """
   global _last_configured
   if gadget.link_endpoint() is not None:
@@ -133,7 +137,8 @@ def connect(deadline: float | None = None, name: str | None = None, loan=None):
   frame the way it blocks on a chestnut. `name` is what the server logs this
   connection as; two comma processes share one gadget and the Jetson's journal
   has no clock to tell them apart by. With a `loan`, jetlinkd owns the gadget
-  and this end only opens the endpoint files: see lending.py.
+  and this end only opens the endpoint files: see lending.py. A loan that
+  carries a socket is a phone's dial, and the link rides on that instead.
   """
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
   deadline = FRAME_TIMEOUT if deadline is None else deadline
@@ -142,6 +147,9 @@ def connect(deadline: float | None = None, name: str | None = None, loan=None):
     host, port = endpoint
     cloudlog.warning("jetlink: connecting over tcp to %s:%d", host, port)
     return JetlinkClient.open_tcp(host, port, deadline=deadline, name=name)
+  if loan is not None and loan.sock is not None:
+    cloudlog.warning("jetlink: connecting over the phone's dial (%s)", gadget.link_peer())
+    return JetlinkClient.open_socket(loan.sock, deadline=deadline, name=name)
   if loan is not None:
     return JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce,
                                            deadline=deadline, name=name)

@@ -95,6 +95,27 @@ class TestGadgetSetup(unittest.TestCase):
       assert not helpers.setup_gadget()
     assert log.call_count == 1
 
+  def test_the_network_is_brought_up_by_the_same_script_and_judged_by_its_status(self):
+    # usb0 exists only once the UDC is bound, so this runs after the owner's
+    # bind rather than at boot
+    status = self.tmp / 'net'
+    with mock.patch.object(gadget.subprocess, 'run') as run, mock.patch.object(gadget, 'NET_STATUS', status):
+      assert not helpers.net_up()          # the script wrote nothing
+      (argv,), kwargs = run.call_args
+      assert argv[:3] == ['sudo', '-n', 'bash'] and argv[3] == str(self.script) and argv[4:] == ['--net']
+      assert kwargs['check'] and kwargs['timeout'] == helpers.GADGET_SETUP_TIMEOUT
+      status.write_text('error: no usb0 yet\n')
+      assert not helpers.net_up()
+      status.write_text('ok 192.168.60.1\n')
+      assert helpers.net_up()
+    with mock.patch.object(gadget.subprocess, 'run', side_effect=gadget.subprocess.CalledProcessError(1, 'bash')), \
+         mock.patch.object(helpers.cloudlog, 'exception') as log:
+      assert not helpers.net_up()
+    assert log.call_count == 1
+    with mock.patch.object(gadget, 'AGNOS', False), mock.patch.object(gadget.subprocess, 'run') as run:
+      assert not helpers.net_up()
+      run.assert_not_called()
+
 
 class TestGadgetAlert(unittest.TestCase):
   """Only complain to someone who asked for the link. With it off, a device
@@ -150,6 +171,18 @@ class TestDormant(unittest.TestCase):
       (self.tmp / 'cc').write_text('0')
       assert not helpers.gadget_present()
 
+  def test_a_phone_on_the_cable_counts_as_present_like_any_host(self):
+    # the phone drives the UDC to configured like a Jetson does; what differs
+    # is the transport, not the presence
+    with mock.patch.object(gadget, 'link_endpoint', return_value=None), \
+         mock.patch.object(gadget, 'LINK', self.tmp / 'link'), \
+         mock.patch.object(gadget, 'host_attached', return_value=False) as attached:
+      gadget.note_link('cable', '192.168.60.3')
+      helpers._last_configured = 0.0
+      assert not helpers.gadget_present()
+      attached.return_value = True
+      assert helpers.gadget_present()
+
   def test_shutdown_request_round_trip(self):
     assert helpers.pending_shutdown() is None
     assert helpers.request_shutdown('car battery')
@@ -166,6 +199,40 @@ class TestDormant(unittest.TestCase):
     helpers.request_shutdown('car battery')
     helpers.finish_shutdown()
     assert helpers.await_shutdown(0.3)
+
+
+class TestConnect(unittest.TestCase):
+  """Which transport the client is opened over: the endpoint param, a loan
+  that carries a phone's dial, a loan of the endpoint files, or the gadget."""
+
+  def setUp(self):
+    self.client = mock.patch('jetlink.client.JetlinkClient').start()
+    self.addCleanup(mock.patch.stopall)
+    mock.patch.object(gadget, 'link_endpoint', return_value=None).start()
+
+  def test_a_loan_with_a_dial_is_opened_over_the_socket(self):
+    sock = mock.Mock(name='sock')
+    helpers.connect(deadline=2.0, name='modeld', loan=mock.Mock(sock=sock))
+    self.client.open_socket.assert_called_once_with(sock, deadline=2.0, name='modeld')
+    self.client.open_borrowed_ffs.assert_not_called()
+
+  def test_a_loan_of_the_endpoints_is_opened_over_them(self):
+    loan = mock.Mock(sock=None, mount='/dev/ffs-jetlink', udc='udc0')
+    helpers.connect(name='modeld', loan=loan)
+    self.client.open_borrowed_ffs.assert_called_once()
+    assert self.client.open_borrowed_ffs.call_args.args[:2] == ('/dev/ffs-jetlink', 'udc0')
+    self.client.open_socket.assert_not_called()
+
+  def test_no_loan_opens_the_gadget(self):
+    helpers.connect()
+    self.client.open_ffs.assert_called_once()
+
+  def test_the_endpoint_param_is_ethernet_whatever_the_loan_says(self):
+    gadget.link_endpoint.return_value = ('10.0.0.5', 5599)
+    helpers.connect(loan=mock.Mock(sock=mock.Mock()))
+    self.client.open_tcp.assert_called_once()
+    assert self.client.open_tcp.call_args.args == ('10.0.0.5', 5599)
+    self.client.open_socket.assert_not_called()
 
 
 def bundle(ref: str, name: str, index: int = 0, version=19) -> dict:

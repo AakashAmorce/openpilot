@@ -130,6 +130,89 @@ def link_endpoint() -> tuple[str, int] | None:
   return host, int(port or 5599)
 
 
+# -- what carries the link ------------------------------------------------
+# The gadget is composite: a FunctionFS vendor interface for a Jetson or a Mac,
+# and a CDC-NCM network interface for an iPhone, which gives apps no USB access.
+# The comma end of that network is 192.168.60.1 (setup_gadget.sh, which also
+# runs the DHCP server), and the phone dials CABLE_ADDR whenever its USB
+# ethernet is up. An accepted dial is the proof of a phone; the owner records
+# it here and hands the socket to whoever borrows the link. Nothing else can
+# tell the two hosts apart: both drive the UDC to configured, and a hello over
+# FunctionFS with a phone attached blocks 15 s and bounces the gadget.
+LINK = Path("/dev/shm/jetlink-link")        # "cable <peer ip>" while a phone is dialed in
+NET_STATUS = Path("/dev/shm/jetlink-net")   # setup_gadget.sh: "ok 192.168.60.1", "error: ...", "net: unavailable"
+CABLE_ADDR = ('192.168.60.1', 5599)
+# after the UDC reaches configured, how long the owner keeps borrowers off
+# FunctionFS so a phone has had a chance to dial. A Jetson or a Mac never
+# dials, so after the hold the link is USB exactly as it was
+CABLE_HOLD = 3.0
+
+
+def _link_record() -> list[str]:
+  try:
+    return LINK.read_text().split()
+  except OSError:
+    return []
+
+
+def link_kind() -> str:
+  """'ethernet' for the explicit JetlinkEndpoint param, 'cable' while a phone
+  is dialed in over the gadget's network interface, else 'usb'."""
+  if link_endpoint() is not None:
+    return 'ethernet'
+  record = _link_record()
+  return 'cable' if record[:1] == ['cable'] else 'usb'
+
+
+def link_peer() -> str | None:
+  """The phone's address, while a cable link is up."""
+  record = _link_record()
+  return record[1] if record[:1] == ['cable'] and len(record) > 1 else None
+
+
+def note_link(kind: str, peer: str | None = None) -> None:
+  """The owner's record of what dialed in. Only 'cable' means anything to a
+  reader; the absence of the file is USB."""
+  try:
+    LINK.write_text(f"{kind} {peer}".strip() if peer else kind)
+  except OSError:
+    log.exception("jetlink: could not record the link")
+
+
+def clear_link() -> None:
+  try:
+    LINK.unlink(missing_ok=True)
+  except OSError:
+    log.exception("jetlink: could not clear the link record")
+
+
+def over_tcp() -> bool:
+  """Is the server reached over TCP, on the cable or on ethernet? Over TCP
+  there is nothing to enumerate and no endpoint file to bounce."""
+  return link_kind() != 'usb'
+
+
+def net_status() -> str | None:
+  """What setup_gadget.sh said about the gadget's network interface, if it ran."""
+  try:
+    return NET_STATUS.read_text().strip() or None
+  except OSError:
+    return None
+
+
+def usb_speed() -> str | None:
+  """The bus speed the host enumerated us at: 458 KB a frame is ~1 ms on
+  super-speed and ~11 ms on high-speed, so this is the first thing to read
+  when the link is slow. None while unbound or where the UDC does not say."""
+  udc = bound_udc()
+  if udc is None:
+    return None
+  try:
+    return (UDC_PATH / udc / "current_speed").read_text().strip() or None
+  except OSError:
+    return None
+
+
 # -- where the gadget lives -----------------------------------------------
 # the comma is the USB gadget and the Jetson the host, decided by the kernels:
 # AGNOS has CONFIG_USB_F_FS built in, L4T images are often stripped of the
@@ -236,7 +319,15 @@ def wait_for_host(timeout: float, bounce=None, should_stop=None, report=None) ->
   the bus and stopped. The UDC then sits in default or addressed with the CC
   pin still showing a host, and only another connect moves it: that is what
   `bounce` is for, and it is spent once.
+
+  Over TCP there is nothing to enumerate: the connect that made the client
+  already reached the far end. Waiting on the UDC stalled every modeld join
+  for CONNECT_TIMEOUT and then started over, so the large model never joined;
+  on the cable the UDC is configured, but by a phone, and it is the dial that
+  proved it is there.
   """
+  if over_tcp():
+    return True
   deadline = time.monotonic() + timeout
   stalled_since = None
   bounced = False
@@ -299,11 +390,37 @@ def setup_gadget() -> bool:
   return link_configured()
 
 
+def net_up() -> bool:
+  """Bring the gadget's network interface up, for a phone to dial over.
+
+  usb0 does not exist until the first UDC bind (f_ncm registers the netdev in
+  its bind), and setup_gadget.sh never binds, so its own attempt at setup
+  time reports "error: no usb0 yet". The owner runs this after it binds. The
+  flag is idempotent: nmcli unmanaged, 192.168.60.1/24, the DHCP server, and
+  NET_STATUS written as "ok 192.168.60.1", "error: <reason>" or
+  "net: unavailable" on a kernel without NCM or ECM.
+  """
+  if not can_setup_gadget():
+    return False
+  try:
+    subprocess.run(['sudo', '-n', 'bash', str(_gadget_script()), '--net'], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=GADGET_SETUP_TIMEOUT)
+  except Exception:
+    log.exception("jetlink: could not bring the gadget's network up")
+    return False
+  status = net_status() or ''
+  log.warning("jetlink: gadget network: %s", status or 'no status written')
+  return status.startswith('ok')
+
+
 def link_configured() -> bool:
-  """Can we even attempt a link? The gadget exists, or TCP is configured.
+  """Can we even attempt a link? The gadget exists, or ethernet is configured.
 
   Not host_attached(): the UDC only binds when something opens ep0, and nothing
   opens ep0 unless the link looks usable. Waiting for a host deadlocks.
+
+  Only the explicit endpoint bypasses the gadget. A phone on the cable is on
+  the gadget's own network interface, which exists only while ep0 is held.
   """
   if gadget_error() is not None:
     return False
