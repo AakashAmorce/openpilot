@@ -8,6 +8,8 @@ The process that holds the gadget: what it keeps, what it lets go of, and when
 it starts the heavy half.
 """
 import json
+import select
+import socket
 import tempfile
 import time
 import unittest
@@ -33,7 +35,13 @@ class OwnerTest(unittest.TestCase):
                         ('can_setup_gadget', mock.Mock(return_value=False)),
                         ('host_attached', mock.Mock(return_value=True)),
                         ('udc_state', mock.Mock(return_value='configured')),
-                        ('wait_for_host', mock.Mock(return_value=True))):
+                        ('wait_for_host', mock.Mock(return_value=True)),
+                        # the owner's own records, and a loopback stand-in for usb0
+                        ('LINK', self.tmp / 'link'),
+                        ('CABLE_ADDR', ('127.0.0.1', 0)),
+                        ('net_up', mock.Mock(return_value=True)),
+                        ('net_status', mock.Mock(return_value='ok 192.168.60.1')),
+                        ('usb_speed', mock.Mock(return_value='super-speed'))):
       p = mock.patch.object(gadget, name, value)
       self.addCleanup(p.stop)
       p.start()
@@ -61,11 +69,23 @@ class OwnerTest(unittest.TestCase):
     p = mock.patch.object(o, 'close_link', mock.Mock(side_effect=lambda: setattr(o, 'transport', None)))
     self.addCleanup(p.stop)
     p.start()
+    self.addCleanup(o.cable.close)
     # a run has already reported, so nothing is outstanding and the far end sleeps
     self.note_state(sleep_after=1.0, unfinished=False)
     o.seen = o.marks()
     o.had_host = True
     return o
+
+  def dial(self, o) -> socket.socket:
+    """A phone: connects to the listener the owner opened."""
+    self.assertTrue(o.cable.listening, 'the owner is not listening for a phone')
+    phone = socket.create_connection(o.cable.bound[:2], timeout=3.0)
+    self.addCleanup(phone.close)
+    # the loopback handshake can still be finishing when connect returns; the
+    # owner's next step takes the dial once the listener has it to accept
+    readable, _, _ = select.select([o.cable._srv], [], [], 3.0)
+    self.assertTrue(readable, 'the dial never reached the listener')
+    return phone
 
 
 class TestOnroad(OwnerTest):
@@ -340,6 +360,268 @@ class TestTheToggle(OwnerTest):
       o.lender = mock.Mock(lent=False, listening=True)
       self.assertFalse(o.open_link())
       self.assertIsNone(o.transport)
+
+
+class TestCable(OwnerTest):
+  """A phone on the cable is on the gadget's network interface and dials the
+  owner; the dial is the proof of a phone. A Jetson or a Mac never dials."""
+
+  def test_a_host_enumerating_opens_the_hold(self):
+    # nothing may write a hello over FunctionFS until a phone has had its
+    # chance to dial: to a phone that is a 15 s block and a bounce
+    o = self.owner()
+    self.assertFalse(o.holding())
+    o.step()
+    self.assertTrue(o.holding())
+    self.assertAlmostEqual(o.cable_hold_until, time.monotonic() + gadget.CABLE_HOLD, delta=1.0)
+    self.assertEqual(gadget.link_kind(), 'usb')
+
+  def test_a_dial_ends_the_hold_and_the_link_is_the_cable(self):
+    o = self.owner()
+    o.step()
+    self.dial(o)
+    o.step()
+    self.assertEqual(gadget.link_kind(), 'cable')
+    self.assertEqual(gadget.link_peer(), '127.0.0.1')
+    self.assertFalse(o.holding())
+    self.assertTrue(o.cable.held)
+    o.spawn_worker.assert_called_once()
+    self.assertIn('phone', o.spawn_worker.call_args.args[0])
+
+  def test_the_phone_coming_back_after_a_run_is_not_another_run(self):
+    # the owner hangs up when the borrower finishes and the phone dials
+    # again: that must not start a run, which would end the same way, forever
+    o = self.owner()
+    o.step()
+    o.cable.redial_expected = True
+    self.dial(o)
+    o.step()
+    self.assertEqual(gadget.link_kind(), 'cable')
+    o.spawn_worker.assert_not_called()
+    self.assertFalse(o.dialed)
+
+  def test_a_dial_during_a_run_is_left_to_that_run(self):
+    # the run spawned at the configured edge is still borrowing, and its
+    # borrow takes the dial; a second run after it would be the same work
+    o = self.owner()
+    o.step()
+    o.worker = mock.Mock(**{'poll.return_value': None})
+    self.dial(o)
+    o.step()
+    self.assertEqual(gadget.link_kind(), 'cable')
+    self.assertFalse(o.dialed)
+    o.worker.poll.return_value = 0
+    o.worker.returncode = 0
+    o.step()
+    o.spawn_worker.assert_not_called()
+
+  def test_no_dial_leaves_the_link_usb_after_the_hold(self):
+    o = self.owner()
+    o.step()
+    o.cable_hold_until = time.monotonic() - 1.0
+    o.step()
+    self.assertFalse(o.holding())
+    self.assertEqual(gadget.link_kind(), 'usb')
+    o.spawn_worker.assert_not_called()
+
+  def test_over_the_cable_the_owner_never_sleeps_settles_or_bounces(self):
+    # every unbind takes the phone's network interface down with it
+    o = self.owner(lendable=False)
+    o.step()
+    self.dial(o)
+    o.step()
+    self.assertEqual(gadget.link_kind(), 'cable')
+    # what happened while the link was still USB (the hold settles) is not the point
+    o.spawn_worker.reset_mock()
+    o.transport.release_endpoints.reset_mock()
+    o.idle_since = time.monotonic() - owner.DORMANT_HOLD
+    o.step()
+    self.assertFalse(o.dormant)
+    o.close_link.assert_not_called()
+    o.transport.release_endpoints.assert_not_called()
+    o.transport.rebind.return_value = True
+    self.assertFalse(o.bounce_gadget())
+    o.transport.rebind.assert_not_called()
+
+  def test_the_host_going_away_clears_the_cable_link(self):
+    o = self.owner()
+    o.step()
+    phone = self.dial(o)
+    o.step()
+    gadget.host_attached.return_value = False
+    o.step()
+    self.assertEqual(gadget.link_kind(), 'usb')
+    self.assertFalse(o.cable.held)
+    self.assertFalse(o.holding())
+    self.assertEqual(phone.recv(1), b'', 'the phone was left talking to nobody')
+
+  def test_a_phone_that_hung_up_is_let_go(self):
+    o = self.owner()
+    o.step()
+    phone = self.dial(o)
+    o.step()
+    phone.close()
+    o.step()
+    self.assertFalse(o.cable.held)
+    self.assertEqual(gadget.link_kind(), 'usb')
+
+  def test_a_newer_dial_replaces_an_older_one(self):
+    # the app restarted: its old connection must not keep the new one out
+    o = self.owner()
+    o.step()
+    first = self.dial(o)
+    o.step()
+    self.dial(o)
+    o.step()
+    self.assertTrue(o.cable.held)
+    self.assertEqual(first.recv(1), b'')
+
+  def test_the_shutdown_path_still_presents_the_gadget(self):
+    # the phone is on the gadget's network interface: no gadget, no phone
+    o = self.owner(presented=False)
+    gadget.note_link('cable', '192.168.60.3')
+    gadget.SHUTDOWN_REQUEST.write_text(json.dumps({'reason': 'car battery'}))
+    o.step()
+    o.open_link.assert_called_once()
+    o.spawn_worker.assert_called_once()
+
+  def test_closing_the_link_takes_the_listener_and_the_record_with_it(self):
+    o = owner.Owner()
+    o.lender = mock.Mock(lent=False, listening=True)
+    o.transport = mock.Mock()
+    self.assertTrue(o.cable.open())
+    gadget.note_link('cable', '192.168.60.3')
+    o.close_link()
+    self.assertFalse(o.cable.listening)
+    self.assertEqual(gadget.link_kind(), 'usb')
+    o.transport = None
+
+
+class TestTheGadgetNetwork(OwnerTest):
+  """usb0 exists only once the UDC is bound, so the owner brings it up after
+  its bind, and listens for a phone only once it is there."""
+
+  def test_the_network_comes_up_once_per_bind(self):
+    o = self.owner()
+    o.step()
+    o.step()
+    gadget.net_up.assert_called_once()
+    self.assertTrue(o.cable.listening)
+
+  def test_a_failed_bring_up_is_retried_after_a_backoff(self):
+    gadget.net_up.return_value = False
+    o = self.owner()
+    for _ in range(3):
+      o.step()
+    gadget.net_up.assert_called_once()
+    o.next_net_attempt = 0.0
+    o.step()
+    self.assertEqual(gadget.net_up.call_count, 2)
+
+  def test_nothing_presented_brings_nothing_up(self):
+    o = self.owner(presented=False)
+    o.step()
+    gadget.net_up.assert_not_called()
+
+  def test_the_listener_waits_for_the_network(self):
+    # the bind to 192.168.60.1 fails until usb0 has the address
+    gadget.net_status.return_value = 'error: no usb0 yet'
+    o = self.owner()
+    o.step()
+    self.assertFalse(o.cable.listening)
+    gadget.net_status.return_value = 'ok 192.168.60.1'
+    o.step()
+    self.assertTrue(o.cable.listening)
+
+  def test_a_kernel_without_the_network_is_usb_only(self):
+    gadget.net_status.return_value = 'net: unavailable'
+    o = self.owner()
+    o.step()
+    self.assertFalse(o.cable.listening)
+    self.assertFalse(o.holding(), 'held borrowers off for a phone that cannot dial')
+
+  def test_a_bounce_brings_the_network_up_again(self):
+    # the unbind took usb0 with it and the rebind made a bare one
+    o = self.owner()
+    o.step()
+    o.transport.rebind.return_value = True
+    self.assertTrue(o.bounce_gadget())
+    o.step()
+    self.assertEqual(gadget.net_up.call_count, 2)
+
+  def test_an_address_that_is_not_there_yet_does_not_stop_the_owner(self):
+    # the status said ok but the address is not local (a race with the
+    # script): the bind fails, is noted, and is tried again later
+    gadget.CABLE_ADDR = ('192.0.2.1', 0)
+    o = self.owner()
+    o.step()
+    self.assertFalse(o.cable.listening)
+    self.assertGreater(o.cable.next_open, time.monotonic())
+    gadget.CABLE_ADDR = ('127.0.0.1', 0)
+    o.step()
+    self.assertFalse(o.cable.listening, 'retried inside the backoff')
+    o.cable.next_open = 0.0
+    o.step()
+    self.assertTrue(o.cable.listening)
+
+
+class TestEthernet(OwnerTest):
+  """With JetlinkEndpoint set there is no gadget, and runs start without one."""
+
+  def owner(self, **kw):
+    o = super().owner(presented=False, **kw)
+    o.open_link.return_value = False   # what open_link answers over ethernet
+    return o
+
+  def setUp(self):
+    super().setUp()
+    p = mock.patch.object(gadget, 'link_endpoint', mock.Mock(return_value=('10.0.0.5', 5599)))
+    self.addCleanup(p.stop)
+    p.start()
+
+  def test_the_first_look_of_the_boot_runs_without_a_gadget(self):
+    o = self.owner()
+    o.seen = {}
+    o.step()
+    o.spawn_worker.assert_called_once()
+    o.open_link.assert_not_called()
+
+  def test_a_new_pick_starts_a_run_without_a_gadget(self):
+    o = self.owner()
+    o.step()
+    o.spawn_worker.assert_not_called()
+    self.write('ModelManager_ActiveBundleChestnut', b'{"ref": "c" * 40}')
+    o.step()
+    o.spawn_worker.assert_called_once()
+
+  def test_a_shutdown_request_starts_a_run_without_a_gadget(self):
+    o = self.owner()
+    gadget.SHUTDOWN_REQUEST.write_text(json.dumps({'reason': 'car battery'}))
+    o.step()
+    o.spawn_worker.assert_called_once()
+
+  def test_onroad_it_starts_nothing(self):
+    o = self.owner()
+    o.seen = {}
+    self.write('IsOffroad', b'0')
+    o.step()
+    o.spawn_worker.assert_not_called()
+
+  def test_the_endpoint_changing_is_a_reason_to_look_again(self):
+    # a different server, which may not have the engine yet
+    o = self.owner()
+    o.step()
+    o.spawn_worker.assert_not_called()
+    self.write('JetlinkEndpoint', b'10.0.0.6:5599')
+    o.step()
+    o.spawn_worker.assert_called_once()
+
+  def test_over_ethernet_the_owner_never_goes_dormant(self):
+    o = super().owner(presented=True)
+    o.idle_since = time.monotonic() - owner.DORMANT_HOLD
+    o.step()
+    self.assertFalse(o.dormant)
+    o.close_link.assert_not_called()
 
 
 class TestSetup(OwnerTest):
