@@ -145,7 +145,7 @@ CABLE_ADDR = ('192.168.60.1', 5599)
 # after the UDC reaches configured, how long the owner keeps borrowers off
 # FunctionFS so a phone has had a chance to dial. A Jetson or a Mac never
 # dials, so after the hold the link is USB exactly as it was
-CABLE_HOLD = 3.0
+CABLE_HOLD = 5.0
 
 
 def _link_record() -> list[str]:
