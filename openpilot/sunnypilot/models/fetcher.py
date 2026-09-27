@@ -163,6 +163,9 @@ class ModelFetcher:
     "qcom": (MODEL_URL, ""),
     "chestnut": (MODEL_URL_CHESTNUT, "_Chestnut"),
   }
+  # stamped on the big-model catalog: whether accelerators.big_catalog folded the
+  # newer catalogs in when it was fetched
+  ACCELERATOR_KEY = "accelerator"
 
   def __init__(self, params: Params):
     self.params = params
@@ -172,6 +175,7 @@ class ModelFetcher:
       for source, (_, suffix) in self.MODEL_SOURCES.items()
     }
     self._refetched: set[str] = set()
+    self._accelerator_refetch: bool | None = None
     self.params.put("ModelManager_ActiveJson", {
       "qcom": self.MODEL_URL,
       "chestnut": self.MODEL_URL_CHESTNUT,
@@ -201,6 +205,7 @@ class ModelFetcher:
       if source == "chestnut":
         from openpilot.sunnypilot import accelerators
         json_data = accelerators.big_catalog(json_data)
+        json_data[self.ACCELERATOR_KEY] = accelerators.extends_catalog()
       parsed = self.model_parser.parse_models(json_data)
       if parsed:
         self.model_caches[source].set(json_data)
@@ -225,12 +230,26 @@ class ModelFetcher:
       return any(bundle.get("is_big") is True for bundle in bundles)
     return not any(bundle.get("is_big") is True for bundle in bundles)
 
+  def _accelerator_changed(self, cached_data: dict) -> bool:
+    """Was the big-model catalog fetched for other hardware? A chestnut coming or going
+    changes what big_catalog merges, and the cache would otherwise hide it for an hour.
+    Once per change: offline, the refetch fails and the cache stands until it expires."""
+    from openpilot.sunnypilot import accelerators
+    extends = accelerators.extends_catalog()
+    if bool(cached_data.get(self.ACCELERATOR_KEY)) == extends or self._accelerator_refetch == extends:
+      return False
+    self._accelerator_refetch = extends
+    cloudlog.warning(f"big-model catalog was fetched {'without' if extends else 'with'} the newer catalogs; refetching")
+    return True
+
   def get_bundles_for_source(self, source: str) -> list[custom.ModelManagerSP.ModelBundle]:
     if source not in self.MODEL_SOURCES:
       cloudlog.warning(f"Unknown model source: {source}")
       return []
 
     cached_data, is_expired = self.model_caches[source].get()
+    if source == "chestnut" and cached_data and not is_expired and self._accelerator_changed(cached_data):
+      is_expired = True
 
     if cached_data and not is_expired:
       # a source is refetched over a mismatch at most once per process: if the fresh
