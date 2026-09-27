@@ -254,7 +254,11 @@ class Jetlinkd:
 
   def bounce(self) -> bool:
     """Ask whoever owns the gadget to bounce it. Ours to do only when we opened
-    it ourselves; otherwise the owner does it for us over the lease."""
+    it ourselves; otherwise the owner does it for us over the lease. Never
+    over TCP: nothing is stuck in an endpoint file, and an unbind would drop
+    the phone's network interface."""
+    if helpers.over_tcp():
+      return False
     try:
       return bool(self.client.rebind()) if self.client is not None else False
     except Exception:

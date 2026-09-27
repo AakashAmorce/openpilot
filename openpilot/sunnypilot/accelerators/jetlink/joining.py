@@ -372,7 +372,7 @@ class JoiningModelState:
     # again and again, is the cable, and the cable is the one thing the
     # driver can do something about
     if self._drops >= DROPS_TO_BLAME_CABLE:
-      return f"{msg}; link dropped {self._drops} times this drive, check the USB cable"
+      return f"{msg}; link dropped {self._drops} times this drive, check the USB cable or the phone app"
     return msg
 
   def _note_link_loss(self) -> None:

@@ -167,7 +167,10 @@ def _connect_patiently(link: _Link):
     except Exception as e:
       client, last = None, e
     if client is not None:
-      if helpers.wait_for_host(max(0.0, deadline - time.monotonic()), bounce=client.rebind,
+      # no bounce over TCP: there is no stuck FunctionFS write to free, and an
+      # unbind would take the phone's network interface down with it
+      bounce = None if helpers.over_tcp() else client.rebind
+      if helpers.wait_for_host(max(0.0, deadline - time.monotonic()), bounce=bounce,
                                report=_waiting_for_the_jetson):
         return client
       # the link stays on `link`, still bound, for the next attempt

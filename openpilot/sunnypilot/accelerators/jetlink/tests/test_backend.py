@@ -12,7 +12,9 @@ from. This module is about not doing that, about the single case that still
 needs an edge, and about modeld borrowing the endpoints rather than the gadget.
 """
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from openpilot.sunnypilot.accelerators.jetlink import backend, gadget, helpers
@@ -39,6 +41,13 @@ class ClockedTest(unittest.TestCase):
     self.clock = FakeClock()
     for module in (backend, helpers, gadget):
       p = mock.patch.object(module, 'time', self.clock)
+      self.addCleanup(p.stop)
+      p.start()
+    # USB unless a test says otherwise, whatever the machine's params or a
+    # previous owner's record hold
+    for name, value in (('link_endpoint', mock.Mock(return_value=None)),
+                        ('LINK', Path(tempfile.mkdtemp()) / 'link')):
+      p = mock.patch.object(gadget, name, value)
       self.addCleanup(p.stop)
       p.start()
 
@@ -111,6 +120,36 @@ class WaitForHost(ClockedTest):
     said = []
     helpers.wait_for_host(2.0, report=lambda: said.append(True))
     assert said == [True]
+
+  def test_over_tcp_there_is_no_host_to_wait_for(self):
+    # The connect already reached the phone or Jetson; no gadget of ours is
+    # bound, so the UDC would never say configured.
+    self.bus('not attached', cc=False)
+    gadget.link_endpoint.return_value = ('10.0.0.5', 5599)
+    said = []
+    assert helpers.wait_for_host(backend.CONNECT_TIMEOUT, report=lambda: said.append(True)) is True
+    assert self.clock.slept == 0.0
+    assert said == []
+
+  def test_a_join_over_tcp_returns_the_client_at_once(self):
+    self.bus('not attached', cc=False)
+    gadget.link_endpoint.return_value = ('10.0.0.5', 5599)
+    link = mock.Mock()
+    link.open.return_value = client = mock.Mock()
+    assert backend._connect_patiently(link) is client
+    assert self.clock.slept == 0.0
+
+  def test_a_join_over_the_cable_never_bounces_the_gadget(self):
+    # the phone configured the UDC and its dial is the proof it is there; an
+    # unbind would only take its network interface down
+    self.bus('configured')
+    gadget.note_link('cable', '192.168.60.3')
+    link = mock.Mock()
+    link.open.return_value = client = mock.Mock()
+    with mock.patch.object(gadget, 'wait_for_host', return_value=True) as wait:
+      assert backend._connect_patiently(link) is client
+    assert wait.call_args.kwargs['bounce'] is None
+    client.rebind.assert_not_called()
 
 
 class HoldingTheLink(ClockedTest):
