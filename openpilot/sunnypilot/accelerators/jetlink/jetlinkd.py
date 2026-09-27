@@ -65,8 +65,9 @@ class Jetlinkd:
     self.warp_thread: threading.Thread | None = None
     # does the far end suspend when the gadget goes? From the server's hello.
     # The owner needs it to decide whether letting go is worth what it costs,
-    # and cannot ask: it never speaks the protocol
-    self.server_sleeps = True
+    # and cannot ask: it never speaks the protocol. None until a hello says:
+    # a run with nothing to do never asks
+    self.server_sleeps: bool | None = None
 
   # -- lifecycle ------------------------------------------------------------
 
@@ -267,10 +268,17 @@ class Jetlinkd:
 
   def note_state(self, unfinished: bool) -> None:
     """What the owner cannot work out for itself: whether the far end sleeps
-    when the gadget goes, and whether this run left anything undone."""
+    when the gadget goes, and whether this run left anything undone.
+
+    A run that never heard a hello keeps what an earlier one learned. Writing
+    the default instead told the owner a phone or an always-on Jetson sleeps
+    after every run with nothing to do, and it let the gadget go."""
+    sleeps = self.server_sleeps
+    if sleeps is None:
+      sleeps = gadget.owner_state().get('sleep_after', 1.0) > 0
     try:
       gadget.STATE.write_text(json.dumps({
-        'sleep_after': 1.0 if self.server_sleeps else 0.0,
+        'sleep_after': 1.0 if sleeps else 0.0,
         'unfinished': unfinished,
       }))
     except OSError:

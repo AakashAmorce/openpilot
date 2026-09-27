@@ -159,10 +159,11 @@ CABLE_HOLD_MAX = 15.0
 LEASES = Path("/dev/shm/jetlink-usb0.leases")   # dnsmasq's, from setup_gadget.sh
 
 
-def lease_written_at() -> float | None:
-  """When dnsmasq last wrote a lease on the cable's network, by the wall clock."""
+def lease_age() -> float | None:
+  """Seconds since dnsmasq last wrote a lease on the cable's network, or None.
+  An mtime is on the wall clock, so this is the one place that reads it."""
   try:
-    return LEASES.stat().st_mtime
+    return time.time() - LEASES.stat().st_mtime  # noqa: TID251
   except OSError:
     return None
 
@@ -254,6 +255,15 @@ SHUTDOWN_REQUEST = Path("/dev/shm/jetlink-shutdown")
 # when the gadget goes, and whether the run left anything undone. The owner
 # never speaks the protocol, so it cannot learn either for itself
 STATE = Path("/dev/shm/jetlink-owner-state")
+
+
+def owner_state() -> dict:
+  """What jetlinkd's runs left for the owner (see Jetlinkd.note_state), or {}."""
+  try:
+    value = json.loads(STATE.read_text())
+  except (OSError, ValueError):
+    return {}
+  return value if isinstance(value, dict) else {}
 
 
 def repo_root() -> Path:

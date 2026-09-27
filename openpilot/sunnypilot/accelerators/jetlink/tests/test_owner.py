@@ -489,7 +489,7 @@ class TestCable(OwnerTest):
     """dnsmasq writing a lease on the cable's network `age` seconds ago."""
     path = self.tmp / 'leases'
     path.write_text('1 aa:bb 192.168.60.5 iPhone *\n')
-    when = time.time() - age
+    when = time.time() - age  # noqa: TID251  an mtime is on the wall clock
     os.utime(path, (when, when))
 
   def past_the_first_hold(self, configured_ago: float = 6.0):
@@ -498,7 +498,7 @@ class TestCable(OwnerTest):
     now = time.monotonic()
     o.cable_hold_until = now - 0.1
     o.cable_hold_last = now - configured_ago + gadget.CABLE_HOLD_MAX
-    o.configured_at = time.time() - configured_ago
+    o.configured_at = now - configured_ago
     return o
 
   def test_a_lease_holds_on_for_the_phone_to_dial(self):
@@ -548,6 +548,31 @@ class TestCable(OwnerTest):
     o.step()
     self.assertFalse(o.cable.held)
     self.assertEqual(gadget.link_kind(), 'usb')
+
+  def test_a_phone_that_hung_up_does_not_send_the_owner_dormant(self):
+    # the record says the far end sleeps (a run with nothing to do never asks),
+    # but the host dialed: a phone, and letting go would take the network
+    # interface it dials back over
+    o = self.owner()
+    o.step()
+    phone = self.dial(o)
+    o.step()
+    phone.close()
+    o.step()
+    self.assertEqual(gadget.link_kind(), 'usb')
+    o.idle_since = time.monotonic() - owner.DORMANT_HOLD
+    o.step()
+    self.assertFalse(o.dormant)
+
+  def test_once_the_phone_is_unplugged_the_record_decides_again(self):
+    o = self.owner()
+    o.step()
+    self.dial(o)
+    o.step()
+    self.assertTrue(o.phone_host)
+    gadget.host_attached.return_value = False
+    o.step()
+    self.assertFalse(o.phone_host)
 
   def test_a_newer_dial_replaces_an_older_one(self):
     # the app restarted: its old connection must not keep the new one out

@@ -383,6 +383,19 @@ class TestTheRun(unittest.TestCase):
     d.run()
     assert self.state()['sleep_after'] == 0.0
 
+  def test_a_run_that_never_asked_keeps_what_was_recorded(self):
+    # a run with nothing to do sends no hello; writing the default told the
+    # owner a phone sleeps, and it let the gadget go
+    gadget.STATE.write_text(json.dumps({'sleep_after': 0.0, 'unfinished': True}))
+    d = self.worker(work=False)
+    assert d.run() is True
+    assert self.state() == {'sleep_after': 0.0, 'unfinished': False}
+
+  def test_with_nothing_recorded_the_far_end_is_taken_to_sleep(self):
+    d = self.worker(work=False)
+    d.run()
+    assert self.state()['sleep_after'] == 1.0
+
   def test_a_shutdown_request_is_the_whole_round(self):
     d = self.worker()
     jetlinkd.helpers.pending_shutdown.return_value = 'car battery'

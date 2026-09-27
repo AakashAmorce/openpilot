@@ -33,7 +33,6 @@ gadget in a state only a reboot clears.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import signal
@@ -113,8 +112,9 @@ class Owner:
     self.configured = False             # attached, as of the last step: for the edges
     self.cable_hold_until = 0.0
     self.cable_hold_last = 0.0          # CABLE_HOLD_MAX after the configured edge
-    self.configured_at = 0.0            # that edge by the wall clock, for the lease file
+    self.configured_at = 0.0            # that edge, for telling this bind's lease from an older one
     self.dialed = False                 # a phone dialed in since the last run
+    self.phone_host = False             # the host on the bus dialed: a phone, which never sleeps
     self.net_ready = False              # usb0 configured for this bind
     self.next_net_attempt = 0.0
     self.worker: subprocess.Popen | None = None
@@ -159,10 +159,10 @@ class Owner:
       return True
     if now >= self.cable_hold_last:
       return False
-    leased = gadget.lease_written_at()
-    if leased is None or leased < self.configured_at:
+    age = gadget.lease_age()
+    if age is None or now - age < self.configured_at:
       return False
-    until = min(self.cable_hold_last, now + leased + gadget.CABLE_DIAL_GRACE - time.time())
+    until = min(self.cable_hold_last, now - age + gadget.CABLE_DIAL_GRACE)
     if until > self.cable_hold_until and now < until:
       gadget.log.warning("jetlink: the host took an address on the cable's network; holding %.1f s more for a phone to dial",
                          until - now)
@@ -283,11 +283,7 @@ class Owner:
   # -- the parked car -------------------------------------------------------
 
   def state(self) -> dict:
-    try:
-      value = json.loads(gadget.STATE.read_text())
-    except (OSError, ValueError):
-      return {}
-    return value if isinstance(value, dict) else {}
+    return gadget.owner_state()
 
   def go_dormant(self) -> None:
     """Release the gadget so the Jetson can sleep. The marker goes first so
@@ -458,7 +454,9 @@ class Owner:
         return
       return self.spawn_worker(why)
 
-    sleeps = state.get('sleep_after', 1.0) > 0
+    # a phone never sleeps, and letting go takes its network interface, so it
+    # could not dial back when it next has work
+    sleeps = state.get('sleep_after', 1.0) > 0 and not self.phone_host
     if self.transport is None:
       # nothing to do and nothing presented: only worth a bind if the far end
       # stays awake for it
@@ -491,7 +489,7 @@ class Owner:
       else:
         self.cable_hold_until = now + gadget.CABLE_HOLD
         self.cable_hold_last = now + gadget.CABLE_HOLD_MAX
-        self.configured_at = time.time()
+        self.configured_at = now
         gadget.log.warning("jetlink: a host configured us at %s; %.0f s for a phone to dial",
                            speed, gadget.CABLE_HOLD)
     elif self.configured and not self.attached:
@@ -500,6 +498,7 @@ class Owner:
         gadget.log.warning("jetlink: the host went away, the cable link with it")
       self.cable.release()
       self.dialed = False
+      self.phone_host = False
       gadget.clear_link()
     self.configured = self.attached
     if self.transport is not None and net.startswith('ok') and not self.cable.listening:
@@ -509,6 +508,7 @@ class Owner:
       gadget.note_link('cable', peer)
       gadget.log.warning("jetlink: cable link from %s", peer)
       self.had_host = True
+      self.phone_host = True
       self.idle_since = now
       # a reason for a run, unless it is the phone coming back after we hung
       # up on it, or a run is already going and its borrow will take this dial
