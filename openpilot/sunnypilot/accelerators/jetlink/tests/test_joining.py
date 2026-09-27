@@ -380,7 +380,7 @@ class JoiningTest(unittest.TestCase):
     self.assertFalse(s.chestnut)
     self.assertEqual(s.big_model_state, 'retrying')
     # reported from the join thread, not the frame that lost the link
-    self._wait_reported(s, 'lost the jetson, reconnecting')
+    self._wait_reported(s, 'lost the accelerator, reconnecting')
 
     s.close()
     self.assertEqual(s.big_model_state, 'unavailable')
@@ -405,7 +405,7 @@ class JoiningTest(unittest.TestCase):
     s._joined_at = time.monotonic() - (STABLE_SECONDS + 1)
     self.big.raises = RuntimeError("host dropped the gadget configuration (udc: not attached)")
     self._run(s)
-    self._wait_reported(s, 'lost the jetson, reconnecting')
+    self._wait_reported(s, 'lost the accelerator, reconnecting')
     self.assertEqual(s._drops, 1)
     first = [c for c in self.progress.report_progress.call_args_list if c.args[2].startswith('lost')]
     self.assertNotIn('cable', first[-1].args[2])
@@ -417,9 +417,9 @@ class JoiningTest(unittest.TestCase):
     s._joined_at = time.monotonic() - (STABLE_SECONDS + 1)
     self.big.raises = RuntimeError("gadget write failed: [Errno 19] No such device (udc: default)")
     self._run(s)
-    self._wait_reported(s, 'lost the jetson, reconnecting; link dropped 2 times this drive, check the USB cable')
+    self._wait_reported(s, 'lost the accelerator, reconnecting; link dropped 2 times this drive, check the USB cable')
     self.assertEqual(s._drops, 2)
-    self._wait_reported(s, 'waiting for the jetson; link dropped 2 times this drive, check the USB cable')
+    self._wait_reported(s, 'waiting for the accelerator; link dropped 2 times this drive, check the USB cable')
 
   def test_the_frame_that_loses_the_link_does_not_report_or_read_the_port(self):
     # the frame thread is SCHED_FIFO on modeld's core; params and sysfs are

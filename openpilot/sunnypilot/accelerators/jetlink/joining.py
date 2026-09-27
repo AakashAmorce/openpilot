@@ -391,7 +391,7 @@ class JoiningModelState:
     except (OSError, ValueError):
       port = "port state unknown"
     cloudlog.warning("jetlink: link lost, %s; drop %d this drive", port, self._drops)
-    self._report('connect', 'lost the jetson, reconnecting')
+    self._report('connect', 'lost the accelerator, reconnecting')
 
   def _join_loop(self) -> None:
     """Open the link and get the engine ready. No tinygrad in here."""
@@ -413,7 +413,7 @@ class JoiningModelState:
       self._rejoin.clear()
       if self._stop.wait(max(0.0, self._rejoin_at - time.monotonic())):
         return
-      self._report('connect', 'waiting for the jetson')
+      self._report('connect', 'waiting for the accelerator')
       try:
         # the connect can take minutes when the picked model still has to be
         # built, so it is handed the flag close() sets rather than polled

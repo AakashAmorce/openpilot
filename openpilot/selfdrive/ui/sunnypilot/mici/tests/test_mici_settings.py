@@ -684,13 +684,13 @@ class TestAcceleratorProgressRenders:
     # a join has nothing to measure, and "getting ready" alone does not separate an
     # unplugged Jetson from one six seconds from ready
     from openpilot.selfdrive.ui.ui_state import ui_state
-    ui_state.accelerator_progress = {'stage': 'connect', 'frac': 0.0, 'msg': 'waiting for the jetson'}
+    ui_state.accelerator_progress = {'stage': 'connect', 'frac': 0.0, 'msg': 'waiting for the accelerator'}
     try:
       from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import _model_info
       _, _, info = _model_info()
     finally:
       ui_state.accelerator_progress = None
-    assert 'waiting for the jetson' in info
+    assert 'waiting for the accelerator' in info
     assert '%' not in info
 
   def test_failure_says_so_rather_than_showing_100_percent(self, params):

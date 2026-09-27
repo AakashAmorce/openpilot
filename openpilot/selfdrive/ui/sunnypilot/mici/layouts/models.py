@@ -59,7 +59,7 @@ def _model_info() -> tuple[str, str, str]:
     stage, frac, msg = provisioning
     if stage == 'failed':
       return active_text, tr("big model"), tr("unavailable")
-    # "waiting for the jetson" says more than "connect 0%"; no percentage for a stage
+    # "waiting for the accelerator" says more than "connect 0%"; no percentage for a stage
     # with nothing to measure
     detail = tr(msg) if msg else tr(stage)
     return active_text, tr("big model"), f"{detail} {frac * 100:.0f}%" if frac > 0 else detail
