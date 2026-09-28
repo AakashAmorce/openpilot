@@ -1,3 +1,28 @@
+zoompilot vUNRELEASED
+========================
+**jetlink support!**
+* Run big models on a Mac, Jetson, NVIDIA Linux PC or iPhone <3
+* Turn on: Settings > Models > Accelerator Link.
+
+**General Updates & Fixes**
+* **Lane Keep Off:** Dash/infotainment buttons now disable steering but retain cruise control, adding a "Lateral Disabled, LKAS is off" alert.
+* **False Alerts:** Fixed "Steering Assist Temporarily Unavailable" showing when lane-keep is off.
+* **Export Mazdas:** Added fingerprinting for CX-5 and CX-9 (JM7 VINs).
+* **NZ & AUS:** zoompilot set speeds now match the dash and speed limit displays.
+* **Sunnylink:** Fixed backup/restore reading garbage setting names.
+* **Upstream sunnypilot:** Added refresh/clear-cache buttons, fixed Models UI freezing, and fixed camera offset.
+
+**TJA Button Mazdas**
+* Fixed steering deactivating after a TJA press.
+* Pressing TJA no longer leaves MRCC armed.
+* Added a white steering wheel cluster icon when zoompilot steers with cruise off.
+* Restored chimes for cruise engage/disengage, and when turning on TJA steering during cruise.
+
+**Alpha Longitudinal Only**
+* **ICBM & Speed Limit Assist:** When ICBM is on, the limit is applied by changing the cruise set speed. When ICBM is off, you're prompted to set 80 mph and the limit is handled internally.
+* **Auto High Beams:** Restored functionality.
+* **Distance Controls:** Both follow distance buttons now work for driving personality (closer = aggressive, farther = relaxed).
+
 zoompilot v2026.09.12-14
 ========================
 * adjustments to address LKAS errors.
