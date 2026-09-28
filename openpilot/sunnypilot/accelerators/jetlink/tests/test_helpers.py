@@ -373,6 +373,7 @@ class TestSelectedModelReadiness(unittest.TestCase):
     from openpilot.sunnypilot.accelerators.jetlink import backend
 
     with mock.patch.object(gadget, 'enabled', return_value=True), \
+         mock.patch.object(backend.warp_cache, 'built', return_value=True), \
          mock.patch.object(helpers, 'engine_ready_for', return_value=True), \
          mock.patch.object(backend.spec_cache, 'load', return_value=SimpleNamespace(sha256='a' * 64)), \
          mock.patch.object(helpers, 'selected_model', return_value={'oid': 'b' * 64}) as selected:

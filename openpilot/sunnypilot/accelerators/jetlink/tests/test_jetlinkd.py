@@ -297,7 +297,8 @@ class TestTheRun(unittest.TestCase):
       self.addCleanup(p.stop)
       p.start()
     for module, name, value in ((jetlinkd.helpers, 'migrate_selection', None), (gadget, 'enabled', True),
-                                (gadget, 'pending_shutdown', None), (gadget, 'wait_for_host', True)):
+                                (gadget, 'pending_shutdown', None), (gadget, 'wait_for_host', True),
+                                (jetlinkd.warp_cache, 'built', True)):
       p = mock.patch.object(module, name, mock.Mock(return_value=value))
       self.addCleanup(p.stop)
       p.start()
@@ -360,6 +361,14 @@ class TestTheRun(unittest.TestCase):
       assert d.run() is True
     shutdown.assert_called_once_with('car battery')
     d.provision.assert_not_called()
+
+  def test_no_warp_for_this_camera_is_nothing_to_provision_for(self):
+    # the engine could never run; waking the Jetson to build it changes nothing
+    d = self.worker()
+    jetlinkd.warp_cache.built.return_value = False
+    assert d.run() is True
+    d.open_link.assert_not_called()
+    assert self.state()['unfinished'] is False
 
   def test_the_link_off_is_not_a_round(self):
     d = self.worker()

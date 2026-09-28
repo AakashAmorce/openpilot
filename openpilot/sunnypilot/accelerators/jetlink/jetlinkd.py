@@ -38,7 +38,7 @@ from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot import accelerators
 from openpilot.common.params import Params
-from openpilot.sunnypilot.accelerators.jetlink import helpers, provision, spec_cache
+from openpilot.sunnypilot.accelerators.jetlink import helpers, provision, spec_cache, warp_cache
 
 # how long to wait for the Jetson to enumerate before giving up on this run.
 # The owner presented the gadget; a box that is asleep answers the bind in
@@ -262,6 +262,13 @@ class Jetlinkd:
     reason = gadget.pending_shutdown()
     if reason is not None:
       self.shutdown_jetson(reason)
+      return True
+
+    # without a warp for this camera the engine would never run; the offroad
+    # alert says so, and waking the Jetson to build one would not change it
+    if not warp_cache.built():
+      cloudlog.warning("jetlink: no warp built for this camera, nothing to provision for")
+      self.note_state(unfinished=False)
       return True
 
     if not self.has_work():

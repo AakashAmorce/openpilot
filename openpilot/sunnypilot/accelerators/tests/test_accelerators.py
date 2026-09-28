@@ -26,9 +26,10 @@ from openpilot.sunnypilot.accelerators.jetlink import backend, helpers
 
 
 class SelectionTest(unittest.TestCase):
-  """ready() is params only, and every answer follows from three params."""
+  """ready() is params only, and every answer follows from three params and
+  whether the build made a warp for this camera."""
 
-  def configure(self, enabled=None, model=None, ready_sha=None, spec_sha=None, gadget_error=None):
+  def configure(self, enabled=None, model=None, ready_sha=None, spec_sha=None, gadget_error=None, warp=True):
     params = {gadget.P_LINK: enabled, gadget.P_READY: ready_sha}
     # the link setting is read off the param file, so stub the read rather than
     # Params: on is USB, off is off. Everything else goes through helpers._get
@@ -37,6 +38,7 @@ class SelectionTest(unittest.TestCase):
                                 side_effect=lambda k: None if params.get(k) is None else
                                 str(gadget.LINK_MODES.index('usb' if params[k] else 'off')).encode()),
               mock.patch.object(gadget, 'gadget_error', return_value=gadget_error),
+              mock.patch.object(backend.warp_cache, 'built', return_value=warp),
               mock.patch.object(gadget, 'host_attached', return_value=False),
               mock.patch.object(gadget, 'dormant', return_value=False),
               mock.patch.object(helpers, 'selected_model',
@@ -72,6 +74,15 @@ class SelectionTest(unittest.TestCase):
     self.configure(enabled=True, model='m', ready_sha='a' * 64, spec_sha='a' * 64, gadget_error='no gadget')
     self.assertFalse(accelerators.ready())
     self.assertEqual(accelerators.unavailable_reason(), 'no gadget')
+
+  def test_no_warp_for_this_camera_says_why(self):
+    # the build made none, and nothing compiles one at runtime: every drive
+    # would be the small model while the panel said ready
+    self.configure(enabled=True, model='m', ready_sha='a' * 64, spec_sha='a' * 64, warp=False)
+    self.assertFalse(accelerators.ready())
+    self.assertEqual(accelerators.unavailable_reason(), backend.NO_WARP)
+    self.configure(enabled=False, warp=False)
+    self.assertIsNone(accelerators.unavailable_reason())
 
   def test_ready(self):
     self.configure(enabled=True, model='m', ready_sha='a' * 64, spec_sha='a' * 64)
@@ -112,14 +123,20 @@ class LoadTest(unittest.TestCase):
 
   def prepared(self):
     """prepare() down its yes path, with nothing real behind it."""
-    from openpilot.sunnypilot.accelerators.jetlink import warp_cache
     with mock.patch.object(backend, 'enabled', return_value=True), \
          mock.patch.object(gadget, 'link_configured', return_value=True), \
-         mock.patch.object(warp_cache, 'device_geometry', return_value=(1, 2, 3, 4)), \
-         mock.patch.object(warp_cache, 'is_cached', return_value=True), \
-         mock.patch.object(warp_cache, 'init_device') as init_device:
+         mock.patch.object(backend.warp_cache, 'built', return_value=True), \
+         mock.patch.object(backend.warp_cache, 'init_device') as init_device:
       self.assertTrue(accelerators.prepare())
     init_device.assert_called_once()
+
+  def test_no_warp_is_no_before_the_gpu_comes_up(self):
+    with mock.patch.object(backend, 'enabled', return_value=True), \
+         mock.patch.object(gadget, 'link_configured', return_value=True), \
+         mock.patch.object(backend.warp_cache, 'built', return_value=False), \
+         mock.patch.object(backend.warp_cache, 'init_device') as init_device:
+      self.assertFalse(accelerators.prepare())
+    init_device.assert_not_called()
 
   def test_the_link_off_says_no_before_any_setup(self):
     with mock.patch.object(backend, 'enabled', return_value=False), \

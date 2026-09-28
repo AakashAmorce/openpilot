@@ -69,9 +69,9 @@ def init_device() -> None:
 def device_geometry() -> tuple[int, int, int, int]:
   """(cam_w, cam_h, model_w, model_h) for this device.
 
-  The same choice modeld/SConscript makes. accelerators/SConscript builds this
-  geometry on a source build, so the warp built is the one modeld asks for. If
-  they disagree, load_warp raises and the drive is small-model.
+  The same choice modeld/SConscript makes, and accelerators/SConscript builds
+  modeld's cameras, so the warp built is the one modeld asks for. If they
+  disagree, load_warp raises and the drive is small-model.
   """
   from openpilot.common.hardware import HARDWARE
   from openpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
@@ -92,6 +92,20 @@ def is_cached(cam_w: int, cam_h: int, model_w: int, model_h: int) -> bool:
   the capture sources. A pickle from an incompatible tinygrad raises in load_warp.
   """
   return warp_path(cam_w, cam_h, model_w, model_h).is_file()
+
+
+# nothing compiles a warp at runtime and the build runs before manager, so the
+# answer holds for the life of the process; the UI asks at 5 Hz
+_built: bool | None = None
+
+
+def built() -> bool:
+  """Is there a warp for this device's camera? Without one the link cannot
+  run the large model, which the offroad alert says (backend.unavailable_reason)."""
+  global _built
+  if _built is None:
+    _built = is_cached(*device_geometry())
+  return _built
 
 
 def load_warp(cam_w: int, cam_h: int, model_w: int, model_h: int):

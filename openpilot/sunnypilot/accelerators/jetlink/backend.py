@@ -22,7 +22,7 @@ from jetlink.comma import gadget
 from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot.accelerators import Accelerator
-from openpilot.sunnypilot.accelerators.jetlink import helpers, spec_cache
+from openpilot.sunnypilot.accelerators.jetlink import helpers, spec_cache, warp_cache
 
 # modelDataV2SP.acceleratorName while this backend has joined modeld
 NAME = 'jetlink'
@@ -234,9 +234,22 @@ def present() -> bool:
   return helpers.gadget_present()
 
 
+# the offroad alert's text for a device whose build made no warp for its camera
+NO_WARP = "no warp built for this camera"
+
+
+def _unavailable() -> str | None:
+  """Why an enabled link cannot run the large model, or None: a file read and
+  a stat, since the UI asks at 5 Hz."""
+  error = gadget.gadget_error()
+  if error is not None:
+    return error
+  return None if warp_cache.built() else NO_WARP
+
+
 def ready() -> bool:
   # params only, no link IO: jetlinkd has already recorded the answer
-  if not enabled() or gadget.gadget_error() is not None:
+  if not enabled() or _unavailable() is not None:
     return False
   spec = spec_cache.load()
   selected = helpers.selected_model()
@@ -247,7 +260,7 @@ def ready() -> bool:
 def unavailable_reason() -> str | None:
   # only for someone who asked for the link: with it off, a device that cannot
   # present the gadget simply does not offer the feature
-  return gadget.gadget_error() if enabled() else None
+  return _unavailable() if enabled() else None
 
 
 def prepare() -> bool:
@@ -264,10 +277,9 @@ def prepare() -> bool:
     return False
   # the warp is a build product (accelerators/SConscript) and nothing compiles
   # one at runtime, so one missing now stays missing, and saying no keeps
-  # modeld on the plain small model
-  from openpilot.sunnypilot.accelerators.jetlink import warp_cache
-  if not warp_cache.is_cached(*warp_cache.device_geometry()):
-    cloudlog.warning("jetlink: no warp built for this camera, staying on the small model")
+  # modeld on the plain small model; the offroad alert has said why
+  if not warp_cache.built():
+    cloudlog.warning("jetlink: %s, staying on the small model", NO_WARP)
     return False
   # the last hook before modeld goes SCHED_FIFO on core 7, and the GPU's init
   # spawns a thread that would inherit that. See warp_cache.init_device
@@ -294,7 +306,6 @@ def load(cam_w: int, cam_h: int, small) -> Accelerator | None:
 def make_model_state(cam_w: int, cam_h: int, small=None):
   # returns straight away with the small model driving; see joining.py
   from openpilot.sunnypilot.accelerators.jetlink.joining import JoiningModelState
-  from openpilot.sunnypilot.accelerators.jetlink import warp_cache
 
   # the warp is loaded and warmed here, before the frame loop exists, rather
   # than at the swap on a driving frame. Sized from the cached spec, which is
