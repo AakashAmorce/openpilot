@@ -17,6 +17,7 @@ import ast
 import unittest
 from pathlib import Path
 
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot.accelerators.tests.test_native_equivalence import (ACCELERATOR_CALLS, MODELD, _accelerator_calls, _assigns,
                                                                              _assert_chestnut_blocks_ignore_the_accelerator, _index,
                                                                              _parse, _prepares, _realtime_index, _tests_name)
@@ -27,9 +28,10 @@ FACE = ('constants', 'desire_key', 'numpy_inputs', 'LAT_SMOOTH_SECONDS', 'LONG_S
         'PLANPLUS_CONTROL', 'get_action_from_model')
 
 
-class ModeldV2Seam(unittest.TestCase):
+class ModeldV2Seam(OpenpilotTestCase):
   @classmethod
   def setUpClass(cls):
+    super().setUpClass()
     cls.src = MODELD_V2.read_text()
     cls.tree = ast.parse(cls.src)
     cls.body = _parse(cls.src)

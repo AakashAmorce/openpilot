@@ -13,6 +13,7 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot.accelerators.jetlink import backend
 from openpilot.sunnypilot.models.fetcher import ModelFetcher, ModelParser
 from openpilot.sunnypilot.models.helpers import _bundle_needs_reset, resolve_bundle_by_ref
@@ -31,7 +32,7 @@ PINNED = {'tinygrad_ref': 'pinned', 'bundles': [bundle(OLD, 12, '19', 'Cinque Te
 NEWER = {'tinygrad_ref': 'next', 'bundles': [bundle(OLD, 12, '20', 'Cinque Terre V3'), bundle(NEW, 13, '20', 'Cinque Terre V4')]}
 
 
-class TestBigCatalog(unittest.TestCase):
+class TestBigCatalog(OpenpilotTestCase):
   def merged(self, chestnut=False, newer=NEWER):
     with mock.patch.object(backend, '_chestnut_fitted', return_value=chestnut), \
          mock.patch('jetlink.registry.catalog.fetch_catalogs', return_value=newer) as probe:
@@ -77,7 +78,7 @@ class TestBigCatalog(unittest.TestCase):
       self.assertIs(backend.big_catalog(PINNED), PINNED)
 
 
-class TestFetcherHook(unittest.TestCase):
+class TestFetcherHook(OpenpilotTestCase):
   """The model manager asks once per fetch, for the big-model source only."""
 
   def fetch(self, source, extends=True):
@@ -108,7 +109,7 @@ class TestFetcherHook(unittest.TestCase):
         self.assertIs(cached[ModelFetcher.ACCELERATOR_KEY], extends)
 
 
-class TestCatalogFollowsTheHardware(unittest.TestCase):
+class TestCatalogFollowsTheHardware(OpenpilotTestCase):
   """A catalog cached beside a chestnut hides the newer models for an hour once it
   comes out, and the reverse. Refetch when the hardware changes."""
 

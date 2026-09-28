@@ -6,17 +6,17 @@ See the LICENSE.md file in the root directory for more details.
 """
 
 import tempfile
-import unittest
 import urllib.request
 from pathlib import Path
 from unittest import mock
 
 from jetlink.comma import gadget
 
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot.accelerators.jetlink import helpers
 
 
-class TestPresence(unittest.TestCase):
+class TestPresence(OpenpilotTestCase):
   """What the panels are told is on the other end, and hardwared's wait for
   jetlinkd to take a shutdown request. The markers are jetlink.comma's."""
 
@@ -61,7 +61,7 @@ class TestPresence(unittest.TestCase):
     assert helpers.await_shutdown(0.3)
 
 
-class TestConnect(unittest.TestCase):
+class TestConnect(OpenpilotTestCase):
   """Which transport the client is opened over: whatever the owner lent, a
   phone's dial or the endpoint files. Never the gadget itself."""
 
@@ -108,7 +108,7 @@ def catalog_param(*bundles):
   return params
 
 
-class TestCatalog(unittest.TestCase):
+class TestCatalog(OpenpilotTestCase):
   """The list is sunnypilot's big-model catalog, read as the model manager cached it."""
 
   def setUp(self):
@@ -136,7 +136,7 @@ class TestCatalog(unittest.TestCase):
     self.assertEqual(helpers.catalog(), [])
 
 
-class TestModelIndex(unittest.TestCase):
+class TestModelIndex(OpenpilotTestCase):
   """Every catalog model, with the ONNX behind it once that has been looked up."""
 
   def setUp(self):
@@ -165,7 +165,7 @@ class TestModelIndex(unittest.TestCase):
     self.assertEqual(read.call_count, 1)
 
 
-class TestResolvePointer(unittest.TestCase):
+class TestResolvePointer(OpenpilotTestCase):
   """The pointer at a commit is the oid and size the Jetson is asked for,
   fetched the first time a model is asked for and kept for good."""
 
@@ -217,7 +217,7 @@ class TestResolvePointer(unittest.TestCase):
     fetch.assert_called_once_with(REF_C, timeout=helpers.POINTER_TIMEOUT)
 
 
-class TestSelectedModel(unittest.TestCase):
+class TestSelectedModel(OpenpilotTestCase):
   """The pick is the model manager's big-model slot, the same one a chestnut runs from."""
 
   INDEX = [
@@ -258,7 +258,7 @@ class TestSelectedModel(unittest.TestCase):
     assert self.select_with(None, index=[]) is None
 
 
-class TestSelectedRef(unittest.TestCase):
+class TestSelectedRef(OpenpilotTestCase):
   def setUp(self):
     helpers._slot_cache = None
     self.addCleanup(setattr, helpers, '_slot_cache', None)
@@ -292,7 +292,7 @@ class TestSelectedRef(unittest.TestCase):
       assert self.read_with(slot) is None, slot
 
 
-class TestMigrateSelection(unittest.TestCase):
+class TestMigrateSelection(OpenpilotTestCase):
   """JetlinkModel was the accelerator's own pick. It moves into the big-model slot
   once; a name from before the catalog maps to the engine that is ready, so a
   160 s rebuild is not the price of the rename."""
@@ -349,7 +349,7 @@ class TestMigrateSelection(unittest.TestCase):
     params.remove.assert_not_called()
 
 
-class TestSelectedModelReadiness(unittest.TestCase):
+class TestSelectedModelReadiness(OpenpilotTestCase):
   def test_old_cached_engine_is_not_the_new_selection(self):
     # What the UI calls compiled. The join does not stop here: an engine the
     # Jetson has not got is built onroad, see backend._open_link.
@@ -366,7 +366,7 @@ class TestSelectedModelReadiness(unittest.TestCase):
       self.assertTrue(backend.ready())
 
 
-class TestShippedModelPath(unittest.TestCase):
+class TestShippedModelPath(OpenpilotTestCase):
   """A file counts only when it is the model we mean, at the size we expect.
   Models live one file per oid so switching back does not re-download."""
 

@@ -22,12 +22,13 @@ from unittest import mock
 
 from jetlink.comma import gadget
 
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot import accelerators
 from openpilot.sunnypilot.accelerators import Daemon
 from openpilot.sunnypilot.accelerators.jetlink import backend, helpers
 
 
-class SelectionTest(unittest.TestCase):
+class SelectionTest(OpenpilotTestCase):
   """ready() is params only, and every answer follows from three params and
   whether the build made a warp for this camera."""
 
@@ -115,7 +116,7 @@ class SelectionTest(unittest.TestCase):
       self.assertTrue(accelerators.present())
 
 
-class LenderFailureTest(unittest.TestCase):
+class LenderFailureTest(OpenpilotTestCase):
   """Only the owner holds ep0. When its lender cannot listen it keeps the
   gadget, retries, and records why: that line is the offroad alert. modeld
   still prepares, so its join picks the link up once the lender listens."""
@@ -140,7 +141,7 @@ class LenderFailureTest(unittest.TestCase):
       self.assertIsNone(accelerators.unavailable_reason())
 
 
-class LoadTest(unittest.TestCase):
+class LoadTest(OpenpilotTestCase):
   """modeld's two calls: prepare() before it goes realtime, load() once the camera is up."""
 
   def setUp(self):
@@ -210,7 +211,7 @@ class LoadTest(unittest.TestCase):
     self.assertIs(loaded.status.model, self.small)
     self.assertEqual(loaded.name, 'jetlink')
 
-class DaemonTest(unittest.TestCase):
+class DaemonTest(OpenpilotTestCase):
   def test_jetlinkd_is_offered_and_gated_on_enabled(self):
     (d,) = accelerators.daemons()
     self.assertIsInstance(d, Daemon)
@@ -222,7 +223,7 @@ class DaemonTest(unittest.TestCase):
       self.assertTrue(d.should_run(False, None, None))
 
 
-class TestProgress(unittest.TestCase):
+class TestProgress(OpenpilotTestCase):
   def test_a_missing_param_is_no_progress(self):
     with mock.patch.object(accelerators, '_params') as params:
       params.return_value.get.return_value = None
@@ -254,7 +255,7 @@ class TestProgress(unittest.TestCase):
       accelerators.clear_progress()
 
 
-class TestShutdown(unittest.TestCase):
+class TestShutdown(OpenpilotTestCase):
   def test_disabled_costs_one_param_read_and_nothing_else(self):
     with mock.patch.object(gadget, 'enabled', return_value=False), \
          mock.patch.object(backend, 'shutdown') as request:

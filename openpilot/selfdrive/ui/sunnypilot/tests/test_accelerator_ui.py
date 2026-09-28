@@ -3,44 +3,49 @@ Copyright (c) 2026-, Zeph Leggett.
 
 This file is part of zoompilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
+
+ui_state's accelerator view beside upstream's chestnut state, and the tici
+models panel's link toggle and status line.
 """
-
-# ui_state's accelerator view beside upstream's chestnut state, and the tici
-# models panel's link toggle and status line.
-
 import os
+import unittest
 from contextlib import ExitStack
 from unittest import mock
-
-import pytest
 
 os.environ["BIG"] = "0"
 os.environ.setdefault("SCALE", "1")
 
+from openpilot.common.prefix import OpenpilotPrefix
+from openpilot.common.test import OpenpilotTestCase
 
-@pytest.fixture(scope="module")
-def gui():
-  """Hidden raylib window + isolated params dir. Widgets need textures, so a window is required."""
+# the window's own params, for whatever it reads while it comes up; every test
+# then runs under its own prefix
+_window_prefix = OpenpilotPrefix()
+
+
+def setUpModule():
+  """A hidden raylib window, once for the module: widgets need textures."""
   import pyray as rl
-  from openpilot.common.prefix import OpenpilotPrefix
-
-  with OpenpilotPrefix():
-    rl.set_config_flags(rl.FLAG_WINDOW_HIDDEN)
-    from openpilot.system.ui.lib.application import gui_app
-    gui_app.init_window("test_accelerator_ui", fps=30)
-    yield gui_app
-    gui_app.close()
+  from openpilot.system.ui.lib.application import gui_app
+  _window_prefix.__enter__()
+  rl.set_config_flags(rl.FLAG_WINDOW_HIDDEN)
+  gui_app.init_window("test_accelerator_ui", fps=30)
 
 
-@pytest.fixture
-def params(gui):
-  from openpilot.common.params import Params
-  from openpilot.selfdrive.ui.ui_state import ui_state
+def tearDownModule():
+  from openpilot.system.ui.lib.application import gui_app
+  gui_app.close()
+  _window_prefix.__exit__(None, None, None)
 
-  p = Params()
-  ui_state.params = p
-  ui_state.update_params()
-  return p
+
+class UITest(OpenpilotTestCase):
+  def setUp(self):
+    super().setUp()
+    from openpilot.common.params import Params
+    from openpilot.selfdrive.ui.ui_state import ui_state
+    self.params = Params()
+    ui_state.params = self.params
+    ui_state.update_params()
 
 
 def accelerator(present=False, ready=False, progress=None, enabled=False, selected=None, installed=False):
@@ -69,7 +74,7 @@ class FakeSM:
     return type("M", (), {"big": self.big})()
 
 
-class TestUIStateAcceleratorView:
+class TestUIStateAcceleratorView(UITest):
   @staticmethod
   def _with(sm, started=False):
     from openpilot.selfdrive.ui.ui_state import ui_state
@@ -83,7 +88,7 @@ class TestUIStateAcceleratorView:
     from openpilot.selfdrive.ui.ui_state import ui_state
     ui_state.sm, ui_state.started, ui_state.started_frame, ui_state.accelerator_view, ui_state.chestnut_present = saved
 
-  def test_a_fitted_chestnut_never_asks_the_accelerator(self, params):
+  def test_a_fitted_chestnut_never_asks_the_accelerator(self):
     """A board present is upstream's path byte for byte: no view, and nothing in the
     state update consults sunnypilot/accelerators."""
     from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
@@ -100,7 +105,7 @@ class TestUIStateAcceleratorView:
     finally:
       self._restore(saved)
 
-  def test_no_board_and_nothing_of_ours_is_no_view(self, params):
+  def test_no_board_and_nothing_of_ours_is_no_view(self):
     from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
     saved = self._with(FakeSM(board=False))
     try:
@@ -112,7 +117,7 @@ class TestUIStateAcceleratorView:
     finally:
       self._restore(saved)
 
-  def test_an_attached_accelerator_builds_the_view(self, params):
+  def test_an_attached_accelerator_builds_the_view(self):
     from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
     saved = self._with(FakeSM(board=False))
     try:
@@ -125,7 +130,7 @@ class TestUIStateAcceleratorView:
     finally:
       self._restore(saved)
 
-  def test_a_stored_tinygrad_bundle_reads_compiled_with_the_link_on_or_off(self, params):
+  def test_a_stored_tinygrad_bundle_reads_compiled_with_the_link_on_or_off(self):
     """The small model is the model manager's under the link too: manager runs the
     stored bundle's modeld, so a stored tinygrad bundle counts as compiled as it
     does on develop, whatever the toggle says."""
@@ -150,7 +155,7 @@ class TestUIStateAcceleratorView:
       ui_state.chestnut_compiled = compiled
       self._restore(saved)
 
-  def test_onroad_disconnected_then_active(self, params):
+  def test_onroad_disconnected_then_active(self):
     from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
     saved = self._with(FakeSM(board=False, alive=True, recv=1, state='retrying'), started=True)
     try:
@@ -168,7 +173,7 @@ class TestUIStateAcceleratorView:
     finally:
       self._restore(saved)
 
-  def test_onroad_ready_is_not_the_loading_pulse(self, params):
+  def test_onroad_ready_is_not_the_loading_pulse(self):
     # Loaded and waiting for a window, which on a MADS car is the rest of the
     # drive unless the driver stops. A pulsing "loading" icon through all of it
     # is what "waited for the green icon, never turned off the car" was.
@@ -187,7 +192,7 @@ class TestUIStateAcceleratorView:
     finally:
       self._restore(saved)
 
-  def test_the_status_name_is_read_where_sm_updates(self, params):
+  def test_the_status_name_is_read_where_sm_updates(self):
     from openpilot.selfdrive.ui.sunnypilot.ui_state import UIStateSP
     from openpilot.selfdrive.ui.ui_state import ui_state
     saved = self._with(FakeSM(board=False, state='joining'))
@@ -200,7 +205,7 @@ class TestUIStateAcceleratorView:
       self._restore(saved)
 
 
-class TestTiciModelsPanel:
+class TestTiciModelsPanel(UITest):
   """The big model is the model manager's slot for chestnut and accelerator alike;
   the panel adds only the link toggle and a status line."""
 
@@ -209,25 +214,25 @@ class TestTiciModelsPanel:
     from openpilot.selfdrive.ui.sunnypilot.layouts.settings.models import ModelsLayout
     return ModelsLayout()
 
-  def test_hidden_on_a_plain_device(self, params):
+  def test_hidden_on_a_plain_device(self):
     with accelerator():
       layout = self._layout()
     assert not layout.accelerator_link_item.is_visible
 
-  def test_shown_with_an_accelerator(self, params):
+  def test_shown_with_an_accelerator(self):
     with accelerator(present=True, selected='Cinque Terre'):
       layout = self._layout()
     assert layout.accelerator_link_item.is_visible
 
-  def test_shown_wherever_the_package_is_installed(self, params):
+  def test_shown_wherever_the_package_is_installed(self):
     # with the link off there is no gadget for a Jetson to enumerate, so present()
     # alone would hide the toggle that turns the link on
-    params.remove("JetlinkLink")
+    self.params.remove("JetlinkLink")
     with accelerator(installed=True):
       layout = self._layout()
     assert layout.accelerator_link_item.is_visible
 
-  def test_the_toggle_says_what_is_on_the_port(self, params):
+  def test_the_toggle_says_what_is_on_the_port(self):
     link = "openpilot.selfdrive.ui.sunnypilot.accelerator_link"
     with accelerator(installed=True), mock.patch(f"{link}.read", return_value="0"):
       layout = self._layout()
@@ -243,7 +248,7 @@ class TestTiciModelsPanel:
       layout._refresh_accelerator_items()
       assert layout.accelerator_link_item.description.endswith("iOS for an iPhone.")
 
-  def test_the_status_names_the_transport(self, params):
+  def test_the_status_names_the_transport(self):
     # the setting names the host: USB for a Jetson or a Mac, iOS for a phone
     # dialed in over the gadget's network interface
     import tempfile
@@ -263,27 +268,27 @@ class TestTiciModelsPanel:
     with accelerator(installed=True, present=True), mock.patch(f"{gadget}.link_kind", side_effect=OSError):
       assert link_status() == "Accelerator connected: USB."
 
-  def test_the_buttons_are_bound_to_the_one_param(self, params):
+  def test_the_buttons_are_bound_to_the_one_param(self):
     # the small model is the model manager's: the link does not decide which modeld runs
     with accelerator(present=True), mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=True):
       layout = self._layout()
       action = layout.accelerator_link_item.action_item
       assert action.param_key == "JetlinkLink"
       for index, mode in enumerate(("off", "usb", "ios")):
-        params.put("JetlinkLink", index, block=True)
+        self.params.put("JetlinkLink", index, block=True)
         layout._refresh_accelerator_items()
         assert action.get_selected_button() == index
         from openpilot.sunnypilot import accelerators
         assert accelerators.link_mode() == mode
 
-  def test_the_modes_are_inert_onroad(self, params):
-    params.remove("JetlinkLink")
+  def test_the_modes_are_inert_onroad(self):
+    self.params.remove("JetlinkLink")
     with accelerator(present=True), mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=False):
       layout = self._layout()
       layout._refresh_accelerator_items()
       assert not layout.accelerator_link_item.action_item.enabled
 
-  def test_status_note_names_the_accelerator_not_the_chestnut(self, params):
+  def test_status_note_names_the_accelerator_not_the_chestnut(self):
     from openpilot.selfdrive.ui.sunnypilot.ui_state import AcceleratorView
     ui_state = ui_state_module().ui_state
     saved = ui_state.accelerator_view, ui_state.chestnut_present
@@ -302,7 +307,7 @@ class TestTiciModelsPanel:
     finally:
       ui_state.accelerator_view, ui_state.chestnut_present = saved
 
-  def test_the_note_says_what_the_switch_is_waiting_for(self, params):
+  def test_the_note_says_what_the_switch_is_waiting_for(self):
     from openpilot.selfdrive.ui.sunnypilot.ui_state import AcceleratorView
     ui_state = ui_state_module().ui_state
     saved = ui_state.accelerator_view, ui_state.chestnut_present
@@ -316,7 +321,7 @@ class TestTiciModelsPanel:
     finally:
       ui_state.accelerator_view, ui_state.chestnut_present = saved
 
-  def test_a_chestnut_hides_the_link_toggle(self, params):
+  def test_a_chestnut_hides_the_link_toggle(self):
     from openpilot.selfdrive.ui.sunnypilot.accelerator_link import link_toggle_meaningful
     ui_state = ui_state_module().ui_state
     saved = ui_state.chestnut_present
@@ -329,7 +334,7 @@ class TestTiciModelsPanel:
     finally:
       ui_state.chestnut_present = saved
 
-  def test_panel_renders(self, params):
+  def test_panel_renders(self):
     import pyray as rl
     with accelerator(present=True, selected='Cinque Terre'):
       layout = self._layout()
@@ -339,3 +344,7 @@ class TestTiciModelsPanel:
 def ui_state_module():
   from openpilot.selfdrive.ui import ui_state
   return ui_state
+
+
+if __name__ == '__main__':
+  unittest.main()

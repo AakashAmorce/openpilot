@@ -20,6 +20,8 @@ from unittest import mock
 import numpy as np
 
 from jetlink.spec import ModelSpec
+
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot.accelerators.jetlink import model_state
 
 # Cinque Terre V3's output layout, read off its ONNX
@@ -61,7 +63,7 @@ class FakeClient:
     return self.output
 
 
-class TestWire(unittest.TestCase):
+class TestWire(OpenpilotTestCase):
   def run_frames(self, inputs: dict, n: int = 3, client=None, warp_output=None):
     spec = spec_for(inputs)
     client = client or FakeClient()

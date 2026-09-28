@@ -20,6 +20,7 @@ from unittest import mock
 
 from jetlink.comma import gadget
 
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot.accelerators.jetlink import backend
 
 
@@ -39,7 +40,7 @@ class FakeClock:
     self.slept += step
 
 
-class ClockedTest(unittest.TestCase):
+class ClockedTest(OpenpilotTestCase):
   def setUp(self):
     self.clock = FakeClock()
     for module in (backend, gadget):
@@ -123,7 +124,7 @@ class HoldingTheLink(ClockedTest):
     assert self.link.loan.close.call_count == 0
 
 
-class BorrowingTheGadget(unittest.TestCase):
+class BorrowingTheGadget(OpenpilotTestCase):
   """modeld does not bring the gadget up any more.
 
   jetlinkd holds ep0 and the bind for as long as the link is enabled, so the
@@ -224,7 +225,7 @@ class BorrowingTheGadget(unittest.TestCase):
     assert borrow.call_args.kwargs['timeout'] <= 1.5
 
 
-class BuildingOnroad(unittest.TestCase):
+class BuildingOnroad(OpenpilotTestCase):
   """The picked model is built with the small model driving.
 
   jetlinkd provisions offroad only, so a model picked in the driveway and

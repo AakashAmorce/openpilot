@@ -32,6 +32,7 @@ from unittest import mock
 from jetlink.comma import gadget
 
 from openpilot.common.params import Params
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot import accelerators
 
 MODELD = Path(__file__).resolve().parents[3] / 'selfdrive' / 'modeld' / 'modeld.py'
@@ -243,11 +244,12 @@ class ModeldSeam:
     return scope
 
 
-class NativeEquivalence(unittest.TestCase):
+class NativeEquivalence(OpenpilotTestCase):
   """What a device gets asked, for the two configurations that must ask nothing."""
 
   @classmethod
   def setUpClass(cls):
+    super().setUpClass()
     cls.seam = ModeldSeam()
 
   def test_a_trained_chestnut_is_never_prepared(self):
@@ -312,11 +314,12 @@ class NativeEquivalence(unittest.TestCase):
                     "accelerators.prepare() moved after config_realtime_process")
 
 
-class UpstreamFootprint(unittest.TestCase):
+class UpstreamFootprint(OpenpilotTestCase):
   """modeld.py stays five hunks wide, and chestnut's lines stay develop's."""
 
   @classmethod
   def setUpClass(cls):
+    super().setUpClass()
     cls.src = MODELD.read_text()
     cls.tree = ast.parse(cls.src)
     cls.body = _parse(cls.src)

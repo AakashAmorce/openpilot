@@ -23,6 +23,7 @@ from pathlib import Path
 from unittest import mock
 
 from openpilot.common.basedir import BASEDIR
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
 from openpilot.sunnypilot.accelerators.jetlink import warp_cache
 
@@ -78,7 +79,7 @@ def run_sconscript(camera_configs=CAMERAS, prebuilt: bool = False, arch: str = '
   return {Path(target).name: cmd for target, cmd in env.commands}
 
 
-class TestWarpTargets(unittest.TestCase):
+class TestWarpTargets(OpenpilotTestCase):
   def test_every_camera_modeld_builds_for_gets_a_warp(self):
     # the names load_warp opens for each camera
     targets = run_sconscript()
@@ -103,7 +104,7 @@ class TestWarpTargets(unittest.TestCase):
     self.assertEqual(run_sconscript(arch='Darwin'), {})
 
 
-class TestOnlyTheBuildCompiles(unittest.TestCase):
+class TestOnlyTheBuildCompiles(OpenpilotTestCase):
   def test_no_runtime_module_imports_the_compiler(self):
     """compile_warp.py and compile_modeld are for scons. A runtime import would
     bring the ~9 s compile back to modeld or jetlinkd, where it was lost to

@@ -21,6 +21,7 @@ from unittest import mock
 
 from jetlink.comma import gadget
 
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot.accelerators.jetlink import jetlinkd, provision
 
 
@@ -78,7 +79,7 @@ def serving_client(spec=None):
   return client
 
 
-class TestProvisionCost(unittest.TestCase):
+class TestProvisionCost(OpenpilotTestCase):
   """What provisioning is allowed to cost when nothing needs doing.
 
   The identity comes from the catalog's pointer, so a parked car asks the Jetson what it
@@ -252,7 +253,7 @@ class TestProvisionCost(unittest.TestCase):
     assert should_stop() is True
 
 
-class TestTimedOut(unittest.TestCase):
+class TestTimedOut(OpenpilotTestCase):
   def test_without_the_package_it_assumes_the_worst(self):
     # No jetlink installed means no way to tell a timeout from a desync, and
     # reopening a healthy link is cheaper than reusing a broken one.
@@ -277,7 +278,7 @@ class TestTimedOut(unittest.TestCase):
 
 
 
-class TestTheLoan(unittest.TestCase):
+class TestTheLoan(OpenpilotTestCase):
   """Only the owner that started this run holds ep0; the run borrows from it."""
 
   def test_no_loan_is_one_error_and_no_gadget_of_our_own(self):
@@ -300,7 +301,7 @@ class TestTheLoan(unittest.TestCase):
     assert d.client is connect.return_value
 
 
-class TestTheRun(unittest.TestCase):
+class TestTheRun(OpenpilotTestCase):
   """One round, then the process exits. What it leaves behind is what the owner
   cannot work out for itself."""
 
@@ -400,7 +401,7 @@ class TestTheRun(unittest.TestCase):
     d.open_link.assert_not_called()
 
 
-class BuildEtaTest(unittest.TestCase):
+class BuildEtaTest(OpenpilotTestCase):
   """The estimate is what tells a driver watching "build 12%" whether that is
   five minutes or thirty."""
 

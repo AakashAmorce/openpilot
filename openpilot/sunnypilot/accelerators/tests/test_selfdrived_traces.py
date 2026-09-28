@@ -34,6 +34,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from openpilot.cereal import custom, messaging
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.selfdrive.selfdrived.events import EVENT_NAME, Events
 from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
 from openpilot.sunnypilot.selfdrive.selfdrived.accelerator_events import AcceleratorEvents
@@ -73,7 +74,7 @@ def make_selfdrived(chestnut_present: bool, enabled: bool) -> SelfdriveD:
   return sd
 
 
-class TraceTest(unittest.TestCase):
+class TraceTest(OpenpilotTestCase):
   def step(self, loading=False, active=None, big=False, alive=True,
            state=AcceleratorState.none, available=False, standstill=False) -> tuple[list[str], list[str]]:
     """One update_events, and everything it raised."""

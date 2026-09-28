@@ -17,6 +17,7 @@ from unittest import mock
 
 from jetlink.comma import gadget
 
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.selfdrive.selfdrived.events import big_model_failed_alert
 from openpilot.sunnypilot import accelerators
 from openpilot.sunnypilot.accelerators.jetlink import backend
@@ -31,7 +32,7 @@ def failed_text(chestnut: bool) -> str:
   return big_model_failed_alert(None, None, sm, True, 0, None).alert_text_2
 
 
-class TestAlert(unittest.TestCase):
+class TestAlert(OpenpilotTestCase):
   def test_a_chestnut_is_told_to_restart_as_upstream_says(self):
     self.assertEqual(failed_text(True), "Restart the car to retry,\nsmall model is still available")
 
@@ -39,7 +40,7 @@ class TestAlert(unittest.TestCase):
     self.assertEqual(failed_text(False), "Small model is still available")
 
 
-class TestLinkStaysOff(unittest.TestCase):
+class TestLinkStaysOff(OpenpilotTestCase):
   def setUp(self):
     backend._chestnut = None
     self.addCleanup(setattr, backend, '_chestnut', None)
@@ -72,7 +73,7 @@ class TestLinkStaysOff(unittest.TestCase):
     self.assertEqual(probe.call_count, 1)
 
 
-class TestPickKeptDefaultDrives(unittest.TestCase):
+class TestPickKeptDefaultDrives(OpenpilotTestCase):
   """A chestnut pick whose files are not here runs as the Default big model."""
 
   def setUp(self):

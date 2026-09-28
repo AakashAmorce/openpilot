@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot.accelerators.jetlink import lfs
 
 BODY = b'onnx' * 4096
@@ -44,7 +45,7 @@ class FakeResponse:
     return False
 
 
-class TestEndpoints(unittest.TestCase):
+class TestEndpoints(OpenpilotTestCase):
   def setUp(self):
     self.root = Path(tempfile.mkdtemp())
 
@@ -62,7 +63,7 @@ class TestEndpoints(unittest.TestCase):
     assert lfs.endpoints(self.root) == list(lfs.COMMA_ENDPOINTS)
 
 
-class TestResolve(unittest.TestCase):
+class TestResolve(OpenpilotTestCase):
   def urlopen_returning(self, payload: dict):
     return mock.patch.object(lfs.urllib.request, 'urlopen',
                              return_value=FakeResponse(json.dumps(payload).encode()))
@@ -85,7 +86,7 @@ class TestResolve(unittest.TestCase):
       assert lfs.resolve('https://e/info/lfs', OID, SIZE) is None
 
 
-class TestDownload(unittest.TestCase):
+class TestDownload(OpenpilotTestCase):
   def setUp(self):
     self.tmp = Path(tempfile.mkdtemp())
     self.dest = self.tmp / 'big.onnx'
@@ -131,7 +132,7 @@ class TestDownload(unittest.TestCase):
     assert seen == sorted(seen)
 
 
-class TestFetchOid(unittest.TestCase):
+class TestFetchOid(OpenpilotTestCase):
   def setUp(self):
     self.tmp = Path(tempfile.mkdtemp())
     self.dest = self.tmp / 'models' / 'out.onnx'   # a directory the downloader has to make

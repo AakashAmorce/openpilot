@@ -21,6 +21,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot.accelerators.jetlink import warp_cache
 
 GEOM = (1928, 1208, 512, 256)
@@ -38,7 +39,7 @@ class FakeJit:
     self.captured = FakeCaptured(names) if names is not None else None
 
 
-class WarpCacheTest(unittest.TestCase):
+class WarpCacheTest(OpenpilotTestCase):
   def setUp(self):
     self.tmp = tempfile.TemporaryDirectory()
     self.addCleanup(self.tmp.cleanup)
@@ -140,7 +141,7 @@ class TestGeometry(WarpCacheTest):
     self.assertEqual(tici[2:], (512, 256))
 
 
-class TestInitDevice(unittest.TestCase):
+class TestInitDevice(OpenpilotTestCase):
   """prepare() runs this before modeld goes realtime: tinygrad's compile pool
   is otherwise created on the warp's first call, and its handler threads then
   sit at FIFO 54 on the frame loop's core."""
@@ -167,7 +168,7 @@ class TestInitDevice(unittest.TestCase):
     log.assert_called_once()
 
 
-class TestCallConvention(unittest.TestCase):
+class TestCallConvention(OpenpilotTestCase):
   """The compile and the per-frame call have to name the JIT's inputs the same way.
 
   TinyJit refuses a call whose names differ from the capture, so a positional

@@ -14,13 +14,13 @@ import json
 import os
 import subprocess
 import sys
-import unittest
 from pathlib import Path
 from unittest import mock
 
 from jetlink.comma import gadget, owner as comma_owner, port
 
 from openpilot.common.basedir import BASEDIR
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot.accelerators.jetlink import owner
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -39,7 +39,7 @@ def run_fresh(code: str) -> subprocess.CompletedProcess:
                         env=env, cwd=str(ROOT), timeout=120)
 
 
-class TestTheShim(unittest.TestCase):
+class TestTheShim(OpenpilotTestCase):
   def test_the_owner_stays_out_of_the_heavy_half(self):
     roots = 'sorted({m.split(".")[0] for m in sys.modules})'
     out = run_fresh(f'import sys, json; import openpilot.sunnypilot.accelerators.jetlink.owner; print(json.dumps({roots}))')
@@ -60,7 +60,7 @@ class TestTheShim(unittest.TestCase):
     self.assertEqual(daemon.module, owner.__name__)
 
 
-class TestTheNamesTheLayerReads(unittest.TestCase):
+class TestTheNamesTheLayerReads(OpenpilotTestCase):
   """jetlink.comma reads openpilot's params as files and its USB ids as
   constants, since importing either would cost the owner 28 MB."""
 
@@ -81,7 +81,7 @@ class TestTheNamesTheLayerReads(unittest.TestCase):
     self.assertEqual(gadget.CC_ORIENTATION, TYPEC_CC_ORIENTATION_PATH)
 
 
-class TestWithoutAJetlinkCheckout(unittest.TestCase):
+class TestWithoutAJetlinkCheckout(OpenpilotTestCase):
   def test_the_api_answers_the_negative_default(self):
     # an empty jetlink_repo: the backend stands on jetlink.comma, so nothing
     # past the API can import, and manager, the UI and hardwared must not care

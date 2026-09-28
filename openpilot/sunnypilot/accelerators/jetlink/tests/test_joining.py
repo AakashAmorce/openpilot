@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 from openpilot.common.basedir import BASEDIR
-
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot.accelerators.jetlink.joining import REJOIN_DELAY_QUICK, STABLE_SECONDS, JoiningModelState
 
 
@@ -48,7 +48,7 @@ class FakeModel:
     self.closed = True
 
 
-class JoiningTest(unittest.TestCase):
+class JoiningTest(OpenpilotTestCase):
   def setUp(self):
     # The engagement watcher is the one part that needs msgq. Drive the flag by
     # hand instead; what it reads is covered by selfdrived's own tests.
@@ -56,8 +56,7 @@ class JoiningTest(unittest.TestCase):
     patcher.start()
     self.addCleanup(patcher.stop)
 
-    # The join reports progress through a param. Mocked so this can never
-    # reach a live params directory, conftest or no conftest.
+    # The join reports progress through a param; what it says is asserted here.
     self.progress = mock.Mock()
     patcher = mock.patch('openpilot.sunnypilot.accelerators.jetlink.joining.accelerators', self.progress)
     patcher.start()
@@ -83,8 +82,16 @@ class JoiningTest(unittest.TestCase):
 
   def _state(self):
     s = JoiningModelState(1928, 1208, self.small, self._connect, self._build)
-    self.addCleanup(s.close)
+    self.addCleanup(self._close, s)
     return s
+
+  @staticmethod
+  def _close(s):
+    # the threads are joined while setUp's patches are still on: one that
+    # outlived them reported progress into the real params
+    s.close()
+    for t in s._threads:
+      t.join(5)
 
   def _wait_joined(self, s, timeout=5.0):
     # connect() returning is not publication: wait for the owner to hand off.
@@ -284,7 +291,7 @@ class JoiningTest(unittest.TestCase):
 
     self.big.close = close
     s = JoiningModelState(1928, 1208, self.small, self._connect, self._build, reset_small=reset)
-    self.addCleanup(s.close)
+    self.addCleanup(self._close, s)
     self.addCleanup(release.set)
     self._wait_joined(s)
     s._engaged = False
@@ -441,7 +448,7 @@ class JoiningTest(unittest.TestCase):
   def test_build_failure_backs_off(self):
     self._build = mock.Mock(side_effect=RuntimeError("no warp"))
     s = JoiningModelState(1928, 1208, self.small, self._connect, self._build)
-    self.addCleanup(s.close)
+    self.addCleanup(self._close, s)
     self._wait_joined(s)
     s._engaged = False
     self.assertEqual(self._run(s), {'from': 'small'})
@@ -541,7 +548,7 @@ class JoiningTest(unittest.TestCase):
     self.assertTrue(s.loading)
 
 
-class ContractTest(unittest.TestCase):
+class ContractTest(OpenpilotTestCase):
   """Whatever modeld touches on the object make_model_state returns.
 
   Read out of modeld rather than kept by hand: `warmup` was missed once, and
