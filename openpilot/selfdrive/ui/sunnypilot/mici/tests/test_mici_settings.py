@@ -871,22 +871,16 @@ class TestAcceleratorLinkToggle:
     params.remove(self.PARAM)
     assert self._meaningful(installed=True)
 
-  def test_refresh_says_what_is_on_the_port(self, params):
-    from unittest import mock
+  def test_the_value_line_says_what_each_mode_is_for(self, params):
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import AcceleratorLinkToggle
 
     params.remove(self.PARAM)
-    link = "openpilot.selfdrive.ui.sunnypilot.accelerator_link"
     toggle = AcceleratorLinkToggle()
-    with self._accelerators(installed=True), mock.patch(f"{link}.read", return_value="1"):
+    assert toggle.get_value() == "off"
+    for index, value in enumerate(("off", "usb: mac, linux", "iOS: iPhone, iPad")):
+      params.put(self.PARAM, index, block=True)
       toggle.refresh()
-      assert toggle.get_value() == "off: a device is on the usb port"
-    with self._accelerators(installed=True, present=True):
-      toggle.refresh()
-      assert toggle.get_value().startswith("off: accelerator connected")
-    with self._accelerators(installed=True), mock.patch(f"{link}.read", return_value=None):
-      toggle.refresh()
-      assert toggle.get_value() == "off"
+      assert toggle.get_value() == value
 
   def test_shown_when_ready_with_the_hardware_out_of_the_car(self, params):
     # the engine is cached and the link may be on, so modeld will still try it at
