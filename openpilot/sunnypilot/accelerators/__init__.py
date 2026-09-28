@@ -212,8 +212,7 @@ def link_mode() -> str:
 
 
 def link_transport() -> str:
-  """What carries the link now, for the panels: USB, iOS over USB, or Ethernet.
-  Never raises."""
+  """What carries the link now, for the panels: USB, or iOS over USB. Never raises."""
   return _backend().link_transport()
 
 

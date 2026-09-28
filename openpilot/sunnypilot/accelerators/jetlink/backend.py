@@ -213,18 +213,13 @@ def link_mode() -> str:
 
 
 def link_transport() -> str:
-  """What carries the link, for the panels: the gadget the owner built (a
-  Jetson or a Mac on the vendor interface, an iPhone dialed in over the
-  network interface) or JetlinkEndpoint's Jetson on ethernet. Never raises:
-  the panels read it on their tick."""
+  """What carries the link, for the panels: the gadget the owner built, a
+  Jetson or a Mac on the vendor interface or an iPhone dialed in over the
+  network interface. Never raises: the panels read it on their tick."""
   try:
-    kind = gadget.link_kind()
-    if kind == 'cable':
+    if gadget.link_kind() == 'cable':
       peer = gadget.link_peer()
       return f"iOS over USB ({peer})" if peer else "iOS over USB"
-    if kind == 'ethernet':
-      host, port = gadget.link_endpoint()
-      return f"Ethernet ({host}:{port})"
   except Exception:
     pass
   return "USB"

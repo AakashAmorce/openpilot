@@ -90,12 +90,9 @@ def gadget_present() -> bool:
 
   True once something holds the gadget open and a host has configured us,
   held for PRESENCE_HOLD after that stops. A phone on the cable is a host on
-  the gadget like any other; only the explicit ethernet endpoint has no
-  gadget to look at.
+  the gadget like any other.
   """
   global _last_configured
-  if gadget.link_endpoint() is not None:
-    return True
   if gadget.dormant():
     # no enumeration during suspend; the CC line still tells a sleeping host from an unplugged one
     return gadget.port_has_host()
@@ -107,7 +104,7 @@ def gadget_present() -> bool:
 
 
 def connect(deadline: float | None = None, name: str | None = None, loan=None):
-  """Open the link. USB unless an endpoint override is set.
+  """Open the link.
 
   `deadline` is per frame and defaults to FRAME_TIMEOUT: modeld blocks on a
   frame the way it blocks on a chestnut. `name` is what the server logs this
@@ -119,11 +116,6 @@ def connect(deadline: float | None = None, name: str | None = None, loan=None):
   """
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
   deadline = FRAME_TIMEOUT if deadline is None else deadline
-  endpoint = gadget.link_endpoint()
-  if endpoint is not None:
-    host, port = endpoint
-    cloudlog.warning("jetlink: connecting over tcp to %s:%d", host, port)
-    return JetlinkClient.open_tcp(host, port, deadline=deadline, name=name)
   if loan is not None and loan.sock is not None:
     cloudlog.warning("jetlink: connecting over the phone's dial (%s)", gadget.link_peer())
     return JetlinkClient.open_socket(loan.sock, deadline=deadline, name=name)

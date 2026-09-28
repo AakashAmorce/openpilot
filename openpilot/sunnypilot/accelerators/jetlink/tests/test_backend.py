@@ -46,13 +46,10 @@ class ClockedTest(unittest.TestCase):
       p = mock.patch.object(module, 'time', self.clock)
       self.addCleanup(p.stop)
       p.start()
-    # USB unless a test says otherwise, whatever the machine's params or a
-    # previous owner's record hold
-    for name, value in (('link_endpoint', mock.Mock(return_value=None)),
-                        ('LINK', Path(tempfile.mkdtemp()) / 'link')):
-      p = mock.patch.object(gadget, name, value)
-      self.addCleanup(p.stop)
-      p.start()
+    # USB unless a test says otherwise, whatever a previous owner's record holds
+    p = mock.patch.object(gadget, 'LINK', Path(tempfile.mkdtemp()) / 'link')
+    self.addCleanup(p.stop)
+    p.start()
 
   def bus(self, udc: str, cc: bool = True):
     for name, value in (('udc_state', udc), ('port_has_host', cc)):
@@ -61,17 +58,10 @@ class ClockedTest(unittest.TestCase):
       p.start()
 
 
-class JoiningOverTcp(ClockedTest):
-  """Over TCP there is nothing to enumerate: the connect already reached the
-  far end, so the join neither waits on the UDC nor bounces the gadget."""
-
-  def test_a_join_over_tcp_returns_the_client_at_once(self):
-    self.bus('not attached', cc=False)
-    gadget.link_endpoint.return_value = ('10.0.0.5', 5599)
-    link = mock.Mock()
-    link.open.return_value = client = mock.Mock()
-    assert backend._connect_patiently(link) is client
-    assert self.clock.slept == 0.0
+class JoiningOverTheCable(ClockedTest):
+  """Over a phone's cable there is nothing to enumerate: the dial already
+  reached the far end, so the join neither waits on the UDC nor bounces the
+  gadget."""
 
   def test_a_join_over_the_cable_never_bounces_the_gadget(self):
     # the phone configured the UDC and its dial is the proof it is there; an

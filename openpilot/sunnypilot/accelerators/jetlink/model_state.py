@@ -71,8 +71,8 @@ class JetlinkModelState(ModelStateBase):
     # Over a phone's cable, hand the socket the warp's GPU mapping itself: the
     # kernel copies it while the first segments are already on the wire, where
     # copying it here first held the send back 2.5 ms. On the Mac stand-in the
-    # comma's side of a frame was 0.6 ms faster at p50 and 2 ms at p99. USB and
-    # Ethernet keep the host copy they were measured with.
+    # comma's side of a frame was 0.6 ms faster at p50 and 2 ms at p99. USB
+    # keeps the host copy it was measured with.
     self.send_from_gpu = gadget.link_kind() == 'cable'
     # not chestnut hardware, but the same role: modelV2.big, the UI and the
     # model manager key off this flag

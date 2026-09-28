@@ -153,7 +153,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     // jetlink backend. Readiness must survive a reboot, or every ignition cycle
     // would rebuild a multi-minute TensorRT engine.
     {"JetlinkEnabled", {PERSISTENT | BACKUP, BOOL}},
-    {"JetlinkEndpoint", {PERSISTENT | BACKUP, STRING}},
     {"JetlinkLink", {PERSISTENT | BACKUP, INT, "0"}},
     {"JetlinkModel", {PERSISTENT | BACKUP, STRING}},  // legacy: the pick is ModelManager_ActiveBundleChestnut; read once to migrate
     {"JetlinkEngineReady", {PERSISTENT, STRING}},

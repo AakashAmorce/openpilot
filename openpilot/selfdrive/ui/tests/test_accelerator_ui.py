@@ -245,23 +245,20 @@ class TestTiciModelsPanel:
 
   def test_the_status_names_the_transport(self, params):
     # the setting names the host: USB for a Jetson or a Mac, iOS for a phone
-    # dialed in over the gadget's network interface; JetlinkEndpoint names a
-    # Jetson on ethernet
+    # dialed in over the gadget's network interface
     import tempfile
     from pathlib import Path
     from openpilot.selfdrive.ui.sunnypilot.accelerator_link import link_status
     gadget = "jetlink.comma.gadget"
     record = Path(tempfile.mkdtemp()) / "link"
-    with accelerator(installed=True, present=True), mock.patch(f"{gadget}.link_endpoint", return_value=None), \
-         mock.patch(f"{gadget}.LINK", record), mock.patch(f"{gadget}.ios", return_value=False):
+    with accelerator(installed=True, present=True), mock.patch(f"{gadget}.LINK", record), \
+         mock.patch(f"{gadget}.ios", return_value=False):
       assert link_status() == "Accelerator connected: USB."
       # the owner's record of what it built, and on the cable which phone dialed in
       record.write_text("cable 192.168.60.3")
       assert link_status() == "Accelerator connected: iOS over USB (192.168.60.3)."
       record.write_text("usb")
       assert link_status() == "Accelerator connected: USB."
-      with mock.patch(f"{gadget}.link_endpoint", return_value=("10.0.0.5", 5599)):
-        assert link_status() == "Accelerator connected: Ethernet (10.0.0.5:5599)."
     # a status that cannot be read is USB, never a crash on the panel's tick
     with accelerator(installed=True, present=True), mock.patch(f"{gadget}.link_kind", side_effect=OSError):
       assert link_status() == "Accelerator connected: USB."

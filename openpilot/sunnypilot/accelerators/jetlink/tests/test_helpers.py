@@ -29,8 +29,7 @@ class TestPresence(unittest.TestCase):
       patcher.start()
 
   def test_dormant_counts_as_present_without_a_host(self):
-    with mock.patch.object(gadget, 'link_endpoint', return_value=None), \
-         mock.patch.object(gadget, 'host_attached', return_value=False), \
+    with mock.patch.object(gadget, 'host_attached', return_value=False), \
          mock.patch.object(gadget, 'CC_ORIENTATION', self.tmp / 'cc'):
       (self.tmp / 'cc').write_text('1')
       helpers._last_configured = 0.0
@@ -43,8 +42,7 @@ class TestPresence(unittest.TestCase):
   def test_a_phone_on_the_cable_counts_as_present_like_any_host(self):
     # the phone drives the UDC to configured like a Jetson does; what differs
     # is the transport, not the presence
-    with mock.patch.object(gadget, 'link_endpoint', return_value=None), \
-         mock.patch.object(gadget, 'LINK', self.tmp / 'link'), \
+    with mock.patch.object(gadget, 'LINK', self.tmp / 'link'), \
          mock.patch.object(gadget, 'host_attached', return_value=False) as attached:
       gadget.note_link('cable', '192.168.60.3')
       helpers._last_configured = 0.0
@@ -64,13 +62,12 @@ class TestPresence(unittest.TestCase):
 
 
 class TestConnect(unittest.TestCase):
-  """Which transport the client is opened over: the endpoint param, a loan
-  that carries a phone's dial, a loan of the endpoint files, or the gadget."""
+  """Which transport the client is opened over: a loan that carries a phone's
+  dial, a loan of the endpoint files, or the gadget."""
 
   def setUp(self):
     self.client = mock.patch('jetlink.client.JetlinkClient').start()
     self.addCleanup(mock.patch.stopall)
-    mock.patch.object(gadget, 'link_endpoint', return_value=None).start()
     self.ios = mock.patch.object(gadget, 'ios', return_value=False).start()
 
   def test_ios_never_opens_the_endpoint_files(self):
@@ -99,13 +96,6 @@ class TestConnect(unittest.TestCase):
   def test_no_loan_opens_the_gadget(self):
     helpers.connect()
     self.client.open_ffs.assert_called_once()
-
-  def test_the_endpoint_param_is_ethernet_whatever_the_loan_says(self):
-    gadget.link_endpoint.return_value = ('10.0.0.5', 5599)
-    helpers.connect(loan=mock.Mock(sock=mock.Mock()))
-    self.client.open_tcp.assert_called_once()
-    assert self.client.open_tcp.call_args.args == ('10.0.0.5', 5599)
-    self.client.open_socket.assert_not_called()
 
 
 def bundle(ref: str, name: str, index: int = 0, version=19) -> dict:
