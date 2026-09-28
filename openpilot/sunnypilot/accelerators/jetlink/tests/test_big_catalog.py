@@ -60,6 +60,20 @@ class TestBigCatalog(OpenpilotTestCase):
     self.assertIs(self.merged(newer=PINNED)[0], PINNED)
     self.assertIs(self.merged(newer=OSError('offline'))[0], PINNED)
 
+  def test_a_failed_probe_keeps_what_the_last_one_found(self):
+    # the model manager's cached copy has the newer model as merge_catalogs made
+    # it; a probe that fails now must not drop a pick that is only listed there
+    from openpilot.common.params import Params
+    from openpilot.sunnypilot.accelerators.jetlink import helpers
+    last, _ = self.merged()
+    Params().put(helpers.CATALOG_PARAM, {**last, ModelFetcher.EXTENDED_KEY: True}, block=True)
+    out, _ = self.merged(newer=OSError('offline'))
+    self.assertEqual([b['ref'] for b in out['bundles']], [OLD, NEW])
+    self.assertEqual(out['bundles'][1], last['bundles'][1])
+    # sunnypilot's own entries come from the fetch, never the cache
+    self.assertIs(out['bundles'][0], PINNED['bundles'][0])
+    self.assertEqual(ModelParser.parse_models(out)[1].ref, NEW)
+
 
 class TestExtendsCatalog(OpenpilotTestCase):
   """Hardware, not the link toggle: the model manager drops a pick its catalog does

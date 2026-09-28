@@ -403,7 +403,7 @@ def big_catalog(catalog: dict) -> dict:
   """The big-model catalog with every newer one sunnypilot has published folded in.
   A Jetson runs the commit's ONNX, so a model sunnypilot only builds for its next
   runtime is still one it can run; see jetlink.registry.catalog.fetch_catalogs.
-  Never raises: a probe that fails leaves the catalog as it was."""
+  Never raises: a probe that fails keeps what the last one found."""
   try:
     from jetlink.registry.catalog import fetch_catalogs, merge_catalogs
     from openpilot.sunnypilot.models.helpers import REQUIRED_JSON_VERSION
@@ -415,7 +415,25 @@ def big_catalog(catalog: dict) -> dict:
     return merged
   except Exception:
     cloudlog.exception("jetlink: could not check for newer catalogs")
+    return _found_before(catalog)
+
+
+def _found_before(catalog: dict) -> dict:
+  """The catalog with the models the last probe found folded in again, from the
+  model manager's cached copy: they are merge_catalogs' entries, the ones with no
+  artifacts. Dropped with a probe that failed, a pick only a newer catalog lists
+  would be reset at the manager's next start and the owner would provision the
+  default in its place; a refresh on a flaky network is enough."""
+  try:
+    listed = {b.get('ref') for b in catalog.get('bundles', [])}
+    cached = (helpers._get(helpers.CATALOG_PARAM) or {}).get('bundles', [])
+    kept = [b for b in cached if isinstance(b, dict) and b.get('models') == [] and b.get('ref') not in listed]
+  except Exception:
     return catalog
+  if not kept:
+    return catalog
+  cloudlog.warning("jetlink: keeping %d model(s) the last probe found", len(kept))
+  return {**catalog, 'bundles': [*catalog.get('bundles', []), *kept]}
 
 
 def selected_model_name() -> str | None:
