@@ -4,6 +4,8 @@ A Mazda-optimized fork of [sunnypilot](https://github.com/sunnypilot/sunnypilot)
 
 This is what I run on my own 2022 CX-5 every day. There's a nicer tour of all of this at [zoompilot.ai](https://zoompilot.ai).
 
+<a href="https://zoompilot.ai/screens/mici-demo.mp4"><img src="https://zoompilot.ai/screens/mici-demo.webp" width="100%" alt="zoompilot on the device: the Mazda defaults already on (the Firehose model, torque control, the v2.0 steering tune, speed-dependent self-tune), then turning on ICBM and Smart Cruise"></a>
+
 ## Install
 
 When your comma device asks for a custom software URL during setup, type:
