@@ -85,10 +85,9 @@ def _background_priority() -> None:
 class JoiningModelState:
   """Duck-types selfdrive.modeld.modeld.ModelState, with a second one inside."""
 
-  def __init__(self, cam_w: int, cam_h: int, small, connect, build, prepare=None, reset_small=None):
+  def __init__(self, small, connect, build, prepare=None, reset_small=None):
     self._small = small
     self._active = small
-    self._cam = (cam_w, cam_h)
     self._connect = connect
     self._build = build
     self._reset_small = reset_small
@@ -128,7 +127,6 @@ class JoiningModelState:
     # assume engaged and moving until a message says otherwise, so a swap can
     # never happen on no information
     self._engaged = True
-    self._standstill = False
     self._engagement_updated = 0.0
     self._stop = threading.Event()
 
@@ -153,11 +151,6 @@ class JoiningModelState:
   def chestnut(self) -> bool:
     # modelV2.big. False while proxying, as the small model would report
     return getattr(self._active, 'chestnut', False)
-
-  @property
-  def loading(self) -> bool:
-    """Still bringing the accelerator up: the small model is driving."""
-    return self._active is self._small
 
   @property
   def big_model_state(self) -> str:
@@ -486,7 +479,6 @@ class JoiningModelState:
     valid = all(sm.seen[s] and sm.alive[s] and sm.valid[s] for s in ('selfdriveState', 'carState', 'carControl'))
     # forks can keep lateral control active independently of enabled (MADS)
     self._engaged = not valid or sm['selfdriveState'].enabled or sm['carControl'].latActive or sm['carControl'].longActive
-    self._standstill = valid and sm['carState'].standstill
     self._engagement_updated = time.monotonic()
 
   def close(self) -> None:

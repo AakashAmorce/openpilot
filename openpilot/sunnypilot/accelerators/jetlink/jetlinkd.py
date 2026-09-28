@@ -35,25 +35,12 @@ from jetlink.comma import gadget, lending
 from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot import accelerators
-from openpilot.common.params import Params
 from openpilot.sunnypilot.accelerators.jetlink import helpers, provision, spec_cache, warp_cache
 
 # how long to wait for the Jetson to enumerate before giving up on this run.
 # The owner presented the gadget; a box that is asleep answers the bind in
 # about 8 s, one that is off never does and the next run will find it
 WAKE_TIMEOUT = 20.0
-
-
-def _timed_out(e: BaseException) -> bool:
-  """Did the exchange time out with the stream still usable?
-
-  Only LinkTimeout leaves the stream in sync; every other LinkError does not.
-  """
-  try:
-    from jetlink.transport.base import LinkTimeout
-  except ImportError:
-    return False  # cannot tell, so reopen
-  return isinstance(e, LinkTimeout)
 
 
 class Jetlinkd:
@@ -152,7 +139,6 @@ class Jetlinkd:
     accelerators.report_progress('connect', 0.0, 'talking to the jetson')
 
     hello = self.client.hello(timeout=10.0)
-    Params().put('JetlinkCachedModels', hello.get('cached_models', []))
     self.note_sleep_after(hello)
     cloudlog.warning("jetlink: server %s trt %s", hello.get('device'), hello.get('trt_version'))
     try:
@@ -166,8 +152,6 @@ class Jetlinkd:
         return False
       raise
 
-    cached = helpers._get('JetlinkCachedModels') or []
-    Params().put('JetlinkCachedModels', sorted(set(cached) | {spec.sha256}))
     accelerators.report_progress('ready', 1.0, 'engine ready')
     cloudlog.warning("jetlink: engine ready for %s", spec.sha256[:16])
     return True

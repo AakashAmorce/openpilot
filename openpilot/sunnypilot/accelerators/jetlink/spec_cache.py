@@ -8,12 +8,9 @@ The selected model's spec, cached in a param.
 
 Reading the shapes and output slices means parsing a 766 MB ONNX. jetlinkd does
 that once when it provisions; modeld reads the answer here and never touches
-the file. `source` records the file the spec came from so jetlinkd can tell
-nothing changed without hashing it again.
+the file.
 """
 from __future__ import annotations
-
-from pathlib import Path
 
 from jetlink.comma import gadget
 
@@ -40,19 +37,5 @@ def load():
     return None
 
 
-def store(spec, source: Path | None = None) -> None:
-  payload = spec.to_dict()
-  if source is not None:
-    st = source.stat()
-    payload['source'] = [str(source), st.st_mtime_ns, st.st_size]
-  Params().put(gadget.P_SPEC, payload)
-
-
-def source() -> tuple[str, int, int] | None:
-  """(path, mtime_ns, size) of the model the cached spec was built from."""
-  try:
-    d = _raw()
-    src = d.get('source') if d else None
-    return (str(src[0]), int(src[1]), int(src[2])) if src else None
-  except Exception:
-    return None
+def store(spec) -> None:
+  Params().put(gadget.P_SPEC, spec.to_dict())

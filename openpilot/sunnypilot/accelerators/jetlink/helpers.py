@@ -77,10 +77,10 @@ def await_shutdown(timeout: float) -> bool:
   return False
 
 
-# jetlinkd holds the gadget for as long as the link is enabled, so presence no
-# longer blinks at every handover. What is left to bridge is a USB3 link
-# recovery passing through "addressed", and the one deliberate re-enumeration
-# this design still costs: see Jetlinkd.settle
+# jetlinkd, the owner, holds the gadget for as long as the link is enabled, so
+# presence no longer blinks at every handover. What is left to bridge is a USB3
+# link recovery passing through "addressed", and a bounce made on purpose when
+# a host will not enumerate (gadget.wait_for_host)
 PRESENCE_HOLD = 5.0
 _last_configured = 0.0
 

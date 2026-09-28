@@ -336,8 +336,7 @@ def make_model_state(cam_w: int, cam_h: int, small=None):
   def connect(should_stop=None):
     return _open_link(link, should_stop)
 
-  return JoiningModelState(cam_w, cam_h, small, connect, build, prepare,
-                           reset_small=lambda: ready['reset_small']())
+  return JoiningModelState(small, connect, build, prepare, reset_small=lambda: ready['reset_small']())
 
 
 def _open_link(link: _Link, should_stop=None):
@@ -437,13 +436,13 @@ def active_model_name() -> str | None:
 
 def shutdown(reason: str, timeout: float = SHUTDOWN_TIMEOUT) -> None:
   """Take the Jetson down with the comma. Runs in hardwared, which cannot
-  touch the link: jetlinkd owns the gadget offroad and is the only one that
-  can wake a sleeping Jetson. Hand the request over and wait; the wake and one
-  round trip take ~10 s, and manager will not kill jetlinkd until this returns.
+  touch the link: the owner holds the gadget, wakes a sleeping Jetson and
+  starts a provisioning run that asks it. Hand the request over and wait; the
+  wake and one round trip take ~10 s, and manager will not stop the owner
+  until this returns.
 
-  Skipped when no Jetson is known to be there (dormant counts as there). A
-  jetlinkd busy in a long provision will not see the request; the timeout
-  covers that.
+  Skipped when no Jetson is known to be there (dormant counts as there). A run
+  busy in a long provision will not see the request; the timeout covers that.
   """
   if not gadget.enabled() or not helpers.gadget_present():
     return

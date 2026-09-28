@@ -157,7 +157,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"JetlinkModel", {PERSISTENT | BACKUP, STRING}},  // legacy: the pick is ModelManager_ActiveBundleChestnut; read once to migrate
     {"JetlinkEngineReady", {PERSISTENT, STRING}},
     {"JetlinkSpec", {PERSISTENT, JSON}},
-    {"JetlinkCachedModels", {PERSISTENT, JSON}},
     {"JetlinkModelPointers", {PERSISTENT, JSON}},
     {"ApiCache_DriveStats", {PERSISTENT, JSON}},
     {"AutoLaneChangeBsmDelay", {PERSISTENT | BACKUP, BOOL, "0"}},

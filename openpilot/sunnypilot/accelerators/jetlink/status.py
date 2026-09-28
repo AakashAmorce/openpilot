@@ -25,9 +25,6 @@ LOG_PERIOD = 1.0
 class JetlinkStatus:
   def __init__(self, model):
     self.model = model
-    # modeld's chestnut fallback clears this when it takes over; the joining
-    # state owns its own demotion, so it stays true. Kept for the duck type
-    self.big = True
     self._last_logged = 0.0
 
   @property
@@ -36,7 +33,7 @@ class JetlinkStatus:
     return getattr(self.model, 'client', None)
 
   def send(self) -> None:
-    client = self.client if self.big else None
+    client = self.client
     telemetry = client.last_state if client is not None else None
     if not telemetry:
       return

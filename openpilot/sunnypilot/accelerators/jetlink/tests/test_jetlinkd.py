@@ -36,21 +36,14 @@ class FakeSpecCache:
 
   def __init__(self):
     self.spec = None
-    self.src = None
     self.stores = 0
 
   def load(self):
     return self.spec
 
-  def source(self):
-    return self.src
-
-  def store(self, spec, source: Path | None = None) -> None:
+  def store(self, spec) -> None:
     self.stores += 1
     self.spec = spec
-    if source is not None:
-      st = source.stat()
-      self.src = (str(source), st.st_mtime_ns, st.st_size)
 
 
 def fake_jetlink_spec_module(counter: list):
@@ -93,9 +86,6 @@ class TestProvisionCost(OpenpilotTestCase):
     self.model.write_bytes(b'x' * 4096)
     self.cache = FakeSpecCache()
     self.hashed: list[str] = []
-    p = mock.patch.object(jetlinkd, 'Params')
-    self.addCleanup(p.stop)
-    p.start()
 
     # the provisioning itself lives in provision.py, which jetlinkd and
     # modeld's join thread both call; both modules' references are stood in for
@@ -149,7 +139,6 @@ class TestProvisionCost(OpenpilotTestCase):
     d.client.ensure_engine.return_value = FakeSpec()
     with mock.patch.object(jetlinkd.helpers, 'set_engine_ready'):
       for _ in range(3):
-        d.verified = False
         assert d.provision() is True
     assert self.hashed == [], "hashed the model to ask a question the registry answers"
 
@@ -218,7 +207,7 @@ class TestProvisionCost(OpenpilotTestCase):
     # the Jetson's cache can be pruned or re-flashed under a param that says
     # ready. A run provisions once and then exits, so the check is once a run
     # and there is no second call to skip
-    self.cache.store(FakeSpec(), self.model)
+    self.cache.store(FakeSpec())
     d = jetlinkd.Jetlinkd()
     d.client = serving_client()
     with mock.patch.object(jetlinkd.helpers, 'engine_ready_for', return_value=True), \
@@ -251,31 +240,6 @@ class TestProvisionCost(OpenpilotTestCase):
     assert should_stop() is False
     d.request_stop()
     assert should_stop() is True
-
-
-class TestTimedOut(OpenpilotTestCase):
-  def test_without_the_package_it_assumes_the_worst(self):
-    # No jetlink installed means no way to tell a timeout from a desync, and
-    # reopening a healthy link is cheaper than reusing a broken one.
-    assert jetlinkd._timed_out(RuntimeError('boom')) is False
-
-  def test_it_follows_jetlink_own_distinction(self):
-    base = types.ModuleType('jetlink.transport.base')
-
-    class LinkError(IOError):
-      pass
-
-    class LinkTimeout(LinkError):
-      pass
-
-    base.LinkError, base.LinkTimeout = LinkError, LinkTimeout
-    mods = {'jetlink': types.ModuleType('jetlink'),
-            'jetlink.transport': types.ModuleType('jetlink.transport'),
-            'jetlink.transport.base': base}
-    with mock.patch.dict(sys.modules, mods):
-      assert jetlinkd._timed_out(LinkTimeout('no reply in time')) is True
-      assert jetlinkd._timed_out(LinkError('stream desynced')) is False
-
 
 
 class TestTheLoan(OpenpilotTestCase):

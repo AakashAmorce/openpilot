@@ -81,7 +81,7 @@ class JoiningTest(OpenpilotTestCase):
     return self.big
 
   def _state(self):
-    s = JoiningModelState(1928, 1208, self.small, self._connect, self._build)
+    s = JoiningModelState(self.small, self._connect, self._build)
     self.addCleanup(self._close, s)
     return s
 
@@ -106,7 +106,7 @@ class JoiningTest(OpenpilotTestCase):
 
   def test_stalled_watcher_cannot_leave_a_swap_window_open(self):
     s = self._state()
-    s._engaged, s._standstill = False, True
+    s._engaged = False
     s._engagement_updated = time.monotonic() - 1.0
     self.assertFalse(s._window_open)
 
@@ -145,30 +145,16 @@ class JoiningTest(OpenpilotTestCase):
     self.assertFalse(s.chestnut)
     self.assertIsNone(s.client)
 
-  def test_does_not_swap_while_engaged_and_moving(self):
+  def test_does_not_swap_while_engaged(self):
+    # stopped or moving: even stopped, longitudinal control can hold the brake
+    # or request motion, so the window reads engagement and nothing else
     s = self._state()
     self._wait_joined(s)
-    s._engaged, s._standstill = True, False
+    s._engaged = True
     for _ in range(3):
       self.assertEqual(self._run(s), {'from': 'small'})
     self.assertFalse(s.chestnut)
     self.assertFalse(self.big.warmed)
-
-  def test_does_not_swap_at_a_standstill_while_engaged(self):
-    # Even stopped, longitudinal control can hold the brake or request motion.
-    s = self._state()
-    self._wait_joined(s)
-    s._engaged, s._standstill = True, True
-    self.assertEqual(self._run(s), {'from': 'small'})
-    self.assertFalse(s.chestnut)
-
-  def test_a_standstill_the_car_stopped_reporting_is_not_a_window(self):
-    # sm.alive goes false when carState stops arriving. A stale "stopped" must
-    # not open a window on a car that is actually moving.
-    s = self._state()
-    self._wait_joined(s)
-    s._engaged, s._standstill = True, False
-    self.assertEqual(self._run(s), {'from': 'small'})
 
   def test_late_boot_announces_availability_without_switching(self):
     booted = threading.Event()
@@ -189,7 +175,6 @@ class JoiningTest(OpenpilotTestCase):
     self._wait_joined(s)
     self.assertTrue(s.big_model_available)
     self.assertEqual(self._run(s), {'from': 'small'})
-    self.assertTrue(s.loading)
     self.assertEqual(s.big_model_state, 'ready')
     s._engaged = False
     self.assertEqual(self._run(s), {'from': 'big'})
@@ -276,7 +261,6 @@ class JoiningTest(OpenpilotTestCase):
     s._engaged = False
     self.big.raises = RuntimeError('first inference failed')
     self.assertEqual(self._run(s), {'from': 'small'})
-    self.assertTrue(s.loading)
     self.assertEqual(s.big_model_state, 'retrying')
     self.assertFalse(s.big_model_available)
     self.progress.clear_progress.assert_not_called()
@@ -290,7 +274,7 @@ class JoiningTest(OpenpilotTestCase):
       release.wait(2)
 
     self.big.close = close
-    s = JoiningModelState(1928, 1208, self.small, self._connect, self._build, reset_small=reset)
+    s = JoiningModelState(self.small, self._connect, self._build, reset_small=reset)
     self.addCleanup(self._close, s)
     self.addCleanup(release.set)
     self._wait_joined(s)
@@ -334,7 +318,7 @@ class JoiningTest(OpenpilotTestCase):
       raise RuntimeError("no warp today")
 
     with self.assertRaisesRegex(RuntimeError, 'no warp today'):
-      JoiningModelState(1928, 1208, self.small, self._connect, self._build, prepare)
+      JoiningModelState(self.small, self._connect, self._build, prepare)
     # Ran, and ran before anything else: modeld's main thread is blocked for
     # exactly as long as the constructor takes, so this is the only place the
     # GPU work can go without costing a frame.
@@ -351,7 +335,7 @@ class JoiningTest(OpenpilotTestCase):
     with mock.patch('openpilot.sunnypilot.accelerators.jetlink.joining.time.monotonic',
                     return_value=time.monotonic() + 600.0):
       self._run(s)
-    self.assertTrue(s.loading)
+    self.assertFalse(s.chestnut)
     self.assertEqual(s.big_model_state, 'joining')
     # A join that succeeds later still swaps.
     self.connect_error = None
@@ -363,13 +347,12 @@ class JoiningTest(OpenpilotTestCase):
         break
       time.sleep(0.05)
     self.assertTrue(s.chestnut)
-    self.assertFalse(s.loading)
 
   def test_state_travels_in_the_message_not_in_params(self):
     # a chestnut's load is over once; this never is, so selfdrived's edge is
     # modelV2.big turning true and the UI reads acceleratorState
     s = self._state()
-    self.assertTrue(s.loading)
+    self.assertFalse(s.chestnut)
 
     self._wait_joined(s)
     # up and only a swap window away, which the icon draws steady rather than
@@ -377,13 +360,11 @@ class JoiningTest(OpenpilotTestCase):
     self.assertEqual(s.big_model_state, 'ready')
     s._engaged = False
     self._run(s)
-    self.assertFalse(s.loading)
     self.assertTrue(s.chestnut)
     self.assertEqual(s.big_model_state, 'running')
 
     self.big.raises = RuntimeError("link gone")
     self._run(s)
-    self.assertTrue(s.loading)
     self.assertFalse(s.chestnut)
     self.assertEqual(s.big_model_state, 'retrying')
     # reported from the join thread, not the frame that lost the link
@@ -447,14 +428,14 @@ class JoiningTest(OpenpilotTestCase):
 
   def test_build_failure_backs_off(self):
     self._build = mock.Mock(side_effect=RuntimeError("no warp"))
-    s = JoiningModelState(1928, 1208, self.small, self._connect, self._build)
+    s = JoiningModelState(self.small, self._connect, self._build)
     self.addCleanup(self._close, s)
     self._wait_joined(s)
     s._engaged = False
     self.assertEqual(self._run(s), {'from': 'small'})
     # Not straight back onto the link: the next attempt waits REJOIN_DELAY.
     self.assertGreater(s._rejoin_at, time.monotonic() + 1.0)
-    self.assertTrue(s.loading)
+    self.assertFalse(s.chestnut)
     self.assertEqual(s.big_model_state, 'retrying')
 
   def test_a_link_that_dies_before_the_swap_is_reopened(self):
@@ -475,7 +456,7 @@ class JoiningTest(OpenpilotTestCase):
       s = self._state()
       self._wait_joined(s)
       # Never a window, so nothing consumes it; the ping is what notices.
-      s._engaged, s._standstill = True, False
+      s._engaged = True
       clients[0].ping.side_effect = RuntimeError("jetson rebooted")
       for _ in range(100):
         if len(clients) > 1:
@@ -531,21 +512,21 @@ class JoiningTest(OpenpilotTestCase):
     self.assertEqual(self.big.lat_delay, 0.25)
 
 
-  def test_reports_loading_until_it_joins(self):
+  def test_reports_joining_until_it_joins(self):
     # the UI reads this to tell "not up yet" from "failed"; modelV2.big is
     # false for the whole join
     s = self._state()
     self._run(s)
-    self.assertTrue(s.loading)
+    self.assertIn(s.big_model_state, ('joining', 'ready'))
 
     self._wait_joined(s)
     s._engaged = False
     self._run(s)
-    self.assertFalse(s.loading)
+    self.assertEqual(s.big_model_state, 'running')
 
     self.big.raises = RuntimeError("link gone")
     self._run(s)
-    self.assertTrue(s.loading)
+    self.assertEqual(s.big_model_state, 'retrying')
 
 
 class ContractTest(OpenpilotTestCase):
