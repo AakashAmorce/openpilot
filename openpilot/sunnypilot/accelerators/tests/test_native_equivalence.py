@@ -28,9 +28,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from jetlink.comma import gadget
+
 from openpilot.common.params import Params
 from openpilot.sunnypilot import accelerators
-from openpilot.sunnypilot.accelerators.jetlink import helpers
 
 MODELD = Path(__file__).resolve().parents[3] / 'selfdrive' / 'modeld' / 'modeld.py'
 
@@ -259,7 +260,7 @@ class NativeEquivalence(unittest.TestCase):
     self.assertFalse(accelerators.enabled())
 
     accel = FakeAccelerators(prepare=accelerators.prepare)
-    with mock.patch.object(helpers, 'link_configured') as link_configured:
+    with mock.patch.object(gadget, 'link_configured') as link_configured:
       scope = self.seam.decide_and_load(accel, present=False, compiled=False, trained=False)
     link_configured.assert_not_called()
 

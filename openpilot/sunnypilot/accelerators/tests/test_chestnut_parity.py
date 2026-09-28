@@ -19,7 +19,7 @@ from jetlink.comma import gadget
 
 from openpilot.selfdrive.selfdrived.events import big_model_failed_alert
 from openpilot.sunnypilot import accelerators
-from openpilot.sunnypilot.accelerators.jetlink import backend, helpers as jl_helpers
+from openpilot.sunnypilot.accelerators.jetlink import backend
 from openpilot.sunnypilot.models import helpers
 from openpilot.sunnypilot.models.fetcher import ModelParser
 
@@ -63,7 +63,7 @@ class TestLinkStaysOff(unittest.TestCase):
   def test_without_one_the_toggle_decides(self):
     with self.fitted(False):
       self.assertTrue(accelerators.enabled())
-      self.assertEqual(accelerators.unavailable_reason(), jl_helpers.gadget_alert())
+      self.assertEqual(accelerators.unavailable_reason(), 'not set up')
 
   def test_the_bus_walk_is_cached(self):
     with self.fitted(True) as probe:

@@ -296,9 +296,9 @@ class TestTheRun(unittest.TestCase):
       p = mock.patch.object(d, name, mock.Mock(return_value=value))
       self.addCleanup(p.stop)
       p.start()
-    for name in ('enabled', 'migrate_selection', 'pending_shutdown', 'wait_for_host'):
-      p = mock.patch.object(jetlinkd.helpers, name,
-                            mock.Mock(return_value={'enabled': True, 'wait_for_host': True}.get(name)))
+    for module, name, value in ((jetlinkd.helpers, 'migrate_selection', None), (gadget, 'enabled', True),
+                                (gadget, 'pending_shutdown', None), (gadget, 'wait_for_host', True)):
+      p = mock.patch.object(module, name, mock.Mock(return_value=value))
       self.addCleanup(p.stop)
       p.start()
     return d
@@ -328,7 +328,7 @@ class TestTheRun(unittest.TestCase):
 
   def test_no_jetson_is_left_for_the_next_run(self):
     d = self.worker()
-    jetlinkd.helpers.wait_for_host.return_value = False
+    gadget.wait_for_host.return_value = False
     assert d.run() is False
     d.provision.assert_not_called()
     assert self.state()['unfinished'] is True
@@ -355,7 +355,7 @@ class TestTheRun(unittest.TestCase):
 
   def test_a_shutdown_request_is_the_whole_round(self):
     d = self.worker()
-    jetlinkd.helpers.pending_shutdown.return_value = 'car battery'
+    gadget.pending_shutdown.return_value = 'car battery'
     with mock.patch.object(d, 'shutdown_jetson') as shutdown:
       assert d.run() is True
     shutdown.assert_called_once_with('car battery')
@@ -363,7 +363,7 @@ class TestTheRun(unittest.TestCase):
 
   def test_the_link_off_is_not_a_round(self):
     d = self.worker()
-    jetlinkd.helpers.enabled.return_value = False
+    gadget.enabled.return_value = False
     assert d.run() is True
     d.open_link.assert_not_called()
 

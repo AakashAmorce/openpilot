@@ -31,9 +31,10 @@ import os
 import threading
 import time
 
+from jetlink.comma import gadget
+
 import openpilot.cereal.messaging as messaging
 from openpilot.sunnypilot import accelerators
-from openpilot.sunnypilot.accelerators.jetlink import helpers
 from openpilot.common.realtime import drop_realtime, set_core_affinity
 from openpilot.common.swaglog import cloudlog
 
@@ -386,7 +387,7 @@ class JoiningModelState:
     this puts it next to the failure.
     """
     try:
-      cc = int(helpers.CC_ORIENTATION.read_text())
+      cc = int(gadget.CC_ORIENTATION.read_text())
       port = f"port sees a host (cc {cc})" if cc else "port sees no host (cc 0)"
     except (OSError, ValueError):
       port = "port state unknown"

@@ -15,17 +15,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from jetlink.comma import gadget
+
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot.accelerators.jetlink import helpers
 
-PARAM = "JetlinkSpec"
-
 
 def _raw() -> dict | None:
   # _get tolerates a params library older than these keys
-  value = helpers._get(PARAM)
+  value = helpers._get(gadget.P_SPEC)
   return value if isinstance(value, dict) else None
 
 
@@ -45,7 +45,7 @@ def store(spec, source: Path | None = None) -> None:
   if source is not None:
     st = source.stat()
     payload['source'] = [str(source), st.st_mtime_ns, st.st_size]
-  Params().put(PARAM, payload)
+  Params().put(gadget.P_SPEC, payload)
 
 
 def source() -> tuple[str, int, int] | None:

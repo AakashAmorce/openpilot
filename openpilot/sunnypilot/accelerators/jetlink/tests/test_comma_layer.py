@@ -21,7 +21,7 @@ from unittest import mock
 from jetlink.comma import gadget, owner as comma_owner, port
 
 from openpilot.common.basedir import BASEDIR
-from openpilot.sunnypilot.accelerators.jetlink import owner, spec_cache
+from openpilot.sunnypilot.accelerators.jetlink import owner
 
 ROOT = Path(__file__).resolve().parents[5]
 # what the gadget owner must never end up importing. swaglog pulls all three in
@@ -67,18 +67,18 @@ class TestTheNamesTheLayerReads(unittest.TestCase):
   def test_every_param_it_reads_is_declared(self):
     from openpilot.common.params import Params
     params = Params()
-    for key in (gadget.P_ENABLED, gadget.P_READY, gadget.P_SPEC, gadget.P_ENDPOINT, gadget.P_LINK,
+    for key in (gadget.P_READY, gadget.P_SPEC, gadget.P_ENDPOINT, gadget.P_LINK,
                 gadget.P_OFFROAD, gadget.P_BIG_MODEL, *comma_owner.WATCHED):
       params.check_key(key)
 
   def test_the_names_are_the_forks(self):
     from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS
     self.assertEqual(gadget.P_BIG_MODEL, ACTIVE_BUNDLE_KEYS['chestnut'])
-    self.assertEqual(gadget.P_SPEC, spec_cache.PARAM)
 
-  def test_the_chestnut_ids_are_the_hardware_modules(self):
-    from openpilot.common.hardware.usb import CHESTNUT_ROM_USB_IDS, CHESTNUT_USB_IDS
+  def test_the_usb_constants_are_the_hardware_modules(self):
+    from openpilot.common.hardware.usb import CHESTNUT_ROM_USB_IDS, CHESTNUT_USB_IDS, TYPEC_CC_ORIENTATION_PATH
     self.assertEqual(port.CHESTNUT_IDS, frozenset(CHESTNUT_USB_IDS + CHESTNUT_ROM_USB_IDS))
+    self.assertEqual(gadget.CC_ORIENTATION, TYPEC_CC_ORIENTATION_PATH)
 
 
 class TestWithoutAJetlinkCheckout(unittest.TestCase):

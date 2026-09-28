@@ -58,7 +58,7 @@ class TestBigCatalog(unittest.TestCase):
   def test_the_link_toggle_does_not_change_it(self):
     # the model manager drops a pick its catalog does not list, so a catalog that
     # followed the toggle wiped a newer-catalog pick on every boot with the link off
-    with mock.patch.object(backend.helpers, 'enabled', return_value=False):
+    with mock.patch.object(backend.gadget, 'enabled', return_value=False):
       out, probe = self.merged()
     probe.assert_called_once_with()
     self.assertEqual(len(out['bundles']), 2)

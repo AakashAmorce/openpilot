@@ -16,64 +16,10 @@ from jetlink.comma import gadget
 from openpilot.sunnypilot.accelerators.jetlink import helpers
 
 
-class TestGadgetStatus(unittest.TestCase):
-  """The gadget is set up by root, from the owner through jetlink-root.sh. This
-  file is the only way the reason for a failure reaches anything a user can see."""
+class TestPresence(unittest.TestCase):
+  """What the panels are told is on the other end, and hardwared's wait for
+  jetlinkd to take a shutdown request. The markers are jetlink.comma's."""
 
-  def setUp(self):
-    self.tmp = tempfile.mkdtemp()
-    self.status = Path(self.tmp) / 'jetlink-gadget'
-    patcher = mock.patch.object(gadget, 'GADGET_STATUS', self.status)
-    self.addCleanup(patcher.stop)
-    patcher.start()
-
-  def test_missing_file_is_not_an_error(self):
-    # A build that never ran the setup at all reads the same as not installed.
-    assert helpers.gadget_error() is None
-
-  def test_ok_is_not_an_error(self):
-    self.status.write_text('ok\n')
-    assert helpers.gadget_error() is None
-
-  def test_empty_is_not_an_error(self):
-    self.status.write_text('')
-    assert helpers.gadget_error() is None
-
-  def test_reason_is_unwrapped(self):
-    self.status.write_text('error: kernel has no USB gadget support\n')
-    assert helpers.gadget_error() == 'kernel has no USB gadget support'
-
-  def test_bare_reason_survives(self):
-    self.status.write_text('something went wrong')
-    assert helpers.gadget_error() == 'something went wrong'
-
-  def test_unreadable_status_is_not_an_error(self):
-    # Path.exists() and read_text() raise rather than return on a root-only
-    # path; an availability check must never take a process down over one.
-    with mock.patch.object(Path, 'read_text', side_effect=PermissionError):
-      assert helpers.gadget_error() is None
-
-
-class TestGadgetAlert(unittest.TestCase):
-  """Only complain to someone who asked for the link. With it off, a device
-  that cannot present the gadget should simply not offer the feature."""
-
-  def alert_with(self, enabled: bool, reason: str | None):
-    with mock.patch.object(gadget, 'enabled', return_value=enabled), \
-         mock.patch.object(gadget, 'gadget_error', return_value=reason):
-      return helpers.gadget_alert()
-
-  def test_silent_when_off(self):
-    assert self.alert_with(False, 'kernel has no USB gadget support') is None
-
-  def test_speaks_up_when_switched_on(self):
-    assert self.alert_with(True, 'kernel has no USB gadget support') == 'kernel has no USB gadget support'
-
-  def test_nothing_to_say_when_healthy(self):
-    assert self.alert_with(True, None) is None
-
-
-class TestDormant(unittest.TestCase):
   def setUp(self):
     self.tmp = Path(tempfile.mkdtemp())
     for name in ('DORMANT', 'SHUTDOWN_REQUEST'):
@@ -82,20 +28,6 @@ class TestDormant(unittest.TestCase):
       self.addCleanup(patcher.stop)
       patcher.start()
 
-  def test_marker_from_a_live_process_counts(self):
-    helpers.set_dormant(True)
-    assert helpers.dormant()
-    helpers.set_dormant(False)
-    assert not helpers.dormant()
-
-  def test_marker_from_a_dead_process_is_a_leftover(self):
-    helpers.DORMANT.write_text('4194304')  # above pid_max
-    assert not helpers.dormant()
-
-  def test_garbage_is_not_dormant(self):
-    helpers.DORMANT.write_text('not a pid')
-    assert not helpers.dormant()
-
   def test_dormant_counts_as_present_without_a_host(self):
     with mock.patch.object(gadget, 'link_endpoint', return_value=None), \
          mock.patch.object(gadget, 'host_attached', return_value=False), \
@@ -103,7 +35,7 @@ class TestDormant(unittest.TestCase):
       (self.tmp / 'cc').write_text('1')
       helpers._last_configured = 0.0
       assert not helpers.gadget_present()
-      helpers.set_dormant(True)
+      gadget.set_dormant(True)
       assert helpers.gadget_present()
       (self.tmp / 'cc').write_text('0')
       assert not helpers.gadget_present()
@@ -120,21 +52,14 @@ class TestDormant(unittest.TestCase):
       attached.return_value = True
       assert helpers.gadget_present()
 
-  def test_shutdown_request_round_trip(self):
-    assert helpers.pending_shutdown() is None
-    assert helpers.request_shutdown('car battery')
-    assert helpers.pending_shutdown() == 'car battery'
-    helpers.finish_shutdown()
-    assert helpers.pending_shutdown() is None
-
   def test_await_shutdown_gives_up_and_cleans_up(self):
-    helpers.request_shutdown('car battery')
+    gadget.request_shutdown('car battery')
     assert not helpers.await_shutdown(0.3)
-    assert helpers.pending_shutdown() is None
+    assert gadget.pending_shutdown() is None
 
   def test_await_shutdown_returns_when_taken(self):
-    helpers.request_shutdown('car battery')
-    helpers.finish_shutdown()
+    gadget.request_shutdown('car battery')
+    gadget.finish_shutdown()
     assert helpers.await_shutdown(0.3)
 
 
@@ -391,7 +316,7 @@ class TestMigrateSelection(unittest.TestCase):
   CATALOG = [{'name': 'Alpha', 'ref': REF_A}, {'name': 'Beta', 'ref': REF_B}]
 
   def migrate(self, legacy, ready=None, slot_ref=None, resolve=None, listed=True):
-    values = {helpers.P_MODEL_LEGACY: legacy, helpers.P_READY: ready}
+    values = {helpers.P_MODEL_LEGACY: legacy, gadget.P_READY: ready}
     params = mock.patch.object(helpers, 'params').start()
     self.addCleanup(mock.patch.stopall)
     self.stored = mock.patch.object(helpers, '_store_slot', **({'side_effect': listed} if isinstance(listed, Exception) else {'return_value': listed})).start()
@@ -447,7 +372,7 @@ class TestSelectedModelReadiness(unittest.TestCase):
     from types import SimpleNamespace
     from openpilot.sunnypilot.accelerators.jetlink import backend
 
-    with mock.patch.object(helpers, 'enabled', return_value=True), \
+    with mock.patch.object(gadget, 'enabled', return_value=True), \
          mock.patch.object(helpers, 'engine_ready_for', return_value=True), \
          mock.patch.object(backend.spec_cache, 'load', return_value=SimpleNamespace(sha256='a' * 64)), \
          mock.patch.object(helpers, 'selected_model', return_value={'oid': 'b' * 64}) as selected:

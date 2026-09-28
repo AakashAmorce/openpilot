@@ -175,7 +175,7 @@ def _connect_patiently(link: _Link):
     if client is not None:
       # over TCP wait_for_host returns at once and a TCP client's rebind is a
       # no-op, so the phone's network interface is never bounced
-      if helpers.wait_for_host(max(0.0, deadline - time.monotonic()), bounce=client.rebind,
+      if gadget.wait_for_host(max(0.0, deadline - time.monotonic()), bounce=client.rebind,
                                report=_waiting_for_the_jetson):
         return client
       # the link stays on `link`, still bound, for the next attempt
@@ -205,7 +205,7 @@ def _chestnut_fitted() -> bool:
 
 
 def enabled() -> bool:
-  return helpers.enabled() and not _chestnut_fitted()
+  return gadget.enabled() and not _chestnut_fitted()
 
 
 def link_mode() -> str:
@@ -236,7 +236,7 @@ def present() -> bool:
 
 def ready() -> bool:
   # params only, no link IO: jetlinkd has already recorded the answer
-  if not enabled() or helpers.gadget_error() is not None:
+  if not enabled() or gadget.gadget_error() is not None:
     return False
   spec = spec_cache.load()
   selected = helpers.selected_model()
@@ -245,7 +245,9 @@ def ready() -> bool:
 
 
 def unavailable_reason() -> str | None:
-  return helpers.gadget_alert() if enabled() else None
+  # only for someone who asked for the link: with it off, a device that cannot
+  # present the gadget simply does not offer the feature
+  return gadget.gadget_error() if enabled() else None
 
 
 def prepare() -> bool:
@@ -256,9 +258,9 @@ def prepare() -> bool:
   # the link is not worth waiting for: make_model_state joins in the background.
   # enabled() is the toggle alone, so this is where a device that cannot
   # present a gadget at all says so; nothing here would ever reach a Jetson
-  if not helpers.link_configured():
+  if not gadget.link_configured():
     cloudlog.warning("jetlink: no usable gadget (%s), staying on the small model",
-                     helpers.gadget_error() or 'not set up')
+                     gadget.gadget_error() or 'not set up')
     return False
   # the warp is a build product (accelerators/SConscript) and nothing compiles
   # one at runtime, so one missing now stays missing, and saying no keeps
@@ -440,10 +442,10 @@ def shutdown(reason: str, timeout: float = SHUTDOWN_TIMEOUT) -> None:
   jetlinkd busy in a long provision will not see the request; the timeout
   covers that.
   """
-  if not helpers.enabled() or not helpers.gadget_present():
+  if not gadget.enabled() or not helpers.gadget_present():
     return
   cloudlog.warning("jetlink: asking the jetson to power off: %s", reason)
-  if not helpers.request_shutdown(reason):
+  if not gadget.request_shutdown(reason):
     return
   if helpers.await_shutdown(timeout):
     cloudlog.warning("jetlink: shutdown request handed to the jetson")

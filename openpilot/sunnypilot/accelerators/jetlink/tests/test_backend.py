@@ -8,8 +8,9 @@ Holding the gadget while the Jetson comes up.
 
 The comma is the USB device: the link exists only while a process holds ep0
 with the UDC bound, and every unbind is an unplug the far end has to recover
-from. This module is about not doing that, about the single case that still
-needs an edge, and about modeld borrowing the endpoints rather than the gadget.
+from. This module is about not doing that and about modeld borrowing the
+endpoints rather than the gadget. The one case that still needs an edge, the
+bounce in wait_for_host, is jetlink.comma's and tested there.
 """
 
 import tempfile
@@ -19,7 +20,7 @@ from unittest import mock
 
 from jetlink.comma import gadget
 
-from openpilot.sunnypilot.accelerators.jetlink import backend, helpers
+from openpilot.sunnypilot.accelerators.jetlink import backend
 
 
 class FakeClock:
@@ -41,7 +42,7 @@ class FakeClock:
 class ClockedTest(unittest.TestCase):
   def setUp(self):
     self.clock = FakeClock()
-    for module in (backend, helpers, gadget):
+    for module in (backend, gadget):
       p = mock.patch.object(module, 'time', self.clock)
       self.addCleanup(p.stop)
       p.start()
@@ -54,84 +55,15 @@ class ClockedTest(unittest.TestCase):
       p.start()
 
   def bus(self, udc: str, cc: bool = True):
-    # gadget, not helpers: the primitives live there and everything that reads
-    # them resolves them there, helpers included through its forward
     for name, value in (('udc_state', udc), ('port_has_host', cc)):
       p = mock.patch.object(gadget, name, return_value=value)
       self.addCleanup(p.stop)
       p.start()
 
 
-class WaitForHost(ClockedTest):
-  def setUp(self):
-    super().setUp()
-    self.bounced = []
-
-  def wait(self, seconds: float = backend.CONNECT_TIMEOUT) -> bool:
-    return helpers.wait_for_host(seconds, bounce=lambda: self.bounced.append(True))
-
-  def test_a_host_that_is_already_there_is_not_waited_for(self):
-    self.bus('configured')
-    assert self.wait() is True
-    assert self.clock.slept == 0.0
-
-  def test_a_bus_that_stalls_half_enumerated_is_bounced_once(self):
-    # A jetson whose hubs are not armed for remote wakeup answers the bind
-    # with a bus reset and stops there; only another connect moves it.
-    self.bus('default')
-    assert self.wait() is False
-    assert len(self.bounced) == 1
-
-  def test_the_bounce_waits_out_a_normal_enumeration(self):
-    self.bus('addressed')
-    self.wait(helpers.STALLED_ENUMERATION / 2)
-    assert self.bounced == []
-
-  def test_nothing_on_the_cable_is_not_a_stall(self):
-    # No host on the CC pin: there is nobody to enumerate us and bouncing the
-    # gadget would only cost the next one its bind.
-    self.bus('not attached', cc=False)
-    assert self.wait() is False
-    assert self.bounced == []
-
-  def test_a_jetson_still_booting_is_left_alone(self):
-    # Powered but not yet driving the bus: the UDC never leaves powered.
-    self.bus('powered')
-    assert self.wait() is False
-    assert self.bounced == []
-
-  def test_a_bounce_that_fails_does_not_end_the_wait(self):
-    self.bus('default')
-    with mock.patch.object(gadget, 'udc_state', return_value='default'):
-      assert helpers.wait_for_host(backend.CONNECT_TIMEOUT,
-                                   bounce=mock.Mock(side_effect=OSError('no such device'))) is False
-
-  def test_a_host_that_turns_up_late_is_still_joined(self):
-    states = ['powered'] * 3 + ['configured']
-    with mock.patch.object(gadget, 'udc_state', side_effect=lambda: states.pop(0) if states else 'configured'), \
-         mock.patch.object(gadget, 'port_has_host', return_value=True):
-      assert self.wait() is True
-
-  def test_a_caller_that_is_going_away_is_not_kept_waiting(self):
-    self.bus('powered')
-    assert helpers.wait_for_host(backend.CONNECT_TIMEOUT, should_stop=lambda: True) is False
-    assert self.clock.slept == 0.0
-
-  def test_the_wait_says_once_that_it_is_waiting(self):
-    self.bus('powered')
-    said = []
-    helpers.wait_for_host(2.0, report=lambda: said.append(True))
-    assert said == [True]
-
-  def test_over_tcp_there_is_no_host_to_wait_for(self):
-    # The connect already reached the phone or Jetson; no gadget of ours is
-    # bound, so the UDC would never say configured.
-    self.bus('not attached', cc=False)
-    gadget.link_endpoint.return_value = ('10.0.0.5', 5599)
-    said = []
-    assert helpers.wait_for_host(backend.CONNECT_TIMEOUT, report=lambda: said.append(True)) is True
-    assert self.clock.slept == 0.0
-    assert said == []
+class JoiningOverTcp(ClockedTest):
+  """Over TCP there is nothing to enumerate: the connect already reached the
+  far end, so the join neither waits on the UDC nor bounces the gadget."""
 
   def test_a_join_over_tcp_returns_the_client_at_once(self):
     self.bus('not attached', cc=False)

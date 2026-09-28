@@ -114,7 +114,7 @@ class LoadTest(unittest.TestCase):
     """prepare() down its yes path, with nothing real behind it."""
     from openpilot.sunnypilot.accelerators.jetlink import warp_cache
     with mock.patch.object(backend, 'enabled', return_value=True), \
-         mock.patch.object(helpers, 'link_configured', return_value=True), \
+         mock.patch.object(gadget, 'link_configured', return_value=True), \
          mock.patch.object(warp_cache, 'device_geometry', return_value=(1, 2, 3, 4)), \
          mock.patch.object(warp_cache, 'is_cached', return_value=True), \
          mock.patch.object(warp_cache, 'init_device') as init_device:
@@ -123,7 +123,7 @@ class LoadTest(unittest.TestCase):
 
   def test_the_link_off_says_no_before_any_setup(self):
     with mock.patch.object(backend, 'enabled', return_value=False), \
-         mock.patch.object(helpers, 'link_configured') as link_configured:
+         mock.patch.object(gadget, 'link_configured') as link_configured:
       self.assertFalse(accelerators.prepare())
     link_configured.assert_not_called()
 
@@ -172,9 +172,9 @@ class DaemonTest(unittest.TestCase):
     self.assertIsInstance(d, Daemon)
     self.assertEqual(d.name, 'jetlinkd')
     __import__(d.module)
-    with mock.patch.object(helpers, 'enabled', return_value=False):
+    with mock.patch.object(gadget, 'enabled', return_value=False):
       self.assertFalse(d.should_run(False, None, None))
-    with mock.patch.object(helpers, 'enabled', return_value=True):
+    with mock.patch.object(gadget, 'enabled', return_value=True):
       self.assertTrue(d.should_run(False, None, None))
 
 
@@ -212,13 +212,13 @@ class TestProgress(unittest.TestCase):
 
 class TestShutdown(unittest.TestCase):
   def test_disabled_costs_one_param_read_and_nothing_else(self):
-    with mock.patch.object(helpers, 'enabled', return_value=False), \
+    with mock.patch.object(gadget, 'enabled', return_value=False), \
          mock.patch.object(backend, 'shutdown') as request:
       accelerators.shutdown('car battery')
     request.assert_not_called()
 
   def test_the_request_is_forwarded_with_the_bound(self):
-    with mock.patch.object(helpers, 'enabled', return_value=True), \
+    with mock.patch.object(gadget, 'enabled', return_value=True), \
          mock.patch.object(backend, 'shutdown') as request:
       accelerators.shutdown('car battery', timeout=3.0)
     request.assert_called_once_with('car battery', 3.0)
@@ -226,7 +226,7 @@ class TestShutdown(unittest.TestCase):
   def test_a_backend_that_hangs_cannot_hold_hardwared(self):
     release = threading.Event()
     self.addCleanup(release.set)
-    with mock.patch.object(helpers, 'enabled', return_value=True), \
+    with mock.patch.object(gadget, 'enabled', return_value=True), \
          mock.patch.object(backend, 'shutdown', side_effect=lambda *a: release.wait(30)), \
          mock.patch.object(accelerators._log(), 'warning') as warn:
       t0 = time.monotonic()
@@ -235,7 +235,7 @@ class TestShutdown(unittest.TestCase):
     warn.assert_called_once()
 
   def test_a_backend_that_raises_is_logged_not_propagated(self):
-    with mock.patch.object(helpers, 'enabled', return_value=True), \
+    with mock.patch.object(gadget, 'enabled', return_value=True), \
          mock.patch.object(backend, 'shutdown', side_effect=RuntimeError('no')), \
          mock.patch.object(accelerators._log(), 'exception') as log:
       accelerators.shutdown('car battery', timeout=1.0)

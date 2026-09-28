@@ -212,7 +212,7 @@ class Jetlinkd:
     try:
       if not self.open_link():
         raise RuntimeError("could not open the link")
-      if not helpers.wait_for_host(WAKE_TIMEOUT, bounce=self.bounce,
+      if not gadget.wait_for_host(WAKE_TIMEOUT, bounce=self.bounce,
                                    should_stop=lambda: self.stop):
         raise TimeoutError(f"no jetson attached within {WAKE_TIMEOUT:.0f} s")
       resp = self.client.shutdown(reason, timeout=5.0)
@@ -220,7 +220,7 @@ class Jetlinkd:
     except Exception:
       cloudlog.exception("jetlink: could not shut the jetson down")
     finally:
-      helpers.finish_shutdown()
+      gadget.finish_shutdown()
 
   # -- one run --------------------------------------------------------------
 
@@ -252,14 +252,14 @@ class Jetlinkd:
 
   def run(self) -> bool:
     """One provisioning round. True when there is nothing left to do."""
-    if not helpers.enabled():
+    if not gadget.enabled():
       return True
     try:
       helpers.migrate_selection()
     except Exception:
       cloudlog.exception("jetlink: could not migrate the model selection")
 
-    reason = helpers.pending_shutdown()
+    reason = gadget.pending_shutdown()
     if reason is not None:
       self.shutdown_jetson(reason)
       return True
@@ -273,7 +273,7 @@ class Jetlinkd:
     try:
       if not self.open_link():
         return False
-      if not helpers.wait_for_host(WAKE_TIMEOUT, bounce=self.bounce,
+      if not gadget.wait_for_host(WAKE_TIMEOUT, bounce=self.bounce,
                                    should_stop=lambda: self.stop):
         cloudlog.warning("jetlink: no jetson within %.0f s, leaving it for the next run", WAKE_TIMEOUT)
         return False

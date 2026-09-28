@@ -24,31 +24,6 @@ from pathlib import Path
 
 from jetlink.comma import gadget
 
-# The comma's gadget, in jetlink.comma.gadget, still reachable as
-# helpers.<name>. Forwarded rather than imported so there is one seam: gadget's
-# own functions read these out of gadget's namespace, and a test that patches
-# them there is seen here too.
-_FORWARDED = frozenset((
-  'AGNOS', 'CC_ORIENTATION', 'DORMANT', 'FFS_MOUNT', 'GADGET_PATH',
-  'GADGET_STATUS', 'HOST_POLL', 'P_ENABLED',
-  'P_ENDPOINT', 'P_READY', 'SHUTDOWN_REQUEST',
-  'STALLED_ENUMERATION', 'STALLED_STATES', 'UDC_PATH', 'bound_udc',
-  'dormant', 'enabled', 'finish_shutdown', 'gadget_error', 'host_attached',
-  'link_configured', 'offroad',
-  'link_endpoint', 'params_dir', 'pending_shutdown', 'port_has_host',
-  'request_shutdown', 'set_dormant', 'udc_state', 'usb_speed',
-  'wait_for_host',
-))
-
-
-def __getattr__(name: str):
-  # deliberately not cached into this module's namespace: binding the value
-  # would freeze whatever gadget held at first use, and a test that patches
-  # gadget would stop being visible through here, which is the whole point of
-  # the forward. A frozenset lookup and a getattr is a microsecond
-  if name in _FORWARDED:
-    return getattr(gadget, name)
-  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.hardware.hw import Paths
 from openpilot.common.params import Params
@@ -163,11 +138,6 @@ def connect(deadline: float | None = None, name: str | None = None, loan=None):
   # the comma is the gadget and the Jetson the host; see gadget_present()
   return JetlinkClient.open_ffs(str(gadget.FFS_MOUNT), gadget=str(gadget.GADGET_PATH), deadline=deadline, name=name)
 
-
-
-def gadget_alert() -> str | None:
-  """The gadget failure worth an alert: only for someone who asked for the link."""
-  return gadget.gadget_error() if gadget.enabled() else None
 
 
 # -- the model ------------------------------------------------------------
