@@ -113,6 +113,29 @@ def enabled() -> bool:
   return _backend().enabled()
 
 
+# Accelerator Link: off, a Jetson or a Mac on USB, or an iPhone (iOS)
+LINK_MODES = ('off', 'usb', 'ios')
+
+
+def link_mode() -> str:
+  """The Accelerator Link setting, one of LINK_MODES. Read off the param files,
+  so it never raises."""
+  from openpilot.sunnypilot.accelerators.jetlink import gadget
+  return gadget.link_mode()
+
+
+def set_link_mode(mode: str) -> None:
+  """Store the setting. The gadget follows once the car is parked."""
+  from openpilot.sunnypilot.accelerators.jetlink import helpers
+  helpers.set_link_mode(mode)
+
+
+def link_transport() -> str:
+  """What carries the link now, for the panels: USB, iOS over USB, or Ethernet."""
+  from openpilot.sunnypilot.accelerators.jetlink import helpers
+  return helpers.link_transport()
+
+
 def big_catalog(catalog: dict) -> dict:
   """The big-model catalog the model manager fetched, with the models newer
   catalogs list folded in when an accelerator could run the big model."""

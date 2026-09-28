@@ -253,12 +253,13 @@ class TestTiciModelsPanel:
     gadget = "openpilot.sunnypilot.accelerators.jetlink.gadget"
     record = Path(tempfile.mkdtemp()) / "link"
     with accelerator(installed=True, present=True), mock.patch(f"{gadget}.link_endpoint", return_value=None), \
-         mock.patch(f"{gadget}.LINK", record):
+         mock.patch(f"{gadget}.LINK", record), mock.patch(f"{gadget}.ios", return_value=False):
       assert link_status() == "Accelerator connected: USB."
+      # the owner's record of what it built, and on the cable which phone dialed in
       record.write_text("cable 192.168.60.3")
-      assert link_status() == "Accelerator connected: USB.", "the setting says which host, not a stale record"
-      with mock.patch(f"{gadget}.ios", return_value=True):
-        assert link_status() == "Accelerator connected: iOS over USB (192.168.60.3)."
+      assert link_status() == "Accelerator connected: iOS over USB (192.168.60.3)."
+      record.write_text("usb")
+      assert link_status() == "Accelerator connected: USB."
       with mock.patch(f"{gadget}.link_endpoint", return_value=("10.0.0.5", 5599)):
         assert link_status() == "Accelerator connected: Ethernet (10.0.0.5:5599)."
     # a status that cannot be read is USB, never a crash on the panel's tick
@@ -282,7 +283,8 @@ class TestTiciModelsPanel:
     params.remove("JetlinkIOS")
     with accelerator(present=True), mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=False):
       layout = self._layout()
-      layout.accelerator_link_item.action_item.set_selected_button(2)
+      layout._refresh_accelerator_items()
+      assert not layout.accelerator_link_item.action_item.enabled
       layout._set_link_mode(2)
       assert params.get("JetlinkEnabled") is None and params.get("JetlinkIOS") is None
       assert layout.accelerator_link_item.action_item.get_selected_button() == 0

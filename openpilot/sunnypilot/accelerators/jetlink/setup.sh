@@ -12,11 +12,15 @@ set -u
 BASEDIR="$(cd "$(dirname "$0")/../../../.." && pwd)"
 STATUS=/dev/shm/jetlink-gadget
 
-# put_bool writes 1; gadget.param_bool also takes true
-case "$(cat "${PARAMS_ROOT:-/data/params}/${OPENPILOT_PREFIX:-d}/JetlinkEnabled" 2>/dev/null)" in
-  1|true|True) ;;
-  *) exit 0 ;;
-esac
+# put_bool writes 1; gadget.param_bool also takes true. A shell builtin read,
+# not $(cat): this is on the boot path
+param_on() {
+  local v=""
+  IFS= read -r v 2>/dev/null < "${PARAMS_ROOT:-/data/params}/${OPENPILOT_PREFIX:-d}/$1"
+  case "$v" in 1|true|True) return 0 ;; *) return 1 ;; esac
+}
+
+param_on JetlinkEnabled || exit 0
 
 REPO="$BASEDIR/jetlink_repo"
 if [ ! -d "$REPO/jetlink" ]; then
@@ -29,9 +33,7 @@ fi
 # An iPhone needs the composite gadget with a network interface; a Jetson or a
 # Mac the plain one. Accelerator Link "iOS" is JetlinkIOS
 MODE=""
-case "$(cat "${PARAMS_ROOT:-/data/params}/${OPENPILOT_PREFIX:-d}/JetlinkIOS" 2>/dev/null)" in
-  1|true|True) MODE="--ios" ;;
-esac
+param_on JetlinkIOS && MODE="--ios"
 
 # the endpoints must exist before jetlinkd or modeld can open them, and that
 # needs root. setup_gadget.sh leaves the reason in $STATUS for the offroad alert

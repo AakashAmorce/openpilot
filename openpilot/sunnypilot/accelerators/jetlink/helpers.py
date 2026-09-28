@@ -78,6 +78,36 @@ def params() -> Params:
   return store
 
 
+def set_link_mode(mode: str) -> None:
+  """Write Accelerator Link: 'off', 'usb' or 'ios'. The host first, then the
+  switch, so the owner never sees the link on for the wrong host; the gadget
+  follows once the car is parked. Never raises, as _get."""
+  try:
+    store = params()
+    store.put_bool(gadget.P_IOS, mode == 'ios', block=True)
+    store.put_bool(gadget.P_ENABLED, mode != 'off', block=True)
+  except Exception:
+    cloudlog.exception("jetlink: could not store the link mode")
+
+
+def link_transport() -> str:
+  """What carries the link, for the panels: the gadget the owner built (a
+  Jetson or a Mac on the vendor interface, an iPhone dialed in over the
+  network interface) or JetlinkEndpoint's Jetson on ethernet. Never raises:
+  the panels read it on their tick."""
+  try:
+    kind = gadget.link_kind()
+    if kind == 'cable':
+      peer = gadget.link_peer()
+      return f"iOS over USB ({peer})" if peer else "iOS over USB"
+    if kind == 'ethernet':
+      host, port = gadget.link_endpoint()
+      return f"Ethernet ({host}:{port})"
+  except Exception:
+    pass
+  return "USB"
+
+
 def _get(key: str, default=None):
   """Read a param, tolerating a params library that predates the key.
 

@@ -4,59 +4,18 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of zoompilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 
-The user's say over the accelerator link, shared by the mici and tici models panels.
-On is the only enable; the backend reads the param, the panels only write it. The
+The user's say over the accelerator link, shared by the mici and tici models panels:
+Off, USB (a Jetson or a Mac) or iOS (an iPhone), through the accelerators API. The
 small model is picked as ever: manager runs whichever modeld that bundle needs and
-the accelerator joins it, so the toggle never changes which modeld runs.
+the accelerator joins it, so the setting never changes which modeld runs.
 """
 from openpilot.common.hardware.usb import TYPEC_CC_ORIENTATION_PATH, read
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot import accelerators
-from openpilot.sunnypilot.accelerators.jetlink import gadget
+from openpilot.sunnypilot.accelerators import LINK_MODES, link_mode, set_link_mode  # noqa: F401  the panels' imports
 from openpilot.system.ui.lib.multilang import tr
 
-LINK_PARAM = "JetlinkEnabled"
-IOS_PARAM = "JetlinkIOS"
-# Off, a Jetson or a Mac on the USB vendor interface, or an iPhone on the
-# gadget's network interface. Two bools rather than one mode: JetlinkEnabled is
-# read everywhere and an existing "on" is USB, unchanged
-LINK_MODES = ("off", "usb", "ios")
 LINK_MODE_TITLES = {"off": "Off", "usb": "USB", "ios": "iOS"}
-
-
-def link_mode() -> str:
-  """never raises, as link_enabled"""
-  try:
-    if not ui_state.params.get(LINK_PARAM):
-      return "off"
-    return "ios" if ui_state.params.get(IOS_PARAM) else "usb"
-  except Exception:
-    return "off"
-
-
-def set_link_mode(mode: str) -> None:
-  """The host first, then the switch, so the owner never sees the link on for
-  the wrong host. The gadget changes between USB and iOS once parked."""
-  try:
-    ui_state.params.put_bool(IOS_PARAM, mode == "ios", block=True)
-    ui_state.params.put_bool(LINK_PARAM, mode != "off", block=True)
-  except Exception:
-    pass  # same unknown-key case as the read
-
-
-def link_enabled() -> bool:
-  """never raises: a params library older than the key would take the settings panel down"""
-  try:
-    return bool(ui_state.params.get(LINK_PARAM))
-  except Exception:
-    return False
-
-
-def set_link_enabled(enabled: bool) -> None:
-  try:
-    ui_state.params.put_bool(LINK_PARAM, enabled, block=True)
-  except Exception:
-    pass  # same unknown-key case as the read
 
 
 def link_toggle_meaningful() -> bool:
@@ -68,26 +27,8 @@ def link_toggle_meaningful() -> bool:
   so the toggle that turns it on would wait for the thing it enables."""
   if ui_state.chestnut_present:
     return False
-  return (accelerators.installed() or accelerators.present() or accelerators.ready() or link_enabled()
+  return (accelerators.installed() or accelerators.present() or accelerators.ready() or link_mode() != "off"
           or accelerators.unavailable_reason() is not None)
-
-
-def link_transport() -> str:
-  """What carries the link, as the setting names it: a Jetson or a Mac on the
-  vendor interface, an iPhone dialed in over the gadget's network interface,
-  or JetlinkEndpoint's Jetson on ethernet. Never raises: this is read on the
-  panel's tick."""
-  try:
-    kind = gadget.link_kind()
-    if kind == 'cable':
-      peer = gadget.link_peer()
-      return f"iOS over USB ({peer})" if peer else "iOS over USB"
-    if kind == 'ethernet':
-      host, port = gadget.link_endpoint()
-      return f"Ethernet ({host}:{port})"
-  except Exception:
-    pass
-  return "USB"
 
 
 def link_status() -> str:
@@ -99,7 +40,7 @@ def link_status() -> str:
   than claiming an empty port.
   """
   if accelerators.present():
-    return f"{tr('Accelerator connected:')} {link_transport()}."
+    return f"{tr('Accelerator connected:')} {accelerators.link_transport()}."
   raw = read(TYPEC_CC_ORIENTATION_PATH)
   if raw is None:
     return ""

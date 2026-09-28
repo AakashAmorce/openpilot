@@ -126,10 +126,10 @@ class ModelsLayout(Widget):
     self._refresh_accelerator_items()
 
   def _set_link_mode(self, index: int):
-    if not ui_state.is_offroad():
-      self.accelerator_link_item.action_item.set_selected_button(LINK_MODES.index(link_mode()))
-      return
-    set_link_mode(LINK_MODES[index])
+    # the buttons are disabled onroad (see _refresh_accelerator_items); this
+    # guards a tap that lands on the tick the car starts
+    if ui_state.is_offroad():
+      set_link_mode(LINK_MODES[index])
 
   @staticmethod
   def _link_description(status: str) -> str:
@@ -140,6 +140,7 @@ class ModelsLayout(Widget):
     # present() and unavailable_reason() read sysfs, so this rides the half-second tick
     self.accelerator_link_item.set_visible(link_toggle_meaningful())
     self.accelerator_link_item.action_item.set_selected_button(LINK_MODES.index(link_mode()))
+    self.accelerator_link_item.action_item.set_enabled(ui_state.is_offroad())
     status = link_status()
     if status != self._link_status:
       self._link_status = status
