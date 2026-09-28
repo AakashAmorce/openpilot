@@ -32,9 +32,8 @@ NEWER = {'tinygrad_ref': 'next', 'bundles': [bundle(OLD, 12, '20', 'Cinque Terre
 
 
 class TestBigCatalog(unittest.TestCase):
-  def merged(self, installed=True, chestnut=False, newer=NEWER):
-    with mock.patch.object(backend.helpers, 'package_installed', return_value=installed), \
-         mock.patch.object(backend, '_chestnut_fitted', return_value=chestnut), \
+  def merged(self, chestnut=False, newer=NEWER):
+    with mock.patch.object(backend, '_chestnut_fitted', return_value=chestnut), \
          mock.patch('jetlink.registry.catalog.fetch_catalogs', return_value=newer) as probe:
       out = backend.big_catalog(PINNED)
     return out, probe
@@ -64,12 +63,12 @@ class TestBigCatalog(unittest.TestCase):
     probe.assert_called_once_with()
     self.assertEqual(len(out['bundles']), 2)
 
-  def test_a_chestnut_or_no_package_leaves_the_catalog_alone(self):
-    for kwargs in ({'installed': False}, {'chestnut': True}):
-      with self.subTest(**kwargs):
-        out, probe = self.merged(**kwargs)
-        self.assertIs(out, PINNED)
-        probe.assert_not_called()
+  def test_a_chestnut_leaves_the_catalog_alone(self):
+    # without a jetlink checkout the backend never imports, and
+    # sunnypilot.accelerators answers with the catalog as fetched
+    out, probe = self.merged(chestnut=True)
+    self.assertIs(out, PINNED)
+    probe.assert_not_called()
 
   def test_nothing_newer_or_a_failed_probe_leaves_it_alone(self):
     self.assertIs(self.merged(newer=PINNED)[0], PINNED)

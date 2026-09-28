@@ -32,30 +32,37 @@ from typing import Any, NamedTuple
 # package, and so does the gadget owner by way of its shim,
 # accelerators/jetlink/owner.py, which is only 10 MB while nothing here drags
 # numpy, capnp and zmq in behind it. jetlink/tests/test_comma_layer.py holds the
-# line. The first call pays a dict lookup; the UI polls these at 5 Hz and never
-# notices.
+# line. The backend is resolved on the first call and kept, the null one
+# included: Python does not cache a failed import, and searching sys.path again
+# cost every UI and hardwared call 185 us.
+_resolved = None
+
+
 def _backend():
-  try:
-    from openpilot.sunnypilot.accelerators.jetlink import backend
-  except ModuleNotFoundError as e:
-    # the backend stands on the comma layer, jetlink.comma, which is in the
-    # submodule; without a checkout every answer is the negative default
-    if not _is_jetlink(e):
-      raise
-    return _NoBackend
-  return backend
-
-
-def _is_jetlink(e: ModuleNotFoundError) -> bool:
-  return (e.name or '').split('.')[0] == 'jetlink'
+  global _resolved
+  if _resolved is None:
+    try:
+      from openpilot.sunnypilot.accelerators.jetlink import backend
+    except ModuleNotFoundError as e:
+      # the backend stands on the comma layer, jetlink.comma, which is in the
+      # submodule; without a checkout every answer is the negative default
+      if (e.name or '').split('.')[0] != 'jetlink':
+        raise
+      backend = _NoBackend
+    _resolved = backend
+  return _resolved
 
 
 class _NoBackend:
   """The backend's answers when the jetlink package is not checked out."""
 
   @staticmethod
-  def installed() -> bool:
-    return False
+  def link_mode() -> str:
+    return 'off'
+
+  @staticmethod
+  def link_transport() -> str:
+    return 'USB'
 
   @staticmethod
   def present() -> bool:
@@ -148,7 +155,7 @@ class Accelerator(NamedTuple):
 
 def installed() -> bool:
   """Is the backend's package checked out? What makes the link worth offering in the UI."""
-  return _backend().installed()
+  return _backend() is not _NoBackend
 
 
 def present() -> bool:
@@ -191,38 +198,23 @@ def enabled() -> bool:
 
 # Accelerator Link, stored in LINK_PARAM as an index into LINK_MODES: off, a
 # Jetson or a Mac on USB, or an iPhone (iOS). The panels write the param; the
-# gadget follows once the car is parked. jetlink.comma.gadget is stdlib-only,
-# so this import costs the UI nothing. Without a jetlink checkout the panels
-# still build the setting, and it reads off
-try:
-  from jetlink.comma.gadget import LINK_MODES, P_LINK as LINK_PARAM  # re-exported
-except ModuleNotFoundError as e:
-  if not _is_jetlink(e):
-    raise
-  LINK_MODES, LINK_PARAM = ('off', 'usb', 'ios'), 'JetlinkLink'
+# gadget follows once the car is parked. jetlink.comma.gadget's LINK_MODES and
+# P_LINK, written out so the panels can build the setting at import without a
+# jetlink checkout; test_comma_layer holds the two equal
+LINK_MODES = ('off', 'usb', 'ios')
+LINK_PARAM = 'JetlinkLink'
 
 
 def link_mode() -> str:
   """The Accelerator Link setting, one of LINK_MODES. Read off the param files,
   so it never raises."""
-  try:
-    from jetlink.comma import gadget
-  except ModuleNotFoundError as e:
-    if not _is_jetlink(e):
-      raise
-    return 'off'
-  return gadget.link_mode()
+  return _backend().link_mode()
 
 
 def link_transport() -> str:
-  """What carries the link now, for the panels: USB, iOS over USB, or Ethernet."""
-  try:
-    from openpilot.sunnypilot.accelerators.jetlink import helpers
-  except ModuleNotFoundError as e:
-    if not _is_jetlink(e):
-      raise
-    return "USB"
-  return helpers.link_transport()
+  """What carries the link now, for the panels: USB, iOS over USB, or Ethernet.
+  Never raises."""
+  return _backend().link_transport()
 
 
 def big_catalog(catalog: dict) -> dict:

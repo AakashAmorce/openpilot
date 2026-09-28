@@ -102,5 +102,7 @@ assert not a.daemons()[0].should_run(False, None, None)
     out = run_fresh(code)
     self.assertEqual(out.returncode, 0, out.stderr)
 
-  def test_the_fallback_setting_is_jetlinks(self):
-    self.assertEqual((gadget.LINK_MODES, gadget.P_LINK), (('off', 'usb', 'ios'), 'JetlinkLink'))
+  def test_the_setting_is_jetlinks(self):
+    # written out in the API so the panels build it without a checkout
+    from openpilot.sunnypilot import accelerators
+    self.assertEqual((accelerators.LINK_MODES, accelerators.LINK_PARAM), (gadget.LINK_MODES, gadget.P_LINK))

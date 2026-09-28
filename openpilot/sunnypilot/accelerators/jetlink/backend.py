@@ -9,14 +9,15 @@ The accelerator backend: everything core openpilot calls, and nothing else.
 A module of functions behind sunnypilot.accelerators, the only thing core
 openpilot imports. Anything only jetlinkd needs lives in helpers or spec_cache.
 The `jetlink` package can be absent on a device. This module stands on its
-comma layer (jetlink.comma, through helpers) and does not import without it;
-sunnypilot.accelerators answers the negative defaults then. The functions that
-need the client still answer theirs if it cannot be imported, logging once.
+comma layer, jetlink.comma, and does not import without it;
+sunnypilot.accelerators answers the negative defaults then.
 """
 from __future__ import annotations
 
 import threading
 import time
+
+from jetlink.comma import gadget
 
 from openpilot.common.swaglog import cloudlog
 
@@ -39,22 +40,8 @@ PRESENT_TIMEOUT = 5.0
 # suspend is ~8 s to a server
 SHUTDOWN_TIMEOUT = 25.0
 
-_missing_reported = False
 # prepare() said yes in this process, so load() may join modeld
 _prepared = False
-
-
-def _package_missing(what: str) -> bool:
-  """True, and logged once, if the jetlink client package cannot be imported."""
-  global _missing_reported
-  try:
-    import jetlink.client  # noqa: F401
-  except ImportError:
-    if not _missing_reported:
-      cloudlog.warning("jetlink: package not installed, %s unavailable", what)
-      _missing_reported = True
-    return True
-  return False
 
 
 class _Link:
@@ -221,8 +208,26 @@ def enabled() -> bool:
   return helpers.enabled() and not _chestnut_fitted()
 
 
-def installed() -> bool:
-  return helpers.package_installed()
+def link_mode() -> str:
+  return gadget.link_mode()
+
+
+def link_transport() -> str:
+  """What carries the link, for the panels: the gadget the owner built (a
+  Jetson or a Mac on the vendor interface, an iPhone dialed in over the
+  network interface) or JetlinkEndpoint's Jetson on ethernet. Never raises:
+  the panels read it on their tick."""
+  try:
+    kind = gadget.link_kind()
+    if kind == 'cable':
+      peer = gadget.link_peer()
+      return f"iOS over USB ({peer})" if peer else "iOS over USB"
+    if kind == 'ethernet':
+      host, port = gadget.link_endpoint()
+      return f"Ethernet ({host}:{port})"
+  except Exception:
+    pass
+  return "USB"
 
 
 def present() -> bool:
@@ -249,17 +254,15 @@ def prepare() -> bool:
   if not enabled():
     return False
   # the link is not worth waiting for: make_model_state joins in the background.
-  # The warp is checked here: it is a build product (accelerators/SConscript)
-  # and nothing compiles one at runtime, so one missing now stays missing, and
-  # saying no keeps modeld on the plain small model
-  if _package_missing('the large model'):
-    return False
   # enabled() is the toggle alone, so this is where a device that cannot
   # present a gadget at all says so; nothing here would ever reach a Jetson
   if not helpers.link_configured():
     cloudlog.warning("jetlink: no usable gadget (%s), staying on the small model",
                      helpers.gadget_error() or 'not set up')
     return False
+  # the warp is a build product (accelerators/SConscript) and nothing compiles
+  # one at runtime, so one missing now stays missing, and saying no keeps
+  # modeld on the plain small model
   from openpilot.sunnypilot.accelerators.jetlink import warp_cache
   if not warp_cache.is_cached(*warp_cache.device_geometry()):
     cloudlog.warning("jetlink: no warp built for this camera, staying on the small model")
@@ -279,8 +282,6 @@ def load(cam_w: int, cam_h: int, small) -> Accelerator | None:
     model = make_model_state(cam_w, cam_h, small)
   except Exception:
     cloudlog.exception("jetlink load failed")
-    model = None
-  if model is None:
     model = small
   from openpilot.sunnypilot.accelerators.jetlink.status import JetlinkStatus
   # the model, not its client: the link arrives after this is built and may
@@ -290,8 +291,6 @@ def load(cam_w: int, cam_h: int, small) -> Accelerator | None:
 
 def make_model_state(cam_w: int, cam_h: int, small=None):
   # returns straight away with the small model driving; see joining.py
-  if _package_missing('the large model'):
-    return None
   from openpilot.sunnypilot.accelerators.jetlink.joining import JoiningModelState
   from openpilot.sunnypilot.accelerators.jetlink import warp_cache
 
@@ -391,12 +390,12 @@ def _open_link(link: _Link, should_stop=None):
 
 
 def extends_catalog() -> bool:
-  """Whether big_catalog folds the newer catalogs in: with jetlink installed and
-  no chestnut fitted. Not the link toggle. The model manager validates the
+  """Whether big_catalog folds the newer catalogs in: with jetlink installed,
+  which importing this module is, and no chestnut fitted. Not the link toggle. The model manager validates the
   big-model pick against this catalog and drops a pick it does not list, so a
   catalog that followed the toggle lost a pick only newer catalogs carry on
   every boot with the link off. A chestnut sees sunnypilot's list as fetched."""
-  return helpers.package_installed() and not _chestnut_fitted()
+  return not _chestnut_fitted()
 
 
 def big_catalog(catalog: dict) -> dict:

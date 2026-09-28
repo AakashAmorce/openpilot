@@ -79,36 +79,6 @@ def params() -> Params:
   return store
 
 
-def repo_root() -> Path:
-  return Path(BASEDIR)
-
-
-def package_installed() -> bool:
-  """Is the jetlink submodule checked out? A stat, not an import: the UI asks at 5 Hz."""
-  try:
-    return (repo_root() / 'jetlink_repo' / 'jetlink' / '__init__.py').is_file()
-  except OSError:
-    return False
-
-
-def link_transport() -> str:
-  """What carries the link, for the panels: the gadget the owner built (a
-  Jetson or a Mac on the vendor interface, an iPhone dialed in over the
-  network interface) or JetlinkEndpoint's Jetson on ethernet. Never raises:
-  the panels read it on their tick."""
-  try:
-    kind = gadget.link_kind()
-    if kind == 'cable':
-      peer = gadget.link_peer()
-      return f"iOS over USB ({peer})" if peer else "iOS over USB"
-    if kind == 'ethernet':
-      host, port = gadget.link_endpoint()
-      return f"Ethernet ({host}:{port})"
-  except Exception:
-    pass
-  return "USB"
-
-
 def _get(key: str, default=None):
   """Read a param, tolerating a params library that predates the key.
 
@@ -420,7 +390,7 @@ def fetch_shipped_model(progress=None, should_stop=None) -> Path | None:
   if model is None or not model['oid']:
     return None
   dest = model_dir() / model_file_name(model)
-  return lfs.fetch_oid(model['oid'], model['size'], dest, repo_root(),
+  return lfs.fetch_oid(model['oid'], model['size'], dest, Path(BASEDIR),
                        progress=progress, should_stop=should_stop)
 
 

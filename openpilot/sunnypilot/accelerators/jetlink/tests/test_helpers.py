@@ -54,23 +54,6 @@ class TestGadgetStatus(unittest.TestCase):
       assert helpers.gadget_error() is None
 
 
-class TestPackageInstalled(unittest.TestCase):
-  """The gadget itself is jetlink.comma's; whether the submodule is here is ours."""
-
-  def setUp(self):
-    self.tmp = Path(tempfile.mkdtemp())
-    p = mock.patch.object(helpers, 'repo_root', mock.Mock(return_value=self.tmp))
-    self.addCleanup(p.stop)
-    p.start()
-
-  def test_the_package_is_installed_when_the_submodule_is_checked_out(self):
-    assert not helpers.package_installed()
-    pkg = self.tmp / 'jetlink_repo' / 'jetlink'
-    pkg.mkdir(parents=True)
-    (pkg / '__init__.py').write_text('')
-    assert helpers.package_installed()
-
-
 class TestGadgetAlert(unittest.TestCase):
   """Only complain to someone who asked for the link. With it off, a device
   that cannot present the gadget should simply not offer the feature."""

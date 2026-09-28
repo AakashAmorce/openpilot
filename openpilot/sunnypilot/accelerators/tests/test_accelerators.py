@@ -8,10 +8,10 @@ The answers core openpilot gets from the accelerators module.
 
 modeld, manager, hardwared and the UI all reach the Jetson through this
 module, so what is pinned here is selection: what a device with the feature
-off, on but not provisioned, and ready gets told, and that a missing package
-or a backend that hangs costs the large model and nothing else. No hardware.
+off, on but not provisioned, and ready gets told, and that a backend that
+hangs costs the large model and nothing else. A missing package is
+test_comma_layer's. No hardware.
 """
-import sys
 import threading
 import time
 import unittest
@@ -102,40 +102,6 @@ class SelectionTest(unittest.TestCase):
       self.assertTrue(accelerators.present())
 
 
-class MissingPackageTest(unittest.TestCase):
-  """The jetlink client package can be absent; nothing may raise for it."""
-
-  def hide_package(self):
-    p = mock.patch.dict(sys.modules, {'jetlink': None, 'jetlink.client': None})
-    p.start()
-    self.addCleanup(p.stop)
-    backend._missing_reported = False
-
-  def test_prepare_answers_false(self):
-    self.hide_package()
-    with mock.patch.object(backend, 'enabled', return_value=True), \
-         mock.patch.object(backend.cloudlog, 'warning') as warn:
-      self.assertFalse(accelerators.prepare())
-      self.assertFalse(accelerators.prepare())
-    # Once, not per poll.
-    self.assertEqual(warn.call_count, 1)
-
-  def test_load_answers_none(self):
-    self.hide_package()
-    with mock.patch.object(backend, 'enabled', return_value=True):
-      self.assertFalse(accelerators.prepare())
-    self.assertIsNone(accelerators.load(1928, 1208, object()))
-    self.assertIsNone(backend.make_model_state(1928, 1208, object()))
-
-  def test_the_cheap_questions_still_import_and_answer(self):
-    self.hide_package()
-    with mock.patch.object(helpers, '_get', return_value=None):
-      self.assertFalse(accelerators.ready())
-      self.assertFalse(accelerators.enabled())
-    # a stat on the submodule, so it answers without the package on the path
-    self.assertIsInstance(accelerators.installed(), bool)
-
-
 class LoadTest(unittest.TestCase):
   """modeld's two calls: prepare() before it goes realtime, load() once the camera is up."""
 
@@ -148,7 +114,6 @@ class LoadTest(unittest.TestCase):
     """prepare() down its yes path, with nothing real behind it."""
     from openpilot.sunnypilot.accelerators.jetlink import warp_cache
     with mock.patch.object(backend, 'enabled', return_value=True), \
-         mock.patch.object(backend, '_package_missing', return_value=False), \
          mock.patch.object(helpers, 'link_configured', return_value=True), \
          mock.patch.object(warp_cache, 'device_geometry', return_value=(1, 2, 3, 4)), \
          mock.patch.object(warp_cache, 'is_cached', return_value=True), \
@@ -200,14 +165,6 @@ class LoadTest(unittest.TestCase):
     self.assertIs(loaded.model, self.small)
     self.assertIs(loaded.status.model, self.small)
     self.assertEqual(loaded.name, 'jetlink')
-
-  def test_no_package_at_the_build_drives_the_small_model(self):
-    self.prepared()
-    with mock.patch.object(backend, 'make_model_state', return_value=None):
-      loaded = accelerators.load(1928, 1208, self.small)
-    self.assertIs(loaded.model, self.small)
-    self.assertEqual(loaded.name, 'jetlink')
-
 
 class DaemonTest(unittest.TestCase):
   def test_jetlinkd_is_offered_and_gated_on_enabled(self):
