@@ -340,6 +340,47 @@ class TestTiciModelsPanel(UITest):
       layout = self._layout()
       layout.render(rl.Rectangle(0, 0, 800, 600))
 
+  def test_refresh_spins_beside_the_link_until_both_catalogs_are_stamped(self):
+    # sunnypilot's refresh, as upstream: the model manager restamps each catalog it
+    # refetches, the big-model one extended for the accelerator or not
+    import pyray as rl
+    from openpilot.selfdrive.ui.sunnypilot.model_info import MODEL_SYNC_KEYS
+    for key in MODEL_SYNC_KEYS:
+      self.params.put(key, 1, block=True)
+    with accelerator(present=True, selected='Cinque Terre'), \
+         mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=True):
+      layout = self._layout()
+      button = layout.refresh_item.action_item
+
+      def shown():
+        layout.render(rl.Rectangle(0, 0, 800, 600))
+        return button.text, button.enabled
+
+      assert layout.accelerator_link_item.is_visible and layout.refresh_item in layout.items
+      assert shown() == ("REFRESH", True)
+      layout._refresh_models()
+      wait_until(lambda: not any(self.params.get(key) for key in MODEL_SYNC_KEYS))
+      assert shown() == ("FETCHING...", False)
+      self.params.put(MODEL_SYNC_KEYS[0], 2, block=True)
+      assert shown() == ("FETCHING...", False)
+      self.params.put(MODEL_SYNC_KEYS[1], 2, block=True)
+      assert shown() == ("REFRESH", True)
+
+  def test_the_spinner_watches_the_keys_the_manager_stamps(self):
+    from openpilot.selfdrive.ui.sunnypilot.model_info import MODEL_SYNC_KEYS
+    from openpilot.sunnypilot.models.fetcher import ModelCache, ModelFetcher
+    stamped = tuple(ModelCache(self.params, suffix=suffix)._LAST_SYNC_KEY for _, suffix in ModelFetcher.MODEL_SOURCES.values())
+    assert MODEL_SYNC_KEYS == stamped
+
+
+def wait_until(condition, timeout=2.0):
+  """The panels write with a non-blocking put(), which lands on a background thread."""
+  import time
+  deadline = time.monotonic() + timeout
+  while not condition():
+    assert time.monotonic() < deadline, "timed out"
+    time.sleep(0.005)
+
 
 def ui_state_module():
   from openpilot.selfdrive.ui import ui_state

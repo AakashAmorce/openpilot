@@ -960,6 +960,38 @@ class TestAcceleratorLinkToggle:
       render(layout)
       render(layout.link_toggle)
 
+  def test_refresh_spins_beside_the_toggle_until_both_catalogs_are_stamped(self, params):
+    # sunnypilot's refresh, as upstream: the model manager restamps each catalog it
+    # refetches, the big-model one extended for the accelerator or not
+    import time
+    from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import ModelsLayoutMici
+    from openpilot.selfdrive.ui.sunnypilot.model_info import MODEL_SYNC_KEYS
+
+    params.put(self.PARAM, 1, block=True)
+    for key in MODEL_SYNC_KEYS:
+      params.put(key, 1, block=True)
+    with self._accelerators(present=True), \
+         mock.patch('openpilot.selfdrive.ui.sunnypilot.mici.layouts.models.ui_state.is_offroad', return_value=True):
+      layout = ModelsLayoutMici()
+      button = layout.refresh_btn
+
+      def shown():
+        render(layout)
+        return button.get_value(), button.enabled
+
+      assert layout.link_toggle.is_visible and button in layout._scroller.items
+      assert shown() == ("", True)
+      layout._refresh_models()
+      deadline = time.monotonic() + 2.0
+      while any(params.get(key) for key in MODEL_SYNC_KEYS):
+        assert time.monotonic() < deadline, "the refresh never zeroed the sync keys"
+        time.sleep(0.005)
+      assert shown() == ("fetching...", False)
+      params.put(MODEL_SYNC_KEYS[0], 2, block=True)
+      assert shown() == ("fetching...", False)
+      params.put(MODEL_SYNC_KEYS[1], 2, block=True)
+      assert shown() == ("", True)
+
 
 class TestAlphaLongSwitchMici:
   """The alpha switch is the saved preference, editable offroad only (forced offroad included)."""
