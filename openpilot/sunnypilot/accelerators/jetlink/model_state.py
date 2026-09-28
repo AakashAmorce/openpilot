@@ -32,12 +32,14 @@ from tinygrad.tensor import Tensor
 
 from msgq.visionipc import VisionBuf
 
+from jetlink.comma import gadget
+
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS, LONG_SMOOTH_SECONDS, get_action_from_model
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
 from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
-from openpilot.sunnypilot.accelerators.jetlink import gadget, warp_cache
+from openpilot.sunnypilot.accelerators.jetlink import warp_cache
 from openpilot.sunnypilot.modeld_v2.constants import ModelConstants as V2ModelConstants
 from openpilot.sunnypilot.modeld_v2.modeld_base import ModelStateBase
 

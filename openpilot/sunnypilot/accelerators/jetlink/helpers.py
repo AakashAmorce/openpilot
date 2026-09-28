@@ -22,21 +22,21 @@ import re
 import time
 from pathlib import Path
 
-from openpilot.sunnypilot.accelerators.jetlink import gadget
-from openpilot.sunnypilot.accelerators.jetlink.gadget import set_logger as _set_gadget_logger
+from jetlink.comma import gadget
 
-# What moved to gadget.py, still reachable as helpers.<name>. Forwarded rather
-# than imported so there is one seam: gadget's own functions read these out of
-# gadget's namespace, and a test that patches them there is seen here too.
+# The comma's gadget, in jetlink.comma.gadget, still reachable as
+# helpers.<name>. Forwarded rather than imported so there is one seam: gadget's
+# own functions read these out of gadget's namespace, and a test that patches
+# them there is seen here too.
 _FORWARDED = frozenset((
   'AGNOS', 'CC_ORIENTATION', 'DORMANT', 'FFS_MOUNT', 'GADGET_PATH',
-  'GADGET_SETUP_TIMEOUT', 'GADGET_STATUS', 'HOST_POLL', 'P_ENABLED',
+  'GADGET_STATUS', 'HOST_POLL', 'P_ENABLED',
   'P_ENDPOINT', 'P_READY', 'SHUTDOWN_REQUEST',
-  'STALLED_ENUMERATION', 'STALLED_STATES', 'UDC_PATH', 'bound_udc', 'can_setup_gadget',
+  'STALLED_ENUMERATION', 'STALLED_STATES', 'UDC_PATH', 'bound_udc',
   'dormant', 'enabled', 'finish_shutdown', 'gadget_error', 'host_attached',
-  'link_configured', 'net_up', 'offroad',
-  'link_endpoint', 'package_installed', 'params_dir', 'pending_shutdown', 'port_has_host',
-  'repo_root', 'request_shutdown', 'set_dormant', 'setup_gadget', 'udc_state', 'usb_speed',
+  'link_configured', 'offroad',
+  'link_endpoint', 'params_dir', 'pending_shutdown', 'port_has_host',
+  'request_shutdown', 'set_dormant', 'udc_state', 'usb_speed',
   'wait_for_host',
 ))
 
@@ -49,6 +49,7 @@ def __getattr__(name: str):
   if name in _FORWARDED:
     return getattr(gadget, name)
   raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+from openpilot.common.basedir import BASEDIR
 from openpilot.common.hardware.hw import Paths
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
@@ -63,9 +64,9 @@ from openpilot.sunnypilot.models.model_name import DEFAULT_BIG_MODEL_REF
 # every param this module touches, and jetlinkd touches several twice a second
 # for the whole time the car is parked. Keyed on the prefix because a test or a
 # bench runs under its own store and must not be handed the device's.
-# gadget.py logs through a plain logger so the owner needs no swaglog; every
+# jetlink.comma logs through a plain logger so the owner needs no swaglog; every
 # process that imports helpers is heavy already and wants its lines in the drive
-_set_gadget_logger(cloudlog)
+gadget.set_logger(cloudlog)
 
 _params: dict[str, Params] = {}
 
@@ -76,6 +77,18 @@ def params() -> Params:
   if store is None:
     store = _params[prefix] = Params()
   return store
+
+
+def repo_root() -> Path:
+  return Path(BASEDIR)
+
+
+def package_installed() -> bool:
+  """Is the jetlink submodule checked out? A stat, not an import: the UI asks at 5 Hz."""
+  try:
+    return (repo_root() / 'jetlink_repo' / 'jetlink' / '__init__.py').is_file()
+  except OSError:
+    return False
 
 
 def link_transport() -> str:
@@ -155,8 +168,9 @@ def connect(deadline: float | None = None, name: str | None = None, loan=None):
   frame the way it blocks on a chestnut. `name` is what the server logs this
   connection as; two comma processes share one gadget and the Jetson's journal
   has no clock to tell them apart by. With a `loan`, jetlinkd owns the gadget
-  and this end only opens the endpoint files: see lending.py. A loan that
-  carries a socket is a phone's dial, and the link rides on that instead.
+  and this end only opens the endpoint files: see jetlink.comma.lending. A
+  loan that carries a socket is a phone's dial, and the link rides on that
+  instead.
   """
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
   deadline = FRAME_TIMEOUT if deadline is None else deadline
@@ -406,7 +420,7 @@ def fetch_shipped_model(progress=None, should_stop=None) -> Path | None:
   if model is None or not model['oid']:
     return None
   dest = model_dir() / model_file_name(model)
-  return lfs.fetch_oid(model['oid'], model['size'], dest, gadget.repo_root(),
+  return lfs.fetch_oid(model['oid'], model['size'], dest, repo_root(),
                        progress=progress, should_stop=should_stop)
 
 

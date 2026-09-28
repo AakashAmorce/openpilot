@@ -18,9 +18,11 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from jetlink.comma import gadget
+
 from openpilot.sunnypilot import accelerators
 from openpilot.sunnypilot.accelerators import Daemon
-from openpilot.sunnypilot.accelerators.jetlink import backend, gadget, helpers
+from openpilot.sunnypilot.accelerators.jetlink import backend, helpers
 
 
 class SelectionTest(unittest.TestCase):

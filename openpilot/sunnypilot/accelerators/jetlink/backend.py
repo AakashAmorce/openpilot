@@ -8,9 +8,10 @@ The accelerator backend: everything core openpilot calls, and nothing else.
 
 A module of functions behind sunnypilot.accelerators, the only thing core
 openpilot imports. Anything only jetlinkd needs lives in helpers or spec_cache.
-The `jetlink` client package can be absent on a device; this module imports
-without it, and the functions that need it answer their negative default when
-it is not there, logging once.
+The `jetlink` package can be absent on a device. This module stands on its
+comma layer (jetlink.comma, through helpers) and does not import without it;
+sunnypilot.accelerators answers the negative defaults then. The functions that
+need the client still answer theirs if it cannot be imported, logging once.
 """
 from __future__ import annotations
 
@@ -115,7 +116,7 @@ class _Link:
     on, or whose daemon died: we open the gadget ourselves then, as modeld
     always did, so a drive never loses the large model to a daemon fault.
     """
-    from openpilot.sunnypilot.accelerators.jetlink import lending
+    from jetlink.comma import lending
     # bounded by whatever the caller has left: an early present that spends its
     # whole budget here has nothing left to open the link with
     timeout = lending.BORROW_TIMEOUT if deadline is None else max(0.0, deadline - time.monotonic())

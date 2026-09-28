@@ -19,7 +19,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from openpilot.sunnypilot.accelerators.jetlink import gadget, jetlinkd, provision
+from jetlink.comma import gadget
+
+from openpilot.sunnypilot.accelerators.jetlink import jetlinkd, provision
 
 
 class FakeSpec:

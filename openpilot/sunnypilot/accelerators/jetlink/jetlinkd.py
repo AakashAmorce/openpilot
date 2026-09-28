@@ -9,11 +9,12 @@ Provisions whatever large model is selected, then exits.
 
 A download, an upload and a TensorRT build take minutes, so this runs offroad,
 and it is the heavy half of jetlink: numpy and the client. That is why it is a
-run and not a daemon. owner.py holds the gadget for the whole time the link is
-enabled and starts one of these when something changes; this borrows the
-endpoint files from it exactly as modeld does (lending.py), so the gadget never
-leaves the bus and a parked car keeps one resident jetlink process of about
-13 MB instead of this one's 47.
+run and not a daemon. The owner (jetlink.comma.owner, which owner.py runs)
+holds the gadget for the whole time the link is enabled and starts one of
+these when something changes; this borrows the endpoint files from it exactly
+as modeld does (jetlink.comma.lending), so the gadget never leaves the bus and
+a parked car keeps one resident jetlink process of about 13 MB instead of this
+one's 47.
 
 Without an owner to borrow from, this opens the gadget itself, as it always
 did: a device whose owner died still provisions.
@@ -31,11 +32,13 @@ from __future__ import annotations
 import json
 import signal
 
+from jetlink.comma import gadget, lending
+
 from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot import accelerators
 from openpilot.common.params import Params
-from openpilot.sunnypilot.accelerators.jetlink import gadget, helpers, lending, provision, spec_cache
+from openpilot.sunnypilot.accelerators.jetlink import helpers, provision, spec_cache
 
 # how long to wait for the Jetson to enumerate before giving up on this run.
 # The owner presented the gadget; a box that is asleep answers the bind in

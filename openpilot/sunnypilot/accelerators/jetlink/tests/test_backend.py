@@ -17,7 +17,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from openpilot.sunnypilot.accelerators.jetlink import backend, gadget, helpers
+from jetlink.comma import gadget
+
+from openpilot.sunnypilot.accelerators.jetlink import backend, helpers
 
 
 class FakeClock:
@@ -208,7 +210,7 @@ class BorrowingTheGadget(unittest.TestCase):
   """
 
   def setUp(self):
-    from openpilot.sunnypilot.accelerators.jetlink import lending
+    from jetlink.comma import lending
     self.lending = lending
     self.link = backend._Link()
 

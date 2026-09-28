@@ -29,13 +29,77 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 # Nothing heavy at module level. manager, the UI and hardwared all import this
-# package, and so does the gadget owner by way of accelerators.jetlink.gadget,
-# which is only 10 MB while nothing here drags numpy, capnp and zmq in behind
-# it. jetlink/tests/test_gadget.py holds the line. The first call pays a dict
-# lookup; the UI polls these at 5 Hz and never notices.
+# package, and so does the gadget owner by way of its shim,
+# accelerators/jetlink/owner.py, which is only 10 MB while nothing here drags
+# numpy, capnp and zmq in behind it. jetlink/tests/test_comma_layer.py holds the
+# line. The first call pays a dict lookup; the UI polls these at 5 Hz and never
+# notices.
 def _backend():
-  from openpilot.sunnypilot.accelerators.jetlink import backend
+  try:
+    from openpilot.sunnypilot.accelerators.jetlink import backend
+  except ModuleNotFoundError as e:
+    # the backend stands on the comma layer, jetlink.comma, which is in the
+    # submodule; without a checkout every answer is the negative default
+    if not _is_jetlink(e):
+      raise
+    return _NoBackend
   return backend
+
+
+def _is_jetlink(e: ModuleNotFoundError) -> bool:
+  return (e.name or '').split('.')[0] == 'jetlink'
+
+
+class _NoBackend:
+  """The backend's answers when the jetlink package is not checked out."""
+
+  @staticmethod
+  def installed() -> bool:
+    return False
+
+  @staticmethod
+  def present() -> bool:
+    return False
+
+  @staticmethod
+  def ready() -> bool:
+    return False
+
+  @staticmethod
+  def unavailable_reason() -> str | None:
+    return None
+
+  @staticmethod
+  def prepare() -> bool:
+    return False
+
+  @staticmethod
+  def load(cam_w: int, cam_h: int, small) -> None:
+    return None
+
+  @staticmethod
+  def enabled() -> bool:
+    return False
+
+  @staticmethod
+  def big_catalog(catalog: dict) -> dict:
+    return catalog
+
+  @staticmethod
+  def extends_catalog() -> bool:
+    return False
+
+  @staticmethod
+  def selected_model_name() -> str | None:
+    return None
+
+  @staticmethod
+  def active_model_name() -> str | None:
+    return None
+
+  @staticmethod
+  def shutdown(reason: str, timeout: float) -> None:
+    return None
 
 
 def _params():
@@ -127,21 +191,37 @@ def enabled() -> bool:
 
 # Accelerator Link, stored in LINK_PARAM as an index into LINK_MODES: off, a
 # Jetson or a Mac on USB, or an iPhone (iOS). The panels write the param; the
-# gadget follows once the car is parked. gadget is stdlib-only, so this import
-# costs the UI nothing
-from openpilot.sunnypilot.accelerators.jetlink.gadget import LINK_MODES, P_LINK as LINK_PARAM  # noqa: F401  re-exported
+# gadget follows once the car is parked. jetlink.comma.gadget is stdlib-only,
+# so this import costs the UI nothing. Without a jetlink checkout the panels
+# still build the setting, and it reads off
+try:
+  from jetlink.comma.gadget import LINK_MODES, P_LINK as LINK_PARAM  # re-exported
+except ModuleNotFoundError as e:
+  if not _is_jetlink(e):
+    raise
+  LINK_MODES, LINK_PARAM = ('off', 'usb', 'ios'), 'JetlinkLink'
 
 
 def link_mode() -> str:
   """The Accelerator Link setting, one of LINK_MODES. Read off the param files,
   so it never raises."""
-  from openpilot.sunnypilot.accelerators.jetlink import gadget
+  try:
+    from jetlink.comma import gadget
+  except ModuleNotFoundError as e:
+    if not _is_jetlink(e):
+      raise
+    return 'off'
   return gadget.link_mode()
 
 
 def link_transport() -> str:
   """What carries the link now, for the panels: USB, iOS over USB, or Ethernet."""
-  from openpilot.sunnypilot.accelerators.jetlink import helpers
+  try:
+    from openpilot.sunnypilot.accelerators.jetlink import helpers
+  except ModuleNotFoundError as e:
+    if not _is_jetlink(e):
+      raise
+    return "USB"
   return helpers.link_transport()
 
 

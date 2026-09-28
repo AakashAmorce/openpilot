@@ -11,12 +11,14 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
-from openpilot.sunnypilot.accelerators.jetlink import gadget, helpers
+from jetlink.comma import gadget
+
+from openpilot.sunnypilot.accelerators.jetlink import helpers
 
 
 class TestGadgetStatus(unittest.TestCase):
-  """The gadget is set up at boot, by root, from launch_chffrplus.sh. This file
-  is the only way the reason for a failure reaches anything a user can see."""
+  """The gadget is set up by root, from the owner through jetlink-root.sh. This
+  file is the only way the reason for a failure reaches anything a user can see."""
 
   def setUp(self):
     self.tmp = tempfile.mkdtemp()
@@ -52,69 +54,21 @@ class TestGadgetStatus(unittest.TestCase):
       assert helpers.gadget_error() is None
 
 
-class TestGadgetSetup(unittest.TestCase):
-  """jetlinkd creates the gadget when the link was turned on after boot."""
+class TestPackageInstalled(unittest.TestCase):
+  """The gadget itself is jetlink.comma's; whether the submodule is here is ours."""
 
   def setUp(self):
     self.tmp = Path(tempfile.mkdtemp())
-    script = self.tmp / 'jetlink_repo' / 'scripts' / 'setup_gadget.sh'
-    script.parent.mkdir(parents=True)
-    script.write_text('#!/bin/sh\n')
-    self.script = script
-    for name, value in (('repo_root', mock.Mock(return_value=self.tmp)), ('AGNOS', True)):
-      p = mock.patch.object(gadget, name, value)
-      self.addCleanup(p.stop)
-      p.start()
+    p = mock.patch.object(helpers, 'repo_root', mock.Mock(return_value=self.tmp))
+    self.addCleanup(p.stop)
+    p.start()
 
   def test_the_package_is_installed_when_the_submodule_is_checked_out(self):
     assert not helpers.package_installed()
     pkg = self.tmp / 'jetlink_repo' / 'jetlink'
-    pkg.mkdir()
+    pkg.mkdir(parents=True)
     (pkg / '__init__.py').write_text('')
     assert helpers.package_installed()
-
-  def test_only_agnos_with_the_script_can_set_one_up(self):
-    assert helpers.can_setup_gadget()
-    with mock.patch.object(gadget, 'AGNOS', False):
-      assert not helpers.can_setup_gadget()
-    self.script.unlink()
-    assert not helpers.can_setup_gadget()
-
-  def test_setup_runs_the_boot_script_as_root_and_reports_the_result(self):
-    with mock.patch.object(gadget.subprocess, 'run') as run, \
-         mock.patch.object(gadget, 'link_configured', return_value=True):
-      assert helpers.setup_gadget(False)
-    (argv,), kwargs = run.call_args
-    assert argv[:3] == ['sudo', '-n', 'bash'] and argv[3] == str(self.script)
-    assert kwargs['check'] and kwargs['timeout'] == helpers.GADGET_SETUP_TIMEOUT
-
-  def test_a_failed_script_is_a_false_not_a_raise(self):
-    # the script has already written the reason to the status file
-    with mock.patch.object(gadget.subprocess, 'run', side_effect=gadget.subprocess.CalledProcessError(1, 'bash')), \
-         mock.patch.object(helpers.cloudlog, 'exception') as log:
-      assert not helpers.setup_gadget(False)
-    assert log.call_count == 1
-
-  def test_the_network_is_brought_up_by_the_same_script_and_judged_by_its_status(self):
-    # usb0 exists only once the UDC is bound, so this runs after the owner's
-    # bind rather than at boot
-    status = self.tmp / 'net'
-    with mock.patch.object(gadget.subprocess, 'run') as run, mock.patch.object(gadget, 'NET_STATUS', status):
-      assert not helpers.net_up()          # the script wrote nothing
-      (argv,), kwargs = run.call_args
-      assert argv[:3] == ['sudo', '-n', 'bash'] and argv[3] == str(self.script) and argv[4:] == ['--net']
-      assert kwargs['check'] and kwargs['timeout'] == helpers.GADGET_SETUP_TIMEOUT
-      status.write_text('error: no usb0 yet\n')
-      assert not helpers.net_up()
-      status.write_text('ok 192.168.60.1\n')
-      assert helpers.net_up()
-    with mock.patch.object(gadget.subprocess, 'run', side_effect=gadget.subprocess.CalledProcessError(1, 'bash')), \
-         mock.patch.object(helpers.cloudlog, 'exception') as log:
-      assert not helpers.net_up()
-    assert log.call_count == 1
-    with mock.patch.object(gadget, 'AGNOS', False), mock.patch.object(gadget.subprocess, 'run') as run:
-      assert not helpers.net_up()
-      run.assert_not_called()
 
 
 class TestGadgetAlert(unittest.TestCase):

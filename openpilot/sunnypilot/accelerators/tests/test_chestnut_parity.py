@@ -15,9 +15,11 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from jetlink.comma import gadget
+
 from openpilot.selfdrive.selfdrived.events import big_model_failed_alert
 from openpilot.sunnypilot import accelerators
-from openpilot.sunnypilot.accelerators.jetlink import backend, gadget, helpers as jl_helpers
+from openpilot.sunnypilot.accelerators.jetlink import backend, helpers as jl_helpers
 from openpilot.sunnypilot.models import helpers
 from openpilot.sunnypilot.models.fetcher import ModelParser
 

@@ -250,7 +250,7 @@ class TestTiciModelsPanel:
     import tempfile
     from pathlib import Path
     from openpilot.selfdrive.ui.sunnypilot.accelerator_link import link_status
-    gadget = "openpilot.sunnypilot.accelerators.jetlink.gadget"
+    gadget = "jetlink.comma.gadget"
     record = Path(tempfile.mkdtemp()) / "link"
     with accelerator(installed=True, present=True), mock.patch(f"{gadget}.link_endpoint", return_value=None), \
          mock.patch(f"{gadget}.LINK", record), mock.patch(f"{gadget}.ios", return_value=False):
