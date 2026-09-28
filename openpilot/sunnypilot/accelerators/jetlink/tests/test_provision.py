@@ -4,11 +4,12 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of zoompilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 
-What jetlinkd does when the far end is attached but not serving.
+What a provisioning run does when the far end is attached but not serving.
 
 That is the expensive state, not the one where no Jetson is plugged in: the
-daemon has a host to talk to and keeps trying, so anything it repeats per
-attempt it repeats for as long as the car is parked.
+run has a host to talk to, and the owner starts another while the work is
+unfinished, so anything a run repeats it repeats for as long as the car is
+parked.
 """
 
 import json
@@ -22,7 +23,7 @@ from unittest import mock
 from jetlink.comma import gadget
 
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.sunnypilot.accelerators.jetlink import jetlinkd, provision
+from openpilot.sunnypilot.accelerators.jetlink import provision
 
 
 class FakeSpec:
@@ -93,16 +94,12 @@ class TestProvisionCost(OpenpilotTestCase):
     self.model.write_bytes(b'x' * 4096)
     self.cache = FakeSpecCache()
     self.hashed: list[str] = []
-
-    # the provisioning itself lives in provision.py, which jetlinkd and
-    # modeld's join thread both call; both modules' references are stood in for
-    for module in (jetlinkd, jetlinkd.provision):
-      for target, new in (('spec_cache', self.cache), ('accelerators', mock.Mock())):
-        p = mock.patch.object(module, target, new)
-        self.addCleanup(p.stop)
-        p.start()
+    for target, new in (('spec_cache', self.cache), ('accelerators', mock.Mock())):
+      p = mock.patch.object(provision, target, new)
+      self.addCleanup(p.stop)
+      p.start()
     for name, value in (('shipped_model_path', self.model), ('selected_model', dict(self.ENTRY))):
-      p = mock.patch.object(jetlinkd.helpers, name, return_value=value)
+      p = mock.patch.object(provision.helpers, name, return_value=value)
       self.addCleanup(p.stop)
       p.start()
     p = mock.patch.dict(sys.modules, fake_jetlink_spec_module(self.hashed))
@@ -110,17 +107,17 @@ class TestProvisionCost(OpenpilotTestCase):
     p.start()
 
   def test_the_identity_comes_from_the_registry_not_the_file(self):
-    d = jetlinkd.Jetlinkd()
+    d = provision.ProvisioningRun()
     d.client = serving_client()
     assert d.provision() is True
     args = d.client.ensure_engine.call_args.args
     assert args[0] == self.ENTRY['oid'] and args[1] == self.ENTRY['size']
 
   def test_a_model_asked_for_the_first_time_has_its_pointer_looked_up(self):
-    d = jetlinkd.Jetlinkd()
+    d = provision.ProvisioningRun()
     d.client = serving_client()
-    with mock.patch.object(jetlinkd.helpers, 'selected_model', return_value={**self.ENTRY, 'oid': None, 'size': None}), \
-         mock.patch.object(jetlinkd.helpers, 'resolve_pointer', return_value=('deadbeef', 4096)) as resolve:
+    with mock.patch.object(provision.helpers, 'selected_model', return_value={**self.ENTRY, 'oid': None, 'size': None}), \
+         mock.patch.object(provision.helpers, 'resolve_pointer', return_value=('deadbeef', 4096)) as resolve:
       assert d.provision() is True
     resolve.assert_called_once_with('f' * 40)
     args = d.client.ensure_engine.call_args.args
@@ -128,17 +125,17 @@ class TestProvisionCost(OpenpilotTestCase):
 
   def test_a_pointer_that_cannot_be_looked_up_is_a_failed_provision(self):
     # the ordinary failure path: logged, backed off, tried again next poll
-    d = jetlinkd.Jetlinkd()
+    d = provision.ProvisioningRun()
     d.client = serving_client()
-    with mock.patch.object(jetlinkd.helpers, 'selected_model', return_value={**self.ENTRY, 'oid': None, 'size': None}), \
-         mock.patch.object(jetlinkd.helpers, 'resolve_pointer', side_effect=OSError('offline')), \
+    with mock.patch.object(provision.helpers, 'selected_model', return_value={**self.ENTRY, 'oid': None, 'size': None}), \
+         mock.patch.object(provision.helpers, 'resolve_pointer', side_effect=OSError('offline')), \
          self.assertRaises(OSError):
       d.provision()
     d.client.ensure_engine.assert_not_called()
 
   def test_a_server_that_already_has_it_never_reads_the_file(self):
     # the steady state of a parked car: the 766 MB hash is not paid per retry
-    d = jetlinkd.Jetlinkd()
+    d = provision.ProvisioningRun()
     d.client = serving_client()
     d.client.ensure_engine.return_value = FakeSpec()
     for _ in range(3):
@@ -148,18 +145,18 @@ class TestProvisionCost(OpenpilotTestCase):
   def test_it_asks_even_with_no_model_on_disk(self):
     # The Jetson keeps its own copy of every ONNX and never prunes them, so a
     # comma that has deleted its own can still use an engine already built.
-    d = jetlinkd.Jetlinkd()
+    d = provision.ProvisioningRun()
     d.client = serving_client()
-    with mock.patch.object(jetlinkd.helpers, 'shipped_model_path', return_value=None):
+    with mock.patch.object(provision.helpers, 'shipped_model_path', return_value=None):
       assert d.provision() is True
     assert d.client.ensure_engine.call_args.kwargs['onnx_path'] is None
 
   def test_a_server_that_wants_the_bytes_gets_them_fetched(self):
     from jetlink.client import EngineMissing
-    d = jetlinkd.Jetlinkd()
+    d = provision.ProvisioningRun()
     d.client = serving_client()
     d.client.ensure_engine.side_effect = EngineMissing('no engine')
-    with mock.patch.object(jetlinkd.helpers, 'shipped_model_path', return_value=None), \
+    with mock.patch.object(provision.helpers, 'shipped_model_path', return_value=None), \
          mock.patch.object(d, 'fetch_model', return_value=self.model) as fetch:
       # False, not an exception: the download takes minutes and the link is
       # not held through it; the next poll tries again.
@@ -168,7 +165,7 @@ class TestProvisionCost(OpenpilotTestCase):
 
   def _wants_the_bytes(self):
     from jetlink.client import EngineMissing
-    d = jetlinkd.Jetlinkd()
+    d = provision.ProvisioningRun()
     d.client = serving_client()
     d.client.ensure_engine.side_effect = EngineMissing('no engine')
     return d, EngineMissing
@@ -178,7 +175,7 @@ class TestProvisionCost(OpenpilotTestCase):
     # answering: uploading under a sha the bytes do not have would leave the
     # Jetson with a plan whose name lies about its contents.
     d, EngineMissing = self._wants_the_bytes()
-    with mock.patch.object(jetlinkd.helpers, 'selected_model',
+    with mock.patch.object(provision.helpers, 'selected_model',
                            return_value={**self.ENTRY, 'oid': 'not-what-the-file-hashes-to'}), \
          self.assertRaises(EngineMissing):
       d.provision()
@@ -186,7 +183,7 @@ class TestProvisionCost(OpenpilotTestCase):
 
   def test_a_file_of_the_wrong_size_is_never_uploaded(self):
     d, EngineMissing = self._wants_the_bytes()
-    with mock.patch.object(jetlinkd.helpers, 'selected_model',
+    with mock.patch.object(provision.helpers, 'selected_model',
                            return_value={**self.ENTRY, 'size': 999999}), \
          self.assertRaises(EngineMissing):
       d.provision()
@@ -207,7 +204,7 @@ class TestProvisionCost(OpenpilotTestCase):
     # ready. A run provisions once and then exits, so the check is once a run
     # and there is no second call to skip
     self.cache.store(FakeSpec())
-    d = jetlinkd.Jetlinkd()
+    d = provision.ProvisioningRun()
     d.client = serving_client()
     assert d.provision() is True
     assert d.client.ensure_engine.call_count == 1
@@ -215,7 +212,7 @@ class TestProvisionCost(OpenpilotTestCase):
     assert self.cache.stores == 2 and self.cache.engine_ready_for('deadbeef')
 
   def test_the_shapes_come_from_the_server_not_the_file(self):
-    d = jetlinkd.Jetlinkd()
+    d = provision.ProvisioningRun()
     d.client = serving_client(FakeSpec(sha256='deadbeef', nbytes=1 << 20))
     assert d.provision() is True
     d.client.ensure_engine.assert_called_once()
@@ -228,7 +225,7 @@ class TestProvisionCost(OpenpilotTestCase):
     # away. The owner sends a stop at the onroad transition so modeld can take
     # the endpoints; the server's build thread carries on and modeld picks the
     # engine up over its own link
-    d = jetlinkd.Jetlinkd()
+    d = provision.ProvisioningRun()
     d.client = serving_client()
     d.provision()
     should_stop = d.client.ensure_engine.call_args.kwargs['should_stop']
@@ -241,20 +238,20 @@ class TestTheLoan(OpenpilotTestCase):
   """Only the owner that started this run holds ep0; the run borrows from it."""
 
   def test_no_loan_is_one_error_and_no_gadget_of_our_own(self):
-    d = jetlinkd.Jetlinkd()
-    with mock.patch.object(jetlinkd.lending, 'borrow', return_value=None), \
+    d = provision.ProvisioningRun()
+    with mock.patch.object(provision.lending, 'borrow', return_value=None), \
          mock.patch('jetlink.client.JetlinkClient') as client, \
-         mock.patch.object(jetlinkd.cloudlog, 'error') as error:
+         mock.patch.object(provision.cloudlog, 'error') as error:
       assert d.open_link() is False
     error.assert_called_once()
     assert client.method_calls == []
     assert d.client is None
 
   def test_a_loan_is_opened_over(self):
-    d = jetlinkd.Jetlinkd()
+    d = provision.ProvisioningRun()
     loan = mock.Mock(sock=None, mount='/dev/ffs-jetlink', udc='udc0')
-    with mock.patch.object(jetlinkd.lending, 'borrow', return_value=loan), \
-         mock.patch.object(jetlinkd.helpers, 'connect') as connect:
+    with mock.patch.object(provision.lending, 'borrow', return_value=loan), \
+         mock.patch.object(provision.helpers, 'connect') as connect:
       assert d.open_link() is True
     assert connect.call_args.args == (loan,)
     assert d.client is connect.return_value
@@ -266,7 +263,7 @@ class TestTheRun(OpenpilotTestCase):
 
   def setUp(self):
     self.tmp = Path(tempfile.mkdtemp())
-    p = mock.patch.object(jetlinkd, 'accelerators', mock.Mock())
+    p = mock.patch.object(provision, 'accelerators', mock.Mock())
     self.addCleanup(p.stop)
     p.start()
     p = mock.patch.object(gadget, 'STATE', self.tmp / 'state')
@@ -274,14 +271,14 @@ class TestTheRun(OpenpilotTestCase):
     p.start()
 
   def worker(self, work=True):
-    d = jetlinkd.Jetlinkd()
+    d = provision.ProvisioningRun()
     for name, value in (('has_work', work), ('open_link', True), ('provision', True)):
       p = mock.patch.object(d, name, mock.Mock(return_value=value))
       self.addCleanup(p.stop)
       p.start()
     for module, name, value in ((gadget, 'enabled', True),
                                 (gadget, 'pending_shutdown', None), (gadget, 'wait_for_host', True),
-                                (jetlinkd.warp_cache, 'built', True)):
+                                (provision.warp_cache, 'built', True)):
       p = mock.patch.object(module, name, mock.Mock(return_value=value))
       self.addCleanup(p.stop)
       p.start()
@@ -348,7 +345,7 @@ class TestTheRun(OpenpilotTestCase):
   def test_no_warp_for_this_camera_is_nothing_to_provision_for(self):
     # the engine could never run; waking the Jetson to build it changes nothing
     d = self.worker()
-    jetlinkd.warp_cache.built.return_value = False
+    provision.warp_cache.built.return_value = False
     assert d.run() is True
     d.open_link.assert_not_called()
     assert self.state()['unfinished'] is False

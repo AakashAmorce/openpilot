@@ -47,10 +47,10 @@ class TestTheShim(OpenpilotTestCase):
     found = set(json.loads(out.stdout))
     self.assertEqual(sorted(found & set(HEAVY)), [], 'everything the owner imports runs for the whole drive')
 
-  def test_it_hands_the_owner_jetlinkd(self):
+  def test_it_hands_the_owner_the_provisioning_run(self):
     with mock.patch.object(comma_owner, 'main') as main:
       owner.main()
-    main.assert_called_once_with([sys.executable, '-m', 'openpilot.sunnypilot.accelerators.jetlink.jetlinkd'],
+    main.assert_called_once_with([sys.executable, '-m', 'openpilot.sunnypilot.accelerators.jetlink.provision'],
                                  cwd=BASEDIR, env={'PYTHONPATH': BASEDIR})
     self.assertIsNotNone(importlib.util.find_spec(owner.WORKER))
 

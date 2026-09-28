@@ -11,8 +11,8 @@ JIT (#38684) has no warp to borrow, so compile_modeld.make_warp is JIT-compiled
 as a scons target by compile_warp.py; see accelerators/SConscript. A source
 build makes the one for its own camera, a prebuilt release one for every camera
 it installs on. Nothing compiles one at runtime: in modeld the ~9 s compile
-would hold back the first frame on every ignition, and in jetlinkd, which only
-runs offroad, it was lost to ignition. A device without one runs the small model.
+would hold back the first frame on every ignition, and in a provisioning run,
+which only runs offroad, it was lost to ignition. A device without one runs the small model.
 
 load_warp is what stands between a bad pickle and the car.
 """

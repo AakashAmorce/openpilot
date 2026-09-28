@@ -355,7 +355,7 @@ class JoiningModelState:
   def _report(self, stage: str, msg: str) -> None:
     """Tell the UI what the join is waiting on.
 
-    Offroad the param carries jetlinkd's provisioning; without this, a Jetson
+    Offroad the param carries a provisioning run's progress; without this, a Jetson
     that is not plugged in looked like one six seconds from loading. No
     fraction to give, and the panel does not invent one.
     """

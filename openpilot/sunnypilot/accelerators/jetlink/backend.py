@@ -7,7 +7,8 @@ See the LICENSE.md file in the root directory for more details.
 The accelerator backend: everything core openpilot calls, and nothing else.
 
 A module of functions behind sunnypilot.accelerators, the only thing core
-openpilot imports. Anything only jetlinkd needs lives in helpers or spec_cache.
+openpilot imports. Anything only a provisioning run needs lives in provision,
+helpers or spec_cache.
 The `jetlink` package can be absent on a device. This module stands on its
 comma layer, jetlink.comma, and does not import without it;
 sunnypilot.accelerators answers the negative defaults then.
@@ -33,10 +34,10 @@ CONNECT_TIMEOUT = 45.0
 CONNECT_DELAY = 0.5
 # ten frame periods; a dead server must not hold the frame thread for seconds
 INFERENCE_TIMEOUT = 0.5
-# how long the load may wait for the early gadget bind; jetlinkd may still be
-# letting go of the endpoints
+# how long the load may wait for the early gadget bind; a provisioning run may
+# still be letting go of the endpoints
 PRESENT_TIMEOUT = 5.0
-# how long hardwared waits for jetlinkd to shut the Jetson down. Wake from
+# how long hardwared waits for the owner's run to shut the Jetson down. Wake from
 # suspend is ~8 s to a server
 SHUTDOWN_TIMEOUT = 25.0
 
@@ -133,8 +134,8 @@ def _present_early(link: _Link) -> None:
 
   def present():
     _background_priority()
-    # retried: jetlinkd may still have the endpoints open from a provision it
-    # was in the middle of, and a single try fails in milliseconds
+    # retried: a provisioning run may still have the endpoints open, and a
+    # single try fails in milliseconds
     while True:
       try:
         client = link.open(deadline)
@@ -178,7 +179,7 @@ def _connect_patiently(link: _Link):
       raise TimeoutError(f"no jetson attached within {CONNECT_TIMEOUT:.0f}s")
     if time.monotonic() > deadline:
       # nothing is held here: this is a gadget we could not open at all,
-      # usually jetlinkd still finishing an exchange on the endpoints
+      # usually a provisioning run still finishing an exchange on the endpoints
       raise last if last is not None else TimeoutError("could not open the link")
     cloudlog.warning("jetlink: link not ready (%s), retrying", last)
     time.sleep(CONNECT_DELAY)
@@ -239,7 +240,7 @@ def _unavailable() -> str | None:
 
 
 def ready() -> bool:
-  # params only, no link IO: jetlinkd has already recorded the answer
+  # params only, no link IO: the provisioning has already recorded the answer
   if not enabled() or _unavailable() is not None:
     return False
   spec = spec_cache.load()
@@ -345,7 +346,7 @@ def _open_link(link: _Link, should_stop=None):
 
   The model the user picked is built here if the Jetson has not got it. That
   takes minutes and the small model drives through all of them, which beats
-  what it used to do: jetlinkd provisions offroad only, so a model picked in
+  what it used to do: a provisioning run works offroad only, so a model picked in
   the driveway and driven off on cost the whole drive, with the link never
   even presented. Only ever reached with the small model driving - the join
   loop stops asking once it has joined - so a build here never unloads an
@@ -361,7 +362,7 @@ def _open_link(link: _Link, should_stop=None):
   if selected is None:
     raise RuntimeError('no large model has been picked yet')
 
-  # the endpoints may still be held by jetlinkd, and the Jetson may still be
+  # the endpoints may still be held by a provisioning run, and the Jetson may still be
   # booting; both resolve on their own
   client = _connect_patiently(link)
   try:
@@ -374,7 +375,7 @@ def _open_link(link: _Link, should_stop=None):
       cloudlog.warning("jetlink: %s is not built yet, building it with the small model driving",
                        selected.get('name', sha256[:16]))
     try:
-      # normally one round trip, since jetlinkd left the engine loaded. A
+      # normally one round trip, since the provisioning run left the engine loaded. A
       # server that restarted reloads from the plan cache, 13 to 25 s; one
       # that has never seen this model builds it, 102 to 294 s
       spec = provision.ensure(client, sha256, nbytes, helpers.shipped_model_path(),

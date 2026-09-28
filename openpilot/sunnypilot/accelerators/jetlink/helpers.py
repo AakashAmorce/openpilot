@@ -33,8 +33,8 @@ from openpilot.sunnypilot.models.model_name import DEFAULT_BIG_MODEL_REF
 
 # One handle per params store. Constructing a Params costs 144 us on the comma
 # against 110 us for the read itself, so a fresh one per read more than doubles
-# every param this module touches, and jetlinkd touches several twice a second
-# for the whole time the car is parked. Keyed on the prefix because a test or a
+# every param this module touches, and the UI reads several five times a
+# second. Keyed on the prefix because a test or a
 # bench runs under its own store and must not be handed the device's.
 # jetlink.comma logs through a plain logger so the owner needs no swaglog; every
 # process that imports helpers is heavy already and wants its lines in the drive
@@ -64,7 +64,7 @@ def _get(key: str, default=None):
 
 
 def await_shutdown(timeout: float) -> bool:
-  """Wait for jetlinkd to take the request. False if nobody did in time."""
+  """Wait for the owner's run to take the request. False if nobody did in time."""
   deadline = time.monotonic() + timeout
   while time.monotonic() < deadline:
     if not gadget.SHUTDOWN_REQUEST.exists():

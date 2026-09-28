@@ -121,7 +121,7 @@ def _log():
   from openpilot.common.swaglog import cloudlog
   return cloudlog
 
-# written by jetlinkd and the joining state, read by the UI; a param because
+# written by the provisioning run and the joining state, read by the UI; a param because
 # the writer is another process
 P_PROGRESS = "AcceleratorProgress"
 # Each report is a file write, and the UI reads it at 5 Hz. An upload reports

@@ -18,7 +18,7 @@ from openpilot.sunnypilot.accelerators.jetlink import helpers
 
 class TestPresence(OpenpilotTestCase):
   """What the panels are told is on the other end, and hardwared's wait for
-  jetlinkd to take a shutdown request. The markers are jetlink.comma's."""
+  the owner's run to take a shutdown request. The markers are jetlink.comma's."""
 
   def setUp(self):
     self.tmp = Path(tempfile.mkdtemp())

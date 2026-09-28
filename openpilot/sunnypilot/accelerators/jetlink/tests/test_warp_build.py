@@ -107,7 +107,7 @@ class TestWarpTargets(OpenpilotTestCase):
 class TestOnlyTheBuildCompiles(OpenpilotTestCase):
   def test_no_runtime_module_imports_the_compiler(self):
     """compile_warp.py and compile_modeld are for scons. A runtime import would
-    bring the ~9 s compile back to modeld or jetlinkd, where it was lost to
+    bring the ~9 s compile back to modeld or a provisioning run, where it was lost to
     ignition."""
     pkg = Path(warp_cache.__file__).parent
     for path in sorted(pkg.glob('*.py')):

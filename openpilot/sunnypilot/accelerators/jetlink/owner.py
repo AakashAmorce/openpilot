@@ -9,7 +9,8 @@ The gadget owner, as manager runs it: jetlink.comma.owner, told which
 provisioning worker to start.
 
 The owner lives in jetlink with the rest of the comma's device layer and knows
-no openpilot module, so this names the worker, jetlinkd, and where it runs.
+no openpilot module, so this names the worker, a provisioning run
+(provision.py), and where it runs.
 It stays resident for the whole drive at about 10 MB, so nothing here may
 import swaglog, Params, numpy, capnp or zmq; tests/test_comma_layer.py holds
 the line.
@@ -22,7 +23,7 @@ from jetlink.comma import owner
 
 from openpilot.common.basedir import BASEDIR
 
-WORKER = 'openpilot.sunnypilot.accelerators.jetlink.jetlinkd'
+WORKER = 'openpilot.sunnypilot.accelerators.jetlink.provision'
 
 
 def main() -> None:

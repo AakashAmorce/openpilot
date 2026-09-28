@@ -6,12 +6,13 @@ See the LICENSE.md file in the root directory for more details.
 
 The selected model's spec, and whether its engine is built, in one param.
 
-Reading the shapes and output slices means parsing a 766 MB ONNX. jetlinkd does
-that once when it provisions; modeld reads the answer here and never touches
-the file. The record also says whether the server has built the engine for the
-sha it names, so the spec and the readiness can never name different models.
-Neither is CLEAR_ON_MANAGER_START: readiness must survive a reboot or every
-ignition rebuilds a 160 s engine.
+Reading the shapes and output slices means parsing a 766 MB ONNX. The server
+does that when it builds the engine and answers with the spec; provisioning
+keeps the answer here, and modeld reads it and never touches the file. The
+record also says whether the server has built the engine for the sha it names,
+so the spec and the readiness can never name different models. It is not
+CLEAR_ON_MANAGER_START: readiness must survive a reboot or every ignition
+rebuilds a 160 s engine.
 """
 from __future__ import annotations
 

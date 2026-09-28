@@ -98,7 +98,7 @@ class HoldingTheLink(ClockedTest):
     assert self.client.close.call_count == 0
 
   def test_a_gadget_that_will_not_open_is_still_reported(self):
-    # jetlinkd still finishing an exchange, or a gadget boot never created:
+    # a provisioning run still finishing an exchange, or a gadget boot never created:
     # there is no link to hold on to and the join loop should hear why
     self.link.client = None
     with mock.patch.object(backend.helpers, 'connect', side_effect=OSError('ep0 busy')):
@@ -228,7 +228,7 @@ class BorrowingTheGadget(OpenpilotTestCase):
 class BuildingOnroad(OpenpilotTestCase):
   """The picked model is built with the small model driving.
 
-  jetlinkd provisions offroad only, so a model picked in the driveway and
+  a provisioning run works offroad only, so a model picked in the driveway and
   driven off on used to cost the whole drive: modeld would not even present
   the gadget, and the panel said a device was on the USB port.
   """
