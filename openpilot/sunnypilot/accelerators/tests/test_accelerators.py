@@ -117,22 +117,26 @@ class SelectionTest(unittest.TestCase):
 
 class LenderFailureTest(unittest.TestCase):
   """Only the owner holds ep0. When its lender cannot listen it keeps the
-  gadget, retries, and says why in the gadget status: that line is the
-  offroad alert, and modeld is not prepared while it stands."""
+  gadget, retries, and records why: that line is the offroad alert. modeld
+  still prepares, so its join picks the link up once the lender listens."""
 
-  def test_the_owners_error_line_is_the_alert_and_a_no(self):
-    status = Path(tempfile.mkdtemp()) / 'jetlink-gadget'
-    status.write_text('error: the lender could not listen: address in use\n')
-    with mock.patch.object(gadget, 'GADGET_STATUS', status), \
+  def test_the_owners_lender_error_is_the_alert_not_a_no(self):
+    tmp = Path(tempfile.mkdtemp())
+    built = tmp / 'jetlink-gadget'
+    built.write_text('ok\n')
+    self.addCleanup(setattr, backend, '_prepared', False)
+    with mock.patch.object(gadget, 'GADGET_STATUS', built), \
+         mock.patch.object(gadget, 'LENDER_STATUS', tmp / 'jetlink-lender'), \
+         mock.patch.object(gadget, 'link_configured', return_value=True), \
          mock.patch.object(backend, 'enabled', return_value=True), \
          mock.patch.object(backend.warp_cache, 'built', return_value=True), \
-         mock.patch.object(backend.warp_cache, 'init_device') as init_device:
+         mock.patch.object(backend.warp_cache, 'init_device'):
+      gadget.note_lender_error('address in use')
       self.assertEqual(accelerators.unavailable_reason(), 'the lender could not listen: address in use')
       self.assertFalse(accelerators.ready())
-      self.assertFalse(accelerators.prepare())
-      init_device.assert_not_called()
+      self.assertTrue(accelerators.prepare())
       # cleared once the lender listens again
-      status.write_text('ok\n')
+      gadget.note_lender_error(None)
       self.assertIsNone(accelerators.unavailable_reason())
 
 
