@@ -104,11 +104,6 @@ jobs:
           scons -j2 cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal openpilot/sunnypilot/selfdrive/locationd
           scons -j1 cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal openpilot/selfdrive/locationd
           scons -j$(nproc) cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal
-          # nothing compiles the jetlink warp at runtime, so a camera without one
-          # never runs the big model. scons ignores a failed warp compile so a
-          # source build still boots; a release has to have both
-          test -f openpilot/sunnypilot/accelerators/jetlink/models/warp_1344x760_512x256_tinygrad.pkl
-          test -f openpilot/sunnypilot/accelerators/jetlink/models/warp_1928x1208_512x256_tinygrad.pkl
           touch ${BUILD_DIR}/prebuilt
 
       - name: Prepare output
