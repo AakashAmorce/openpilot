@@ -213,7 +213,7 @@ class Jetlinkd:
       if not self.open_link():
         raise RuntimeError("could not open the link")
       if not gadget.wait_for_host(WAKE_TIMEOUT, bounce=self.bounce,
-                                   should_stop=lambda: self.stop):
+                                  should_stop=lambda: self.stop):
         raise TimeoutError(f"no jetson attached within {WAKE_TIMEOUT:.0f} s")
       resp = self.client.shutdown(reason, timeout=5.0)
       cloudlog.warning("jetlink: jetson answered the shutdown request: %s", resp)
@@ -281,7 +281,7 @@ class Jetlinkd:
       if not self.open_link():
         return False
       if not gadget.wait_for_host(WAKE_TIMEOUT, bounce=self.bounce,
-                                   should_stop=lambda: self.stop):
+                                  should_stop=lambda: self.stop):
         cloudlog.warning("jetlink: no jetson within %.0f s, leaving it for the next run", WAKE_TIMEOUT)
         return False
       finished = self.provision()

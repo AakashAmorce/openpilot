@@ -173,10 +173,10 @@ def _connect_patiently(link: _Link):
     except Exception as e:
       client, last = None, e
     if client is not None:
-      # over TCP wait_for_host returns at once and a TCP client's rebind is a
-      # no-op, so the phone's network interface is never bounced
+      # over a phone's cable wait_for_host returns at once and a TCP client's
+      # rebind is a no-op, so its network interface is never bounced
       if gadget.wait_for_host(max(0.0, deadline - time.monotonic()), bounce=client.rebind,
-                               report=_waiting_for_the_jetson):
+                              report=_waiting_for_the_jetson):
         return client
       # the link stays on `link`, still bound, for the next attempt
       raise TimeoutError(f"no jetson attached within {CONNECT_TIMEOUT:.0f}s")
@@ -399,10 +399,11 @@ def _open_link(link: _Link, should_stop=None):
 
 def extends_catalog() -> bool:
   """Whether big_catalog folds the newer catalogs in: with jetlink installed,
-  which importing this module is, and no chestnut fitted. Not the link toggle. The model manager validates the
-  big-model pick against this catalog and drops a pick it does not list, so a
-  catalog that followed the toggle lost a pick only newer catalogs carry on
-  every boot with the link off. A chestnut sees sunnypilot's list as fetched."""
+  which this module importing at all says, and no chestnut fitted. Not the
+  link toggle. The model manager validates the big-model pick against this
+  catalog and drops a pick it does not list, so a catalog that followed the
+  toggle lost a pick only newer catalogs carry on every boot with the link
+  off. A chestnut sees sunnypilot's list as fetched."""
   return not _chestnut_fitted()
 
 
