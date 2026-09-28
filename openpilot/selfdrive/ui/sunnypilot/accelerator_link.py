@@ -5,9 +5,10 @@ This file is part of zoompilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 
 The user's say over the accelerator link, shared by the mici and tici models panels:
-Off, USB (a Jetson or a Mac) or iOS (an iPhone), through the accelerators API. The
-small model is picked as ever: manager runs whichever modeld that bundle needs and
-the accelerator joins it, so the setting never changes which modeld runs.
+Off, USB (a Jetson, a Linux PC or a Mac) or iOS (an iPhone), through the
+accelerators API. The small model is picked as ever: manager runs whichever modeld
+that bundle needs and the accelerator joins it, so the setting never changes which
+modeld runs.
 """
 from openpilot.common.hardware.usb import TYPEC_CC_ORIENTATION_PATH, read
 from openpilot.selfdrive.ui.ui_state import ui_state

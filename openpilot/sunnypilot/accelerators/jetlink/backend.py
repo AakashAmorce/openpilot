@@ -209,8 +209,8 @@ def link_mode() -> str:
 
 def link_transport() -> str:
   """What carries the link, for the panels: the gadget the owner built, a
-  Jetson or a Mac on the vendor interface or an iPhone dialed in over the
-  network interface. Never raises: the panels read it on their tick."""
+  Jetson, a Linux PC or a Mac on the vendor interface or an iPhone dialed in
+  over the network interface. Never raises: the panels read it on their tick."""
   try:
     if gadget.link_kind() == 'cable':
       peer = gadget.link_peer()

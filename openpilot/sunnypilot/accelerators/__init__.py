@@ -196,7 +196,7 @@ def enabled() -> bool:
 
 
 # Accelerator Link, stored in LINK_PARAM as an index into LINK_MODES: off, a
-# Jetson or a Mac on USB, or an iPhone (iOS). The panels write the param; the
+# Jetson, a Linux PC or a Mac on USB, or an iPhone (iOS). The panels write the param; the
 # gadget follows once the car is parked. jetlink.comma.gadget's LINK_MODES and
 # P_LINK, written out so the panels can build the setting at import without a
 # jetlink checkout; test_comma_layer holds the two equal

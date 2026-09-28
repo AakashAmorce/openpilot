@@ -249,7 +249,7 @@ class TestTiciModelsPanel(UITest):
       assert layout.accelerator_link_item.description.endswith("iOS for an iPhone.")
 
   def test_the_status_names_the_transport(self):
-    # the setting names the host: USB for a Jetson or a Mac, iOS for a phone
+    # the setting names the host: USB for a Jetson, a Linux PC or a Mac, iOS for a phone
     # dialed in over the gadget's network interface
     import tempfile
     from pathlib import Path
