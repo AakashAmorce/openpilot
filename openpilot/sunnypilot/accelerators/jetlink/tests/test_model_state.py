@@ -45,10 +45,11 @@ def spec_for(inputs: dict) -> ModelSpec:
 
 
 class FakeClient:
-  def __init__(self):
+  def __init__(self, kind: str = 'usb'):
     self.sent = []
     self.last_timings = (0, 0, 0)
-    self.t = SimpleNamespace()
+    # what the transport tells the server's hello: 'usb', or 'cable' for a phone
+    self.t = SimpleNamespace(link_info=lambda: {'kind': kind})
     self.output = np.zeros(18452, np.float32)
     self.output[slice(*SLICES['hidden_state'])] = 0.5
 
@@ -94,23 +95,33 @@ class TestWire(unittest.TestCase):
   def test_over_the_cable_the_frame_goes_out_of_the_gpu_mapping(self):
     # the socket copies the mapping while the first segments are on the wire;
     # no host copy first
-    client = FakeClient()
+    client = FakeClient('cable')
     spec = spec_for(STATEFUL)
     frame = np.arange(np.prod(spec.warped_shape), dtype=np.uint64).astype(np.uint8)
     mapping = SimpleNamespace(as_memoryview=mock.Mock(return_value=memoryview(frame)))
     warp_output = SimpleNamespace(data=mock.Mock(side_effect=AssertionError('copied on the host')),
                                   _buffer=lambda: mapping)
-    with mock.patch.object(model_state.gadget, 'link_kind', return_value='cable'):
-      _, state, client, _ = self.run_frames(STATEFUL, client=client, warp_output=warp_output)
+    _, state, client, _ = self.run_frames(STATEFUL, client=client, warp_output=warp_output)
     self.assertTrue(state.send_from_gpu)
     mapping.as_memoryview.assert_called_with(allow_zero_copy=True)
     for data, *_ in client.sent:
       np.testing.assert_array_equal(data, frame)
 
   def test_usb_keeps_the_host_copy(self):
-    with mock.patch.object(model_state.gadget, 'link_kind', return_value='usb'):
-      _, state, _, _ = self.run_frames(STATEFUL)
+    _, state, _, _ = self.run_frames(STATEFUL)
     self.assertFalse(state.send_from_gpu)
+
+  def test_the_cable_is_a_phone_s_socket_as_the_transport_says(self):
+    from jetlink.transport.tcp import CABLE_ADDRESS, TcpTransport
+    for local, cable in ((CABLE_ADDRESS, True), ('10.0.0.2', False)):
+      with self.subTest(local=local):
+        sock = mock.Mock()
+        sock.getsockname.return_value = (local, 5599)
+        sock.getpeername.return_value = ('192.168.60.3', 50000)
+        client = FakeClient()
+        client.t = TcpTransport(sock)
+        state = model_state.JetlinkModelState(1928, 1208, client, spec_for(STATEFUL), warp=object())
+        self.assertEqual(state.send_from_gpu, cable)
 
   def test_a_queued_model_still_sends_the_hidden_state_back(self):
     spec, state, client, _ = self.run_frames(QUEUED)

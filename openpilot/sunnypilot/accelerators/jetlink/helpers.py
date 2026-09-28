@@ -110,23 +110,23 @@ def connect(deadline: float | None = None, name: str | None = None, loan=None):
   frame the way it blocks on a chestnut. `name` is what the server logs this
   connection as; two comma processes share one gadget and the Jetson's journal
   has no clock to tell them apart by. With a `loan`, jetlinkd owns the gadget
-  and this end only opens the endpoint files: see jetlink.comma.lending. A
-  loan that carries a socket is a phone's dial, and the link rides on that
-  instead.
+  and has decided which link this is (see jetlink.comma.lending): a phone's
+  dial, which the link rides on, or the endpoint files, which are all this
+  end opens.
   """
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
   deadline = FRAME_TIMEOUT if deadline is None else deadline
-  if loan is not None and loan.sock is not None:
-    cloudlog.warning("jetlink: connecting over the phone's dial (%s)", gadget.link_peer())
-    return JetlinkClient.open_socket(loan.sock, deadline=deadline, name=name)
-  if gadget.link_kind() == 'cable':
-    # iOS: the endpoint files are never the link, whoever holds them; a phone
-    # does not read them, and a hello there blocks 15 s
-    from jetlink.transport.base import LinkError
-    raise LinkError("waiting for the phone to dial")
   if loan is not None:
+    if loan.sock is not None:
+      cloudlog.warning("jetlink: connecting over the phone's dial (%s)", gadget.link_peer())
+      return JetlinkClient.open_socket(loan.sock, deadline=deadline, name=name)
     return JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce,
                                            deadline=deadline, name=name)
+  if gadget.ios():
+    # nobody to lend: a phone dials the owner, and never reads the endpoint
+    # files; a hello there blocks 15 s
+    from jetlink.transport.base import LinkError
+    raise LinkError("no owner to take the phone's dial")
   # the comma is the gadget and the Jetson the host; see gadget_present()
   return JetlinkClient.open_ffs(str(gadget.FFS_MOUNT), gadget=str(gadget.GADGET_PATH), deadline=deadline, name=name)
 

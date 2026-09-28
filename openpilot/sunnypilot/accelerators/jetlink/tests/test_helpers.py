@@ -70,15 +70,22 @@ class TestConnect(unittest.TestCase):
     self.addCleanup(mock.patch.stopall)
     self.ios = mock.patch.object(gadget, 'ios', return_value=False).start()
 
-  def test_ios_never_opens_the_endpoint_files(self):
-    # a phone does not read them, and a hello there blocks 15 s
+  def test_ios_without_an_owner_never_opens_the_endpoint_files(self):
+    # nobody to lend is nobody who took the phone's dial, and a phone does not
+    # read the endpoint files: a hello there blocks 15 s
     from jetlink.transport.base import LinkError
     self.ios.return_value = True
-    for loan in (None, mock.Mock(sock=None, mount='/dev/ffs-jetlink', udc='udc0')):
-      with self.assertRaises(LinkError):
-        helpers.connect(loan=loan)
+    with self.assertRaises(LinkError):
+      helpers.connect(loan=None)
     self.client.open_ffs.assert_not_called()
-    self.client.open_borrowed_ffs.assert_not_called()
+
+  def test_the_loan_decides_whatever_the_link_record_says(self):
+    # the owner decided once, when it lent; the record is for the panels
+    loan = mock.Mock(sock=None, mount='/dev/ffs-jetlink', udc='udc0')
+    with mock.patch.object(gadget, 'link_kind', return_value='cable') as kind:
+      helpers.connect(loan=loan)
+    self.client.open_borrowed_ffs.assert_called_once()
+    kind.assert_not_called()
 
   def test_a_loan_with_a_dial_is_opened_over_the_socket(self):
     sock = mock.Mock(name='sock')

@@ -32,8 +32,6 @@ from tinygrad.tensor import Tensor
 
 from msgq.visionipc import VisionBuf
 
-from jetlink.comma import gadget
-
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS, LONG_SMOOTH_SECONDS, get_action_from_model
@@ -72,8 +70,9 @@ class JetlinkModelState(ModelStateBase):
     # kernel copies it while the first segments are already on the wire, where
     # copying it here first held the send back 2.5 ms. On the Mac stand-in the
     # comma's side of a frame was 0.6 ms faster at p50 and 2 ms at p99. USB
-    # keeps the host copy it was measured with.
-    self.send_from_gpu = gadget.link_kind() == 'cable'
+    # keeps the host copy it was measured with. The client's transport says
+    # which, as the owner lent it
+    self.send_from_gpu = client.t.link_info().get('kind') == 'cable'
     # not chestnut hardware, but the same role: modelV2.big, the UI and the
     # model manager key off this flag
     self.chestnut = True
