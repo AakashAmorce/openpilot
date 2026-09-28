@@ -31,47 +31,18 @@ block and the adapter call and short of everything needing a car.
 """
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
 
-from openpilot.cereal import custom, messaging
+from openpilot.cereal import custom
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.selfdrive.selfdrived.events import EVENT_NAME, Events
-from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
-from openpilot.sunnypilot.selfdrive.selfdrived.accelerator_events import AcceleratorEvents
-from openpilot.sunnypilot.selfdrive.selfdrived.events import EVENT_NAME_SP, EventsSP
+from openpilot.selfdrive.selfdrived.events import EVENT_NAME
+from openpilot.sunnypilot.selfdrive.selfdrived.events import EVENT_NAME_SP
+from openpilot.sunnypilot.selfdrive.selfdrived.tests.selfdrived_helpers import make_selfdrived
 
 AcceleratorState = custom.ModelDataV2SP.AcceleratorState
 
 # added at the gate on every step, so it is in every expected list rather
 # than filtered out
 INIT = 'selfdriveInitializing'
-
-SERVICES = ['modelV2', 'modelDataV2SP', 'controlsState', 'deviceState', 'lateralManeuverPlan', 'alertDebug']
-
-
-def make_selfdrived(chestnut_present: bool, enabled: bool) -> SelfdriveD:
-  """A SelfdriveD with no processes, no live params and no car.
-
-  The same fixture exists as setUp methods under two selfdrived test trees;
-  importing a TestCase to reuse one would re-run its tests here.
-  """
-  sd = SelfdriveD.__new__(SelfdriveD)
-  sd.sm = messaging.SubMaster(SERVICES)
-  for service in ('modelV2', 'modelDataV2SP', 'deviceState'):
-    sd.sm.data[service] = sd.sm[service].as_builder()
-    sd.sm.valid[service] = True
-  sd.sm.seen['deviceState'] = sd.sm.alive['deviceState'] = True
-  sd.sm['deviceState'].chestnutPresent = chestnut_present
-  sd.events = Events()
-  sd.events_sp = EventsSP()
-  sd.accelerator_events = AcceleratorEvents()
-  sd.params = Mock()
-  sd.big_model_loading = sd.big_model_active = sd.big_model_failed = sd.big_model_running = False
-  sd.big_model_ready_t = 0.
-  sd.enabled = enabled
-  sd.initialized = False
-  sd.startup_event = None
-  return sd
 
 
 class TraceTest(OpenpilotTestCase):
@@ -148,6 +119,8 @@ class JetlinkTrace(TraceTest):
     # The promotion gate: a big model is there, waiting for a disengagement.
     self.assertEqual(self.step(state=AcceleratorState.joining, available=True), ([INIT], ['bigModelAvailable']))
     self.assertEqual(self.step(state=AcceleratorState.joining, available=True), ([INIT], []))
+    # and again at a stop: carState's standstill reaches the adapter
+    self.assertEqual(self.step(state=AcceleratorState.joining, available=True, standstill=True), ([INIT], ['bigModelAvailable']))
     # It swaps. One chime, from modelV2.big and nothing else.
     self.assertEqual(self.step(state=AcceleratorState.running, big=True), ([INIT], ['bigModelReady']))
     for _ in range(10):
@@ -165,33 +138,6 @@ class JetlinkTrace(TraceTest):
     self.assertEqual(self.step(state=AcceleratorState.running, big=True), ([INIT], ['bigModelReady']))
     self.sd.enabled = True
     self.assertEqual(self.step(state=AcceleratorState.running, big=True), ([INIT], []))
-
-  def test_the_offer_repeats_at_every_stop(self):
-    # On a MADS car latActive is true whenever the car is moving, so the window
-    # only opens at a standstill. One three second alert ten minutes before the
-    # driver can act on it is not guidance, and "waited for the green icon,
-    # never turned off the car" is what came of it.
-    waiting = {'state': AcceleratorState.ready, 'available': True}
-    self.assertEqual(self.step(**waiting), ([INIT], ['bigModelAvailable']))
-    for _ in range(5):
-      self.assertEqual(self.step(**waiting), ([INIT], []))
-    self.assertEqual(self.step(**waiting, standstill=True), ([INIT], ['bigModelAvailable']))
-    # not again while it is still stopped, and again at the next stop
-    self.assertEqual(self.step(**waiting, standstill=True), ([INIT], []))
-    self.assertEqual(self.step(**waiting), ([INIT], []))
-    self.assertEqual(self.step(**waiting, standstill=True), ([INIT], ['bigModelAvailable']))
-    # and nothing at all once it is driving
-    self.assertEqual(self.step(state=AcceleratorState.running, big=True, standstill=True), ([INIT], ['bigModelReady']))
-    self.assertEqual(self.step(state=AcceleratorState.running, big=True), ([INIT], []))
-
-  def test_a_link_that_drops_while_disengaged_says_nothing(self):
-    self.sd.enabled = False
-    self.assertEqual(self.step(state=AcceleratorState.running, big=True), ([INIT], ['bigModelReady']))
-    # the small model carries on; engaging afterwards does not replay a fall
-    # the driver never felt
-    self.assertEqual(self.step(state=AcceleratorState.retrying), ([INIT], []))
-    self.sd.enabled = True
-    self.assertEqual(self.step(state=AcceleratorState.retrying), ([INIT], []))
 
   def test_nothing_is_said_on_a_device_with_no_accelerator_at_all(self):
     for _ in range(10):

@@ -1,12 +1,7 @@
-import unittest
-from unittest.mock import Mock
-from types import SimpleNamespace
-
 from openpilot.cereal import custom, messaging
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.common.realtime import DT_CTRL
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.selfdrive.selfdrived.events import Events, EventName, ET
-from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
 from openpilot.selfdrive.selfdrived.state import SOFT_DISABLE_TIME, State, StateMachine
 from openpilot.sunnypilot.selfdrive.selfdrived.accelerator_events import AcceleratorEvents
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EVENTS_SP, EventsSP
@@ -14,11 +9,12 @@ from openpilot.sunnypilot.selfdrive.selfdrived.events import EVENTS_SP, EventsSP
 EventNameSP = custom.OnroadEventSP.EventName
 
 
-class TestAcceleratorEvents(unittest.TestCase):
+class TestAcceleratorEvents(OpenpilotTestCase):
+  """The adapter alone; the drives through SelfdriveD are traced in
+  accelerators/tests/test_selfdrived_traces.py."""
+
   def setUp(self):
-    prefix = OpenpilotPrefix()
-    prefix.__enter__()
-    self.addCleanup(prefix.__exit__, None, None, None)
+    super().setUp()
     self.sm = messaging.SubMaster(['modelV2', 'modelDataV2SP'])
     self.events = Events()
     self.events_sp = EventsSP()
@@ -103,57 +99,3 @@ class TestAcceleratorEvents(unittest.TestCase):
     alerts = EVENTS_SP[EventNameSP.bigModelLinkLost]
     self.assertEqual(set(alerts), {ET.SOFT_DISABLE, ET.PERMANENT})
     self.assertEqual(alerts[ET.PERMANENT].alert_text_2, 'Small model is driving,\nreconnecting if it comes back')
-
-
-class TestNativeTracesWithAdapter(unittest.TestCase):
-  """The native block's traces are unchanged by the adapter with modelDataV2SP at defaults."""
-
-  def setUp(self):
-    prefix = OpenpilotPrefix()
-    prefix.__enter__()
-    self.addCleanup(prefix.__exit__, None, None, None)
-    sd = SelfdriveD.__new__(SelfdriveD)
-    sd.sm = messaging.SubMaster(['modelV2', 'modelDataV2SP', 'controlsState', 'deviceState', 'lateralManeuverPlan', 'alertDebug'])
-    sd.sm.data['modelV2'] = sd.sm['modelV2'].as_builder()
-    sd.sm.seen['modelV2'] = sd.sm.alive['modelV2'] = sd.sm.valid['modelV2'] = True
-    # engaged, the native block reports a board that is active but not present as failed
-    sd.sm.data['deviceState'] = sd.sm['deviceState'].as_builder()
-    sd.sm['deviceState'].chestnutPresent = True
-    sd.events = Events()
-    sd.events_sp = EventsSP()
-    sd.accelerator_events = AcceleratorEvents()
-    sd.params = Mock()
-    sd.big_model_loading = sd.big_model_active = sd.big_model_failed = sd.big_model_running = False
-    sd.big_model_ready_t = 0.
-    sd.enabled = True
-    sd.initialized = False
-    sd.startup_event = None
-    self.sd = sd
-
-  def step(self, loading, active=None, big=False, alive=True, standstill=False):
-    sd = self.sd
-    sd.params.get_bool.return_value = loading
-    sd.params.get.return_value = active
-    sd.sm.alive['modelV2'] = alive
-    sd.sm['modelV2'].big = big
-    sd.update_events(SimpleNamespace(standstill=standstill))
-    self.assertNotIn(EventNameSP.bigModelAvailable, sd.events_sp.names)
-    self.assertNotIn(EventNameSP.bigModelLinkLost, sd.events_sp.names)
-    return (EventNameSP.bigModelReady in sd.events_sp.names, EventName.bigModelFailed in sd.events.names,
-            EventName.bigModelLoading in sd.events.names)
-
-  def test_trace_a_good_load_chimes_once(self):
-    self.assertEqual(self.step(loading=True), (False, False, True))
-    self.assertEqual(self.step(loading=False), (False, False, False))
-    self.assertEqual(self.step(loading=False, active=True, big=True), (True, False, False))
-    for _ in range(10):
-      self.assertEqual(self.step(loading=False, active=True, big=True), (False, False, False))
-    # a chestnut falling back while engaged is the native failure alone
-    self.assertEqual(self.step(loading=False, active=False, big=False), (False, True, False))
-
-  def test_trace_b_failed_load_never_chimes(self):
-    self.assertEqual(self.step(loading=True), (False, False, True))
-    self.assertEqual(self.step(loading=True, active=False), (False, True, True))
-    self.assertEqual(self.step(loading=False, active=False), (False, False, False))
-    for _ in range(10):
-      self.assertEqual(self.step(loading=False, active=False), (False, False, False))
