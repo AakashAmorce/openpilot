@@ -215,13 +215,14 @@ class Owner:
     return self.build(gadget.ios())
 
   def build(self, ios: bool) -> bool:
-    """Set the gadget up for USB or iOS, on a backoff: the script is sudo,
-    configfs and for iOS the network."""
+    """Set the gadget up for USB or iOS. A failure backs off, since the script
+    is sudo, configfs and for iOS the network; a success does not, or a switch
+    just after a build would wait out the backoff."""
     now = time.monotonic()
     if now < self.next_gadget_attempt:
       return False
-    self.next_gadget_attempt = now + GADGET_SETUP_BACKOFF
     if not gadget.setup_gadget(ios):
+      self.next_gadget_attempt = now + GADGET_SETUP_BACKOFF
       return False
     self.built_ios = ios
     self.publish()
@@ -515,6 +516,8 @@ class Owner:
     ios = gadget.ios()
     if ios == self.built_ios:
       return False
+    if time.monotonic() < self.next_gadget_attempt:
+      return True   # the last rebuild failed; build() says when to try again
     gadget.log.warning("jetlink: Accelerator Link is now %s, rebuilding the gadget", 'iOS' if ios else 'USB')
     self.close_link()
     self.dialed = False

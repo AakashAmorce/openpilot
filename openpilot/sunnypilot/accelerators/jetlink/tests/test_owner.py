@@ -655,6 +655,17 @@ class TestSwitchingMode(OwnerTest):
     self.assertEqual(gadget.link_kind(), 'cable')
     self.setup_gadget.assert_not_called()
 
+  def test_a_switch_just_after_a_build_is_not_held_back(self):
+    # the bench: a switch a minute after the last one waited out a backoff
+    # that only a failed build should set, and logged every step meanwhile
+    o = self.switched()
+    o.step()
+    self.assertTrue(o.built_ios)
+    self.write('JetlinkIOS', b'0')
+    o.step()
+    self.assertFalse(o.built_ios)
+    self.assertEqual(self.setup_gadget.call_count, 2)
+
   def test_a_failed_rebuild_is_retried_after_a_backoff(self):
     self.setup_gadget.return_value = False
     o = self.switched()
