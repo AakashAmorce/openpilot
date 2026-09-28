@@ -99,3 +99,13 @@ class TestAcceleratorEvents(OpenpilotTestCase):
     alerts = EVENTS_SP[EventNameSP.bigModelLinkLost]
     self.assertEqual(set(alerts), {ET.SOFT_DISABLE, ET.PERMANENT})
     self.assertEqual(alerts[ET.PERMANENT].alert_text_2, 'Small model is driving,\nreconnecting if it comes back')
+
+
+class TestOptionalProcesses(OpenpilotTestCase):
+  def test_a_dead_link_owner_never_blocks_engagement(self):
+    # manager does not restart a process that died, and selfdrived's
+    # processNotRunning is NO_ENTRY: the accelerator's daemon has to be one
+    # selfdrived ignores, or losing it costs the drive instead of the big model
+    from openpilot.sunnypilot import accelerators
+    self.assertEqual(AcceleratorEvents.OPTIONAL_PROCESSES, {d.name for d in accelerators.daemons()})
+    self.assertIn('jetlinkd', AcceleratorEvents.OPTIONAL_PROCESSES)
