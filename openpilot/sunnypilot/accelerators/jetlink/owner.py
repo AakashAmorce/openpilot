@@ -25,12 +25,8 @@ from openpilot.common.basedir import BASEDIR
 WORKER = 'openpilot.sunnypilot.accelerators.jetlink.jetlinkd'
 
 
-def worker_argv() -> list[str]:
-  return [sys.executable, '-m', WORKER]
-
-
 def main() -> None:
-  owner.main(worker_argv(), cwd=BASEDIR, env={'PYTHONPATH': BASEDIR})
+  owner.main([sys.executable, '-m', WORKER], cwd=BASEDIR, env={'PYTHONPATH': BASEDIR})
 
 
 if __name__ == "__main__":
