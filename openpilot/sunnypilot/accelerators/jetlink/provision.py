@@ -248,7 +248,7 @@ class ProvisioningRun:
 
     cloudlog.warning("jetlink: provisioning %s (%d MB, sha %s)",
                      entry.get('name', sha256[:16]), nbytes >> 20, sha256[:16])
-    accelerators.report_progress('connect', 0.0, 'talking to the jetson')
+    accelerators.report_progress('connect', 0.0, 'talking to the accelerator')
 
     hello = self.client.hello(timeout=10.0)
     self.note_sleep_after(hello)

@@ -57,7 +57,7 @@ def big_model_state() -> str | None:
 
 def big_model_progress() -> tuple[str, float, str] | None:
   """(stage, 0..1, message) while an accelerator is working, else None. The message
-  is carried because a stage like "waiting for the jetson" has no meaningful fraction"""
+  is carried because a stage like "waiting for the accelerator" has no meaningful fraction"""
   progress = getattr(ui_state, 'accelerator_progress', None)
   if not progress:
     return None
