@@ -30,9 +30,6 @@ from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.models.model_name import DEFAULT_BIG_MODEL_REF
 
-# none of these are CLEAR_ON_MANAGER_START: readiness must survive a reboot or
-# every ignition rebuilds a 160 s engine
-
 
 # One handle per params store. Constructing a Params costs 144 us on the comma
 # against 110 us for the read itself, so a fresh one per read more than doubles
@@ -311,19 +308,3 @@ def fetch_shipped_model(progress=None, should_stop=None) -> Path | None:
     cloudlog.warning("jetlink: fetching the large model (%d MB) from %s", pointer.size >> 20, endpoint)
     return lfs_download(href, pointer, dest, progress=progress, should_stop=should_stop)
   raise NetworkError(f"no LFS server has {pointer.oid[:16]}")
-
-
-# -- readiness ------------------------------------------------------------
-
-def engine_ready_for(sha256: str | None) -> bool:
-  if not sha256:
-    return False
-  return (_get(gadget.P_READY) or '') == sha256
-
-
-def set_engine_ready(sha256: str | None) -> None:
-  store = params()
-  if sha256:
-    store.put(gadget.P_READY, sha256)
-  else:
-    store.remove(gadget.P_READY)

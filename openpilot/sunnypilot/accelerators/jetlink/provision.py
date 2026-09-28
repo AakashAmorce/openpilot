@@ -101,7 +101,6 @@ def ensure(client, sha256: str, nbytes: int, model_path: Path | None, *,
       raise
     spec = ask(onnx_path=upload)
   spec_cache.store(spec)
-  helpers.set_engine_ready(spec.sha256)
   return spec
 
 

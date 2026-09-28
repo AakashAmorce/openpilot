@@ -36,6 +36,7 @@ class FakeSpecCache:
 
   def __init__(self):
     self.spec = None
+    self.ready = False
     self.stores = 0
 
   def load(self):
@@ -43,7 +44,13 @@ class FakeSpecCache:
 
   def store(self, spec) -> None:
     self.stores += 1
-    self.spec = spec
+    self.spec, self.ready = spec, True
+
+  def engine_ready_for(self, sha256) -> bool:
+    return self.ready and self.spec is not None and self.spec.sha256 == sha256
+
+  def clear_ready(self) -> None:
+    self.ready = False
 
 
 def fake_jetlink_spec_module(counter: list):
@@ -94,8 +101,7 @@ class TestProvisionCost(OpenpilotTestCase):
         p = mock.patch.object(module, target, new)
         self.addCleanup(p.stop)
         p.start()
-    for name, value in (('shipped_model_path', self.model), ('engine_ready_for', False),
-                        ('selected_model', dict(self.ENTRY))):
+    for name, value in (('shipped_model_path', self.model), ('selected_model', dict(self.ENTRY))):
       p = mock.patch.object(jetlinkd.helpers, name, return_value=value)
       self.addCleanup(p.stop)
       p.start()
@@ -106,8 +112,7 @@ class TestProvisionCost(OpenpilotTestCase):
   def test_the_identity_comes_from_the_registry_not_the_file(self):
     d = jetlinkd.Jetlinkd()
     d.client = serving_client()
-    with mock.patch.object(jetlinkd.helpers, 'set_engine_ready'):
-      assert d.provision() is True
+    assert d.provision() is True
     args = d.client.ensure_engine.call_args.args
     assert args[0] == self.ENTRY['oid'] and args[1] == self.ENTRY['size']
 
@@ -115,8 +120,7 @@ class TestProvisionCost(OpenpilotTestCase):
     d = jetlinkd.Jetlinkd()
     d.client = serving_client()
     with mock.patch.object(jetlinkd.helpers, 'selected_model', return_value={**self.ENTRY, 'oid': None, 'size': None}), \
-         mock.patch.object(jetlinkd.helpers, 'resolve_pointer', return_value=('deadbeef', 4096)) as resolve, \
-         mock.patch.object(jetlinkd.helpers, 'set_engine_ready'):
+         mock.patch.object(jetlinkd.helpers, 'resolve_pointer', return_value=('deadbeef', 4096)) as resolve:
       assert d.provision() is True
     resolve.assert_called_once_with('f' * 40)
     args = d.client.ensure_engine.call_args.args
@@ -137,9 +141,8 @@ class TestProvisionCost(OpenpilotTestCase):
     d = jetlinkd.Jetlinkd()
     d.client = serving_client()
     d.client.ensure_engine.return_value = FakeSpec()
-    with mock.patch.object(jetlinkd.helpers, 'set_engine_ready'):
-      for _ in range(3):
-        assert d.provision() is True
+    for _ in range(3):
+      assert d.provision() is True
     assert self.hashed == [], "hashed the model to ask a question the registry answers"
 
   def test_it_asks_even_with_no_model_on_disk(self):
@@ -147,8 +150,7 @@ class TestProvisionCost(OpenpilotTestCase):
     # comma that has deleted its own can still use an engine already built.
     d = jetlinkd.Jetlinkd()
     d.client = serving_client()
-    with mock.patch.object(jetlinkd.helpers, 'shipped_model_path', return_value=None), \
-         mock.patch.object(jetlinkd.helpers, 'set_engine_ready'):
+    with mock.patch.object(jetlinkd.helpers, 'shipped_model_path', return_value=None):
       assert d.provision() is True
     assert d.client.ensure_engine.call_args.kwargs['onnx_path'] is None
 
@@ -178,7 +180,6 @@ class TestProvisionCost(OpenpilotTestCase):
     d, EngineMissing = self._wants_the_bytes()
     with mock.patch.object(jetlinkd.helpers, 'selected_model',
                            return_value={**self.ENTRY, 'oid': 'not-what-the-file-hashes-to'}), \
-         mock.patch.object(jetlinkd.helpers, 'set_engine_ready'), \
          self.assertRaises(EngineMissing):
       d.provision()
     assert all(c.kwargs['onnx_path'] is None for c in d.client.ensure_engine.call_args_list)
@@ -187,7 +188,6 @@ class TestProvisionCost(OpenpilotTestCase):
     d, EngineMissing = self._wants_the_bytes()
     with mock.patch.object(jetlinkd.helpers, 'selected_model',
                            return_value={**self.ENTRY, 'size': 999999}), \
-         mock.patch.object(jetlinkd.helpers, 'set_engine_ready'), \
          self.assertRaises(EngineMissing):
       d.provision()
     assert all(c.kwargs['onnx_path'] is None for c in d.client.ensure_engine.call_args_list)
@@ -196,8 +196,7 @@ class TestProvisionCost(OpenpilotTestCase):
   def test_the_file_is_uploaded_once_it_is_proven_to_be_the_model(self):
     d, _ = self._wants_the_bytes()
     d.client.ensure_engine.side_effect = [d.client.ensure_engine.side_effect, FakeSpec()]
-    with mock.patch.object(jetlinkd.helpers, 'set_engine_ready'):
-      assert d.provision() is True
+    assert d.provision() is True
     calls = d.client.ensure_engine.call_args_list
     assert calls[0].kwargs['onnx_path'] is None, "asked without the file first"
     assert calls[1].kwargs['onnx_path'] == self.model
@@ -210,18 +209,15 @@ class TestProvisionCost(OpenpilotTestCase):
     self.cache.store(FakeSpec())
     d = jetlinkd.Jetlinkd()
     d.client = serving_client()
-    with mock.patch.object(jetlinkd.helpers, 'engine_ready_for', return_value=True), \
-         mock.patch.object(jetlinkd.helpers, 'set_engine_ready') as ready:
-      assert d.provision() is True
+    assert d.provision() is True
     assert d.client.ensure_engine.call_count == 1
     assert self.hashed == [], 'read the model to answer a question the server answers'
-    ready.assert_called_with('deadbeef')
+    assert self.cache.stores == 2 and self.cache.engine_ready_for('deadbeef')
 
   def test_the_shapes_come_from_the_server_not_the_file(self):
     d = jetlinkd.Jetlinkd()
     d.client = serving_client(FakeSpec(sha256='deadbeef', nbytes=1 << 20))
-    with mock.patch.object(jetlinkd.helpers, 'set_engine_ready'):
-      assert d.provision() is True
+    assert d.provision() is True
     d.client.ensure_engine.assert_called_once()
     kwargs = d.client.ensure_engine.call_args.kwargs
     assert callable(kwargs['should_stop'])
@@ -234,8 +230,7 @@ class TestProvisionCost(OpenpilotTestCase):
     # engine up over its own link
     d = jetlinkd.Jetlinkd()
     d.client = serving_client()
-    with mock.patch.object(jetlinkd.helpers, 'set_engine_ready'):
-      d.provision()
+    d.provision()
     should_stop = d.client.ensure_engine.call_args.kwargs['should_stop']
     assert should_stop() is False
     d.request_stop()

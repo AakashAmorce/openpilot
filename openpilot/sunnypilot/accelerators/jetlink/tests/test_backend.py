@@ -244,9 +244,10 @@ class BuildingOnroad(OpenpilotTestCase):
     p = mock.patch.object(backend, '_connect_patiently', return_value=self.client)
     self.addCleanup(p.stop)
     p.start()
-    for name, value in (('selected_model', dict(self.ENTRY)), ('shipped_model_path', None),
-                        ('engine_ready_for', False)):
-      p = mock.patch.object(backend.helpers, name, return_value=value)
+    for module, name, value in ((backend.helpers, 'selected_model', dict(self.ENTRY)),
+                                (backend.helpers, 'shipped_model_path', None),
+                                (backend.spec_cache, 'engine_ready_for', False)):
+      p = mock.patch.object(module, name, return_value=value)
       self.addCleanup(p.stop)
       p.start()
     p = mock.patch.object(provision, 'ensure', return_value=self.spec)
@@ -278,10 +279,10 @@ class BuildingOnroad(OpenpilotTestCase):
     from jetlink.client import EngineMissing
     self.ensure.side_effect = EngineMissing('no engine')
     self.link.client = self.client
-    with mock.patch.object(backend.helpers, 'set_engine_ready') as cleared:
+    with mock.patch.object(backend.spec_cache, 'clear_ready') as cleared:
       with self.assertRaises(EngineMissing):
         backend._open_link(self.link)
-    cleared.assert_called_once_with(None)
+    cleared.assert_called_once_with()
     self.client.close.assert_called_once()
 
 

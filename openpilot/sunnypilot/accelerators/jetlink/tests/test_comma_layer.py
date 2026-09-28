@@ -67,7 +67,7 @@ class TestTheNamesTheLayerReads(OpenpilotTestCase):
   def test_every_param_it_reads_is_declared(self):
     from openpilot.common.params import Params
     params = Params()
-    for key in (gadget.P_READY, gadget.P_SPEC, gadget.P_LINK,
+    for key in (gadget.P_SPEC, gadget.P_LINK,
                 gadget.P_OFFROAD, gadget.P_BIG_MODEL, *comma_owner.WATCHED):
       params.check_key(key)
 

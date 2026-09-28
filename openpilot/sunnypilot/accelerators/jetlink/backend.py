@@ -245,7 +245,7 @@ def ready() -> bool:
   spec = spec_cache.load()
   selected = helpers.selected_model()
   return (spec is not None and selected is not None and spec.sha256 == selected['oid']
-          and helpers.engine_ready_for(spec.sha256))
+          and spec_cache.engine_ready_for(spec.sha256))
 
 
 def unavailable_reason() -> str | None:
@@ -370,7 +370,7 @@ def _open_link(link: _Link, should_stop=None):
                      hello.get('device'), hello.get('trt_version'),
                      hello.get('engine_state'), str(hello.get('loaded'))[:16])
     sha256, nbytes = provision.identity(selected)
-    if not helpers.engine_ready_for(sha256):
+    if not spec_cache.engine_ready_for(sha256):
       cloudlog.warning("jetlink: %s is not built yet, building it with the small model driving",
                        selected.get('name', sha256[:16]))
     try:
@@ -383,7 +383,7 @@ def _open_link(link: _Link, should_stop=None):
       # neither end has the bytes. Fetching them needs the internet and a
       # gigabyte of it, which is a parked job; clear the record so the next
       # parked period provisions again
-      helpers.set_engine_ready(None)
+      spec_cache.clear_ready()
       raise
     client.deadline = INFERENCE_TIMEOUT
     return client, spec

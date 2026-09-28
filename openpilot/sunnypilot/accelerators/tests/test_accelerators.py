@@ -29,11 +29,12 @@ from openpilot.sunnypilot.accelerators.jetlink import backend, helpers
 
 
 class SelectionTest(OpenpilotTestCase):
-  """ready() is params only, and every answer follows from three params and
-  whether the build made a warp for this camera."""
+  """ready() is params only, and every answer follows from the link setting,
+  the pick, the spec record and whether the build made a warp for this camera."""
 
-  def configure(self, enabled=None, model=None, ready_sha=None, spec_sha=None, gadget_error=None, warp=True):
-    params = {gadget.P_LINK: enabled, gadget.P_READY: ready_sha}
+  def configure(self, enabled=None, model=None, spec_sha=None, ready=False, gadget_error=None, warp=True):
+    # the spec record carries whether the engine for the sha it names is built
+    params = {gadget.P_LINK: enabled, gadget.P_SPEC: {'sha256': spec_sha, 'ready': ready} if spec_sha else None}
     # the link setting is read off the param file, so stub the read rather than
     # Params: on is USB, off is off. Everything else goes through helpers._get
     for p in (mock.patch.object(helpers, '_get', side_effect=lambda k, d=None: params.get(k, d)),
@@ -53,14 +54,14 @@ class SelectionTest(OpenpilotTestCase):
     helpers._last_configured = 0.0
 
   def test_disabled_by_absence(self):
-    self.configure(enabled=None, model='m', ready_sha='a' * 64, spec_sha='a' * 64)
+    self.configure(enabled=None, model='m', spec_sha='a' * 64, ready=True)
     self.assertFalse(accelerators.present())
     self.assertFalse(accelerators.ready())
     self.assertIsNone(accelerators.unavailable_reason())
     self.assertFalse(accelerators.enabled())
 
   def test_disabled_explicitly(self):
-    self.configure(enabled=False, model='m', ready_sha='a' * 64, spec_sha='a' * 64, gadget_error='no gadget')
+    self.configure(enabled=False, model='m', spec_sha='a' * 64, ready=True, gadget_error='no gadget')
     self.assertFalse(accelerators.present())
     self.assertFalse(accelerators.ready())
     # A device with the feature off is never nagged about its kernel.
@@ -68,33 +69,37 @@ class SelectionTest(OpenpilotTestCase):
     self.assertFalse(accelerators.enabled())
 
   def test_enabled_but_not_provisioned(self):
-    self.configure(enabled=True, model='m', ready_sha=None, spec_sha=None)
+    self.configure(enabled=True, model='m')
     self.assertFalse(accelerators.ready())
     self.assertIsNone(accelerators.unavailable_reason())
     self.assertIsNone(accelerators.active_model_name())
 
   def test_enabled_with_a_broken_gadget_says_why(self):
-    self.configure(enabled=True, model='m', ready_sha='a' * 64, spec_sha='a' * 64, gadget_error='no gadget')
+    self.configure(enabled=True, model='m', spec_sha='a' * 64, ready=True, gadget_error='no gadget')
     self.assertFalse(accelerators.ready())
     self.assertEqual(accelerators.unavailable_reason(), 'no gadget')
 
   def test_no_warp_for_this_camera_says_why(self):
     # the build made none, and nothing compiles one at runtime: every drive
     # would be the small model while the panel said ready
-    self.configure(enabled=True, model='m', ready_sha='a' * 64, spec_sha='a' * 64, warp=False)
+    self.configure(enabled=True, model='m', spec_sha='a' * 64, ready=True, warp=False)
     self.assertFalse(accelerators.ready())
     self.assertEqual(accelerators.unavailable_reason(), backend.NO_WARP)
     self.configure(enabled=False, warp=False)
     self.assertIsNone(accelerators.unavailable_reason())
 
   def test_ready(self):
-    self.configure(enabled=True, model='m', ready_sha='a' * 64, spec_sha='a' * 64)
+    self.configure(enabled=True, model='m', spec_sha='a' * 64, ready=True)
     self.assertTrue(accelerators.ready())
     self.assertIsNone(accelerators.unavailable_reason())
     self.assertTrue(accelerators.enabled())
 
   def test_an_old_engine_is_not_the_new_selection(self):
-    self.configure(enabled=True, model='m', ready_sha='b' * 64, spec_sha='b' * 64)
+    self.configure(enabled=True, model='m', spec_sha='b' * 64, ready=True)
+    self.assertFalse(accelerators.ready())
+
+  def test_a_spec_whose_engine_is_not_built_is_not_ready(self):
+    self.configure(enabled=True, model='m', spec_sha='a' * 64, ready=False)
     self.assertFalse(accelerators.ready())
 
   def test_enabled_is_the_toggle_alone(self):

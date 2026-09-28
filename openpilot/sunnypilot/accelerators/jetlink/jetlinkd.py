@@ -125,7 +125,7 @@ class Jetlinkd:
     entry = helpers.selected_model()
     if entry is None:
       # no catalog yet; not an error
-      helpers.set_engine_ready(None)
+      spec_cache.clear_ready()
       accelerators.clear_progress()
       return False
     sha256, nbytes = provision.identity(entry)
@@ -179,7 +179,7 @@ class Jetlinkd:
   def has_work(self) -> bool:
     """Is there a reason to wake the Jetson? Only things the link can fix count."""
     spec = spec_cache.load()
-    if spec is None or not helpers.engine_ready_for(spec.sha256):
+    if spec is None or not spec_cache.engine_ready_for(spec.sha256):
       return True
     selected = helpers.selected_model()
     return selected is not None and selected.get('oid') != spec.sha256
