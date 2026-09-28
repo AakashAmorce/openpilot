@@ -191,19 +191,5 @@ class JetlinkModelState(ModelStateBase):
     return outputs_dict
 
   def close(self) -> None:
-    """Let go of the link; modeld calls this on a big model that finished loading too late."""
+    """Let go of the link; the joining state calls this on a model it retires."""
     self.client.close()
-
-  def warmup(self) -> None:
-    dummy_frames = {k: np.zeros(self.frame_buf_params[k][3], dtype=np.uint8) for k in self.vision_input_names}
-    eye = np.eye(3, dtype=np.float32)
-    dims = {'desire_pulse': ModelConstants.DESIRE_LEN, 'traffic_convention': 2, 'action_t': 2}
-    self.run(dummy_frames, dict.fromkeys(self.vision_input_names, eye),
-             {k: np.zeros(v, dtype=np.float32) for k, v in dims.items()})
-    # drop the warm-up frame from both ends' history
-    self.packed[:] = 0
-    self.prev_desire[:] = 0
-    self.full_frames.clear()
-    self._blob_cache.clear()
-    self._need_reset = True
-    cloudlog.warning("jetlink: warmup complete")

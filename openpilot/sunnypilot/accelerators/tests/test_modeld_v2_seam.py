@@ -14,6 +14,7 @@ modeld: the two calls, the decision before the process goes realtime, the
 fallback opening with the re-raise, and the modelDataV2SP field the UI reads.
 """
 import ast
+import re
 import unittest
 from pathlib import Path
 
@@ -71,10 +72,19 @@ class ModeldV2Seam(OpenpilotTestCase):
     self.assertIn('modelDataV2SP.acceleratorState', self.src, "modeld_v2 no longer publishes acceleratorState")
 
   def test_the_loop_reads_the_per_model_face_off_the_model(self):
-    from openpilot.sunnypilot.accelerators.jetlink.joining import JoiningModelState
     for attr in FACE:
       self.assertIn(f'model.{attr}', self.src, f"the loop no longer reads model.{attr}")
-      self.assertTrue(hasattr(JoiningModelState, attr), f"JoiningModelState has no {attr}")
+
+  def test_the_joining_state_has_all_either_modeld_reads_off_the_model(self):
+    # read out of both modelds rather than kept by hand: a missing attribute is
+    # an AttributeError on the frame loop. `model` is the loop's; load_big's `m`
+    # is a chestnut's and never the joining state
+    from openpilot.sunnypilot.accelerators.jetlink.joining import JoiningModelState
+    for path in (MODELD, MODELD_V2):
+      names = set(re.findall(r'\bmodel\.([a-zA-Z_][a-zA-Z0-9_]*)', path.read_text()))
+      self.assertIn('run', names, f"{path.name}: this no longer finds what the loop reads off the model")
+      missing = sorted(n for n in names if not hasattr(JoiningModelState, n))
+      self.assertEqual(missing, [], f"JoiningModelState is missing {missing}, which {path.parent.name}/{path.name} reads")
 
 
 if __name__ == '__main__':

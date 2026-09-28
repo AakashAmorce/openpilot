@@ -11,14 +11,11 @@ is pinned: modeld gets a working model immediately, a swap never lands on an
 engaged frame, a large model that dies mid-drive falls back without losing the
 frame, and a small-model failure still belongs to modeld.
 """
-import re
 import threading
 import time
 import unittest
-from pathlib import Path
 from unittest import mock
 
-from openpilot.common.basedir import BASEDIR
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot.accelerators.jetlink.joining import REJOIN_DELAY_QUICK, STABLE_SECONDS, JoiningModelState
 
@@ -48,7 +45,10 @@ class FakeModel:
     self.closed = True
 
 
-class JoiningTest(OpenpilotTestCase):
+class JoiningBase(OpenpilotTestCase):
+  """The joining state over fake models, and the helpers to drive it. No tests
+  here, so each face below runs only its own."""
+
   def setUp(self):
     # The engagement watcher is the one part that needs msgq. Drive the flag by
     # hand instead; what it reads is covered by selfdrived's own tests.
@@ -104,6 +104,8 @@ class JoiningTest(OpenpilotTestCase):
     s._engagement_updated = time.monotonic()
     return s.run({}, {}, {})
 
+
+class JoiningTest(JoiningBase):
   def test_stalled_watcher_cannot_leave_a_swap_window_open(self):
     s = self._state()
     s._engaged = False
@@ -529,29 +531,6 @@ class JoiningTest(OpenpilotTestCase):
     self.assertEqual(s.big_model_state, 'retrying')
 
 
-class ContractTest(OpenpilotTestCase):
-  """Whatever modeld touches on the object make_model_state returns.
-
-  Read out of modeld rather than kept by hand: `warmup` was missed once, and
-  modeld reads the AttributeError as "big model load failed".
-  """
-
-  def test_provides_everything_modeld_touches(self):
-    src = Path(BASEDIR) / 'openpilot' / 'selfdrive' / 'modeld' / 'modeld.py'
-    text = src.read_text()
-    # `model` is the one in the frame loop, `m` the one load_big just built.
-    # \b keeps small_model/big_model/sm out of it.
-    names = set(re.findall(r'\bmodel\.([a-zA-Z_][a-zA-Z0-9_]*)', text))
-    names |= set(re.findall(r'\bm\.([a-zA-Z_][a-zA-Z0-9_]*)', text))
-    self.assertIn('warmup', names, "modeld stopped calling warmup; check this test still finds the right names")
-    missing = sorted(n for n in names if not hasattr(JoiningModelState, n))
-    self.assertEqual(missing, [], f"JoiningModelState is missing {missing}, which modeld calls on it")
-
-
-if __name__ == '__main__':
-  unittest.main()
-
-
 class FakeV2Model(FakeModel):
   """A modeld_v2 ModelState: constants, smoothing and the action function are its own."""
 
@@ -573,7 +552,7 @@ class FakeV2Model(FakeModel):
     return (self.name, args)
 
 
-class ModeldV2FaceTest(JoiningTest):
+class ModeldV2FaceTest(JoiningBase):
   """What sunnypilot's modeld_tinygrad reads off the model: per-model, following the
   model that is driving, and the frame it built for the small bundle handed to
   whichever model takes it."""
@@ -629,3 +608,7 @@ class ModeldV2FaceTest(JoiningTest):
     self.big.raises = RuntimeError('link died')
     self.assertEqual(self._run_with(s, inputs), {'from': 'small'})
     self.assertIs(self.small.seen_inputs, inputs)
+
+
+if __name__ == '__main__':
+  unittest.main()

@@ -267,15 +267,6 @@ class JoiningModelState:
       cloudlog.warning("jetlink: large model joined mid-drive, modelV2.big is now true")
     return result
 
-  def warmup(self) -> None:
-    """Nothing to do, and it still has to exist.
-
-    The warp is warmed by `prepare` in __init__ and the first real frame
-    carries the reset. modeld does not call this on the jetlink path, but a
-    caller that duck-types it must not take an AttributeError, which modeld
-    reads as "big model load failed".
-    """
-
   @property
   def _window_open(self) -> bool:
     # standstill does not make an active longitudinal controller safe to swap
