@@ -26,7 +26,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 # Nothing heavy at module level. manager, the UI and hardwared all import this
 # package, and so does the gadget owner by way of accelerators.jetlink.gadget,
@@ -71,6 +71,17 @@ class Daemon(NamedTuple):
   should_run: Callable[..., bool]
 
 
+class Accelerator(NamedTuple):
+  """The accelerator joined to modeld, from load().
+
+  Everything modeld keeps of it: the model to run, what goes where a chestnut
+  puts its ChestnutState, and the name modelDataV2SP.acceleratorName reports.
+  """
+  model: Any
+  status: Any
+  name: str
+
+
 def installed() -> bool:
   """Is the backend's package checked out? What makes the link worth offering in the UI."""
   return _backend().installed()
@@ -92,18 +103,19 @@ def unavailable_reason() -> str | None:
 
 
 def prepare() -> bool:
-  """Process-wide setup modeld must do before going realtime, and a last veto. modeld only."""
+  """Will the accelerator join this modeld? enabled(), then the process-wide setup
+  modeld must do before going realtime, which is also a last veto. modeld only."""
   return _backend().prepare()
 
 
-def make_model_state(cam_w: int, cam_h: int, small=None):
-  """The joining ModelState: the small model driving now, the Jetson swapped in later."""
-  return _backend().make_model_state(cam_w, cam_h, small)
+def load(cam_w: int, cam_h: int, small) -> Accelerator | None:
+  """Join the accelerator to modeld, once the camera is up and `small` is built.
 
-
-def make_status_publisher(pm, model):
-  """modeld's after_enqueue callback. Publishes nothing; logs telemetry at 1 Hz."""
-  return _backend().make_status_publisher(pm, model)
+  None unless prepare() said yes in this process. The model is the joining
+  one, the small model driving now and the Jetson swapped in later; if that
+  cannot be built, it is `small`, and the failure is logged. modeld only.
+  """
+  return _backend().load(cam_w, cam_h, small)
 
 
 def enabled() -> bool:

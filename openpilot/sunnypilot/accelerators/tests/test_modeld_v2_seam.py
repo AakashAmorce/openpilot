@@ -10,14 +10,14 @@ The small model is whatever bundle the user picked, and a custom bundle runs
 on modeld_v2, so the link has to be reachable from that process too. This
 reads modeld_v2/modeld.py rather than importing it (that costs tinygrad and a
 vision stream) and pins the same seam test_native_equivalence pins for stock
-modeld: the four calls, the decision before the process goes realtime, the
+modeld: the two calls, the decision before the process goes realtime, the
 fallback opening with the re-raise, and the modelDataV2SP fields the UI reads.
 """
 import ast
 import unittest
 from pathlib import Path
 
-from openpilot.sunnypilot.accelerators.tests.test_native_equivalence import (ACCELERATOR_CALLS, _accelerator_calls, _assigns,
+from openpilot.sunnypilot.accelerators.tests.test_native_equivalence import (ACCELERATOR_CALLS, MODELD, _accelerator_calls, _assigns,
                                                                              _assert_chestnut_blocks_ignore_the_accelerator, _index,
                                                                              _parse, _realtime_index, _tests_name)
 
@@ -34,10 +34,17 @@ class ModeldV2Seam(unittest.TestCase):
     cls.tree = ast.parse(cls.src)
     cls.body = _parse(cls.src)
 
-  def test_the_module_is_reachable_from_the_same_four_calls(self):
+  def test_the_module_is_reachable_from_the_same_two_calls(self):
     calls = _accelerator_calls(self.tree)
     self.assertEqual({attr for _, attr in calls}, ACCELERATOR_CALLS, f"the seam differs from stock modeld's: {calls}")
-    self.assertEqual(len(calls), 4, calls)
+    self.assertEqual(len(calls), 2, calls)
+
+  def test_both_modelds_join_the_accelerator_with_the_same_lines(self):
+    # the accelerator's end of the join lives behind load(); what is left in
+    # modeld must not drift apart between the two copies
+    def lines(src):
+      return [line.strip() for line in src.splitlines() if 'accelerator' in line.lower() or 'JETLINK' in line]
+    self.assertEqual(lines(self.src), lines(MODELD.read_text()))
 
   def test_the_link_is_decided_before_the_process_goes_realtime(self):
     # prepare() starts tinygrad's device thread; after config_realtime_process

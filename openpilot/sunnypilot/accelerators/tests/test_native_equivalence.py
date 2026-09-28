@@ -14,9 +14,9 @@ under fakes.
 
 Two calls that must not happen: a fitted board with PCIe trained asks
 accelerators nothing, because `not CHESTNUT` is the first term; no board and
-the link off stops at ready(), so prepare() never opens a link. The rest pins
-the footprint: chestnut statements are develop's byte for byte, and the module
-is reachable from four call sites in five hunks.
+the link off stops at prepare(), which answers from the toggle and opens no
+link. The rest pins the footprint: chestnut statements are develop's byte for
+byte, and the module is reachable from two call sites in five hunks.
 """
 import ast
 import subprocess
@@ -26,6 +26,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from openpilot.common.params import Params
 from openpilot.sunnypilot import accelerators
@@ -37,9 +38,10 @@ MODELD = Path(__file__).resolve().parents[3] / 'selfdrive' / 'modeld' / 'modeld.
 # baseline rather than any older upstream tag
 BASELINE = 'develop'
 
-# everything core openpilot may call on the module; a name added here without
-# a plan entry is a widened seam
-ACCELERATOR_CALLS = {'enabled', 'prepare', 'make_model_state', 'make_status_publisher'}
+# everything modeld may call on the module: prepare() before the process goes
+# realtime, load() once the camera is up. A name added here without a plan
+# entry is a widened seam
+ACCELERATOR_CALLS = {'prepare', 'load'}
 
 
 def _parse(src: str) -> list[ast.stmt]:
@@ -79,9 +81,11 @@ def _assert_chestnut_blocks_ignore_the_accelerator(case: unittest.TestCase, tree
   for stmt in ast.walk(tree):
     if not _tests_name(stmt, 'CHESTNUT'):
       continue
-    # body only: the orelse of the load is the `elif JETLINK` hunk.
-    names = {n.id for stmt_ in stmt.body for n in ast.walk(stmt_) if isinstance(n, ast.Name)}
+    # the whole statement: the accelerator loads after the chestnut load, not
+    # as its `elif`
+    names = {n.id for n in ast.walk(stmt) if isinstance(n, ast.Name)}
     case.assertNotIn('accelerators', names, f"an `if CHESTNUT:` block at line {stmt.lineno} reaches the accelerator module")
+    case.assertNotIn('accelerator', names, f"an `if CHESTNUT:` block at line {stmt.lineno} reads the loaded accelerator")
     case.assertNotIn('JETLINK', names, f"an `if CHESTNUT:` block at line {stmt.lineno} reads JETLINK")
 
 
@@ -104,30 +108,25 @@ def _git_show(ref: str, path: str) -> str | None:
 class FakeAccelerators:
   """The accelerators module as modeld sees it, recording every call.
 
-  prepare() answers the most permissive thing it can, so a call that should
-  never have happened fails twice over: on the recording, and on JETLINK being
-  true where the plan says a chestnut owns the drive.
+  prepare() answers the most permissive thing it can by default, so a call that
+  should never have happened fails twice over: on the recording, and on JETLINK
+  being true where the plan says a chestnut owns the drive.
   """
 
-  def __init__(self, enabled=None):
+  def __init__(self, prepare=None):
     self.calls: list[str] = []
-    self._enabled = enabled if enabled is not None else (lambda: True)
-
-  def enabled(self) -> bool:
-    self.calls.append('enabled')
-    return self._enabled()
+    self._prepare = prepare if prepare is not None else (lambda: True)
+    self.small = None
 
   def prepare(self) -> bool:
     self.calls.append('prepare')
-    return True
+    return self._prepare()
 
-  def make_model_state(self, cam_w, cam_h, small=None):
-    self.calls.append('make_model_state')
-    return SimpleNamespace(chestnut=True, big_model_available=True, big_model_state='joining')
-
-  def make_status_publisher(self, pm, model):
-    self.calls.append('make_status_publisher')
-    return SimpleNamespace(send=lambda *a: None, big=False)
+  def load(self, cam_w, cam_h, small):
+    self.calls.append('load')
+    self.small = small
+    model = SimpleNamespace(chestnut=True, big_model_available=True, big_model_state='joining')
+    return accelerators.Accelerator(model, SimpleNamespace(send=lambda *a: None, big=True), 'fake')
 
 
 class FakeParams:
@@ -245,6 +244,7 @@ class NativeEquivalence(unittest.TestCase):
 
     self.assertTrue(scope['CHESTNUT'])
     self.assertFalse(scope['JETLINK'])
+    self.assertIsNone(scope['accelerator'])
     # not "prepare was not called": nothing was, because `not CHESTNUT` is
     # the first term
     self.assertEqual(accel.calls, [], "a fitted chestnut asked the accelerator module something")
@@ -252,21 +252,21 @@ class NativeEquivalence(unittest.TestCase):
     self.assertTrue(scope['model'].chestnut)
     self.assertIsNotNone(scope['chestnut_state'])
 
-  def test_no_board_and_the_link_off_stops_at_enabled(self):
-    # the real module with the link off: enabled() reads one param and nothing
+  def test_no_board_and_the_link_off_stops_at_prepare(self):
+    # the real module with the link off: prepare() reads one param and nothing
     # opens a gadget
     Params().remove(helpers.P_ENABLED)
     self.assertFalse(accelerators.enabled())
 
-    accel = FakeAccelerators(enabled=accelerators.enabled)
-    scope = self.seam.decide_and_load(accel, present=False, compiled=False, trained=False)
+    accel = FakeAccelerators(prepare=accelerators.prepare)
+    with mock.patch.object(helpers, 'link_configured') as link_configured:
+      scope = self.seam.decide_and_load(accel, present=False, compiled=False, trained=False)
+    link_configured.assert_not_called()
 
     self.assertFalse(scope['CHESTNUT'])
     self.assertFalse(scope['JETLINK'])
-    self.assertEqual(accel.calls, ['enabled'], "the disabled link was asked more than whether it is on")
-    self.assertNotIn('prepare', accel.calls)
-    self.assertNotIn('make_model_state', accel.calls)
-    self.assertNotIn('make_status_publisher', accel.calls)
+    self.assertEqual(accel.calls, ['prepare'], "the disabled link was asked more than whether it joins")
+    self.assertIsNone(scope['accelerator'])
     # The small model drives, and nothing publishes accelerator status.
     self.assertFalse(scope['model'].chestnut)
     self.assertIsNone(scope['chestnut_state'])
@@ -274,12 +274,27 @@ class NativeEquivalence(unittest.TestCase):
   def test_a_board_that_never_trains_falls_through_to_the_question(self):
     # a chestnut device does ask, once, when the board is fitted but PCIe never
     # trains inside the poller wait: CHESTNUT is false, same as a bare device
-    accel = FakeAccelerators(enabled=lambda: False)
+    accel = FakeAccelerators(prepare=lambda: False)
     scope = self.seam.decide_and_load(accel, present=True, compiled=True, trained=False)
 
     self.assertFalse(scope['CHESTNUT'])
     self.assertFalse(scope['JETLINK'])
-    self.assertEqual(accel.calls, ['enabled'])
+    self.assertEqual(accel.calls, ['prepare'])
+
+  def test_a_prepared_link_is_one_load(self):
+    # no board and the link on: the small model is built as develop builds it
+    # and handed over, and what load() answers is everything modeld keeps
+    accel = FakeAccelerators()
+    scope = self.seam.decide_and_load(accel, present=False, compiled=False, trained=False)
+
+    self.assertFalse(scope['CHESTNUT'])
+    self.assertTrue(scope['JETLINK'])
+    self.assertEqual(accel.calls, ['prepare', 'load'])
+    self.assertIsNotNone(accel.small)
+    self.assertFalse(accel.small.chestnut)
+    self.assertIs(scope['small_model'], accel.small)
+    self.assertIs(scope['model'], scope['accelerator'].model)
+    self.assertIs(scope['chestnut_state'], scope['accelerator'].status)
 
   def test_the_link_is_decided_before_the_process_goes_realtime(self):
     # prepare() starts tinygrad's device thread; after config_realtime_process
@@ -308,21 +323,20 @@ class UpstreamFootprint(unittest.TestCase):
     if body is None:
       self.skipTest(f"no {BASELINE} here: not a checkout of this fork, or the branch is gone")
 
-  def test_the_module_is_reachable_from_four_calls_in_five_hunks(self):
+  def test_the_module_is_reachable_from_two_calls_in_five_hunks(self):
     lines = self.src.splitlines()
     calls = _accelerator_calls(self.tree)
     sites = [f"  modeld.py:{lineno} {lines[lineno - 1].strip()}" for lineno, _ in calls]
 
     # the five hunks: decision, load, status publisher, fallback re-raise and
-    # the modelDataV2SP fields. Lines closer than a hunk's context are one
-    # hunk, so `if not JETLINK:` is part of the load
-    jetlink = sorted({n.lineno for n in ast.walk(self.tree) if isinstance(n, ast.Name) and n.id == 'JETLINK'}
+    # the modelDataV2SP fields. Lines closer than a hunk's context are one hunk
+    jetlink = sorted({n.lineno for n in ast.walk(self.tree) if isinstance(n, ast.Name) and n.id in ('JETLINK', 'accelerator')}
                      | {lineno for lineno, _ in calls})
     hunk_starts = [line for i, line in enumerate(jetlink) if i == 0 or line - jetlink[i - 1] > 8]
     detail = '\n'.join(sites + [f"  hunks start at lines {hunk_starts}"])
 
     self.assertEqual({attr for _, attr in calls}, ACCELERATOR_CALLS, f"the seam widened:\n{detail}")
-    self.assertEqual(len(calls), 4, f"expected enabled/prepare/make_model_state/make_status_publisher and nothing else:\n{detail}")
+    self.assertEqual(len(calls), 2, f"expected prepare/load and nothing else:\n{detail}")
     self.assertEqual(len(hunk_starts), 5, f"modeld.py's jetlink path is no longer five hunks:\n{detail}")
 
   def test_the_chestnut_block_never_mentions_the_accelerator_module(self):
@@ -348,11 +362,17 @@ class UpstreamFootprint(unittest.TestCase):
     def load(b):
       return next(s for s in b if _tests_name(s, 'CHESTNUT') and len(s.body) > 2)
 
+    def small(b):
+      # the chestnut load, then the small model and its fallback, as develop has them
+      i = b.index(load(b))
+      return b[i:i + 3]
+
     self.assertEqual(_run(self.src, [wait(self.body)]), _run(self.baseline_src, [wait(body)]),
                      f"the chestnutState poller wait differs from {BASELINE}")
-    # The body only. Our orelse is the `elif JETLINK:` hunk, which is the point.
-    self.assertEqual(_run(self.src, load(self.body).body), _run(self.baseline_src, load(body).body),
-                     f"the `if CHESTNUT:` load differs from {BASELINE}")
+    # the whole statement, orelse included, and the small model after it: the
+    # accelerator loads below them rather than as a branch of them
+    self.assertEqual(_run(self.src, small(self.body)), _run(self.baseline_src, small(body)),
+                     f"the `if CHESTNUT:` load or the small model differs from {BASELINE}")
 
   def test_the_fallback_is_the_baseline_behind_one_guard(self):
     body = self._baseline_body()

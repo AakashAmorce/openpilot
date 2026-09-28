@@ -267,7 +267,7 @@ def main(demo=False):
   else:
     params.remove("ChestnutActive")
   # before going realtime: prepare() starts tinygrad's device thread, which would inherit FIFO 54 on core 7
-  JETLINK = not CHESTNUT and accelerators.enabled() and accelerators.prepare()
+  JETLINK = not CHESTNUT and accelerators.prepare()
 
   config_realtime_process(7, 54)
 
@@ -316,18 +316,13 @@ def main(demo=False):
     params.put_bool("ChestnutActive", model is not None)
     if model is not None:
       params.remove("ChestnutModelError")
-  elif JETLINK:
-    small_model = ModelState(vipc_client_main.width, vipc_client_main.height, False)
-    try:
-      model = accelerators.make_model_state(vipc_client_main.width, vipc_client_main.height, small_model)
-    except Exception:
-      cloudlog.exception("jetlink load failed")
-      model = None
 
-  if not JETLINK:
-    small_model = ModelState(vipc_client_main.width, vipc_client_main.height, False) if model is None or CHESTNUT else None
+  small_model = ModelState(vipc_client_main.width, vipc_client_main.height, False) if model is None or CHESTNUT else None
   if model is None:
     model = small_model
+  accelerator = accelerators.load(vipc_client_main.width, vipc_client_main.height, small_model) if JETLINK else None
+  if accelerator:
+    model = accelerator.model
   params.put_bool("ChestnutLoading", False)
   assert model is not None
   cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
@@ -340,8 +335,8 @@ def main(demo=False):
   publish_state = PublishState()
   params = Params()
   chestnut_state = ChestnutState(pm, model.chestnut) if CHESTNUT else None
-  if JETLINK:
-    chestnut_state = accelerators.make_status_publisher(pm, model)
+  if accelerator:
+    chestnut_state = accelerator.status
 
   # setup filter to track dropped frames
   frame_dropped_filter = FirstOrderFilter(0., 10., 1. / ModelConstants.MODEL_RUN_FREQ)
@@ -492,7 +487,7 @@ def main(demo=False):
       mdv2sp_send = messaging.new_message('modelDataV2SP')
       mdv2sp_send.modelDataV2SP.bigModelAvailable = getattr(model, 'big_model_available', False)
       mdv2sp_send.modelDataV2SP.acceleratorState = getattr(model, 'big_model_state', 'none')
-      mdv2sp_send.modelDataV2SP.acceleratorName = 'jetlink' if JETLINK else ''
+      mdv2sp_send.modelDataV2SP.acceleratorName = accelerator.name if accelerator else ''
       left_edge, right_edge = RELC.update_and_fill(modelv2_send.modelV2, mdv2sp_send.modelDataV2SP, v_ego)
       DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob, left_edge, right_edge)
       modelv2_send.modelV2.meta.laneChangeState = DH.lane_change_state

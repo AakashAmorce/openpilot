@@ -111,15 +111,19 @@ class MissingPackageTest(unittest.TestCase):
 
   def test_prepare_answers_false(self):
     self.hide_package()
-    with mock.patch.object(backend.cloudlog, 'warning') as warn:
+    with mock.patch.object(backend, 'enabled', return_value=True), \
+         mock.patch.object(backend.cloudlog, 'warning') as warn:
       self.assertFalse(accelerators.prepare())
       self.assertFalse(accelerators.prepare())
     # Once, not per poll.
     self.assertEqual(warn.call_count, 1)
 
-  def test_make_model_state_answers_none(self):
+  def test_load_answers_none(self):
     self.hide_package()
-    self.assertIsNone(accelerators.make_model_state(1928, 1208, object()))
+    with mock.patch.object(backend, 'enabled', return_value=True):
+      self.assertFalse(accelerators.prepare())
+    self.assertIsNone(accelerators.load(1928, 1208, object()))
+    self.assertIsNone(backend.make_model_state(1928, 1208, object()))
 
   def test_the_cheap_questions_still_import_and_answer(self):
     self.hide_package()
@@ -128,6 +132,79 @@ class MissingPackageTest(unittest.TestCase):
       self.assertFalse(accelerators.enabled())
     # a stat on the submodule, so it answers without the package on the path
     self.assertIsInstance(accelerators.installed(), bool)
+
+
+class LoadTest(unittest.TestCase):
+  """modeld's two calls: prepare() before it goes realtime, load() once the camera is up."""
+
+  def setUp(self):
+    backend._prepared = False
+    self.addCleanup(setattr, backend, '_prepared', False)
+    self.small = SimpleNamespace(name='small', client=None)
+
+  def prepared(self):
+    """prepare() down its yes path, with nothing real behind it."""
+    from openpilot.sunnypilot.accelerators.jetlink import warp_cache
+    with mock.patch.object(backend, 'enabled', return_value=True), \
+         mock.patch.object(backend, '_package_missing', return_value=False), \
+         mock.patch.object(helpers, 'link_configured', return_value=True), \
+         mock.patch.object(warp_cache, 'device_geometry', return_value=(1, 2, 3, 4)), \
+         mock.patch.object(warp_cache, 'is_cached', return_value=True), \
+         mock.patch.object(warp_cache, 'init_device') as init_device:
+      self.assertTrue(accelerators.prepare())
+    init_device.assert_called_once()
+
+  def test_the_link_off_says_no_before_any_setup(self):
+    with mock.patch.object(backend, 'enabled', return_value=False), \
+         mock.patch.object(helpers, 'link_configured') as link_configured:
+      self.assertFalse(accelerators.prepare())
+    link_configured.assert_not_called()
+
+  def test_nothing_joins_without_prepare(self):
+    # the GPU's thread would start on modeld's realtime core
+    with mock.patch.object(backend, 'make_model_state') as build:
+      self.assertIsNone(accelerators.load(1928, 1208, self.small))
+    build.assert_not_called()
+
+  def test_a_later_no_takes_the_yes_back(self):
+    self.prepared()
+    with mock.patch.object(backend, 'enabled', return_value=False):
+      self.assertFalse(accelerators.prepare())
+    with mock.patch.object(backend, 'make_model_state') as build:
+      self.assertIsNone(accelerators.load(1928, 1208, self.small))
+    build.assert_not_called()
+
+  def test_prepared_joins_modeld(self):
+    self.prepared()
+    joining = SimpleNamespace(client=object())
+    with mock.patch.object(backend, 'make_model_state', return_value=joining) as build:
+      loaded = accelerators.load(1928, 1208, self.small)
+    build.assert_called_once_with(1928, 1208, self.small)
+    self.assertIsInstance(loaded, accelerators.Accelerator)
+    self.assertIs(loaded.model, joining)
+    self.assertEqual(loaded.name, 'jetlink')
+    # the status reads the model's client per send: the link comes and goes mid-drive
+    self.assertIs(loaded.status.client, joining.client)
+    joining.client = None
+    self.assertIsNone(loaded.status.client)
+
+  def test_a_failed_build_drives_the_small_model_and_says_so(self):
+    self.prepared()
+    with mock.patch.object(backend, 'make_model_state', side_effect=RuntimeError('no warp')), \
+         mock.patch.object(backend.cloudlog, 'exception') as log:
+      loaded = accelerators.load(1928, 1208, self.small)
+    log.assert_called_once_with("jetlink load failed")
+    # as modeld always did it: the accelerator's name and status, over the small model
+    self.assertIs(loaded.model, self.small)
+    self.assertIs(loaded.status.model, self.small)
+    self.assertEqual(loaded.name, 'jetlink')
+
+  def test_no_package_at_the_build_drives_the_small_model(self):
+    self.prepared()
+    with mock.patch.object(backend, 'make_model_state', return_value=None):
+      loaded = accelerators.load(1928, 1208, self.small)
+    self.assertIs(loaded.model, self.small)
+    self.assertEqual(loaded.name, 'jetlink')
 
 
 class DaemonTest(unittest.TestCase):

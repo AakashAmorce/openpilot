@@ -19,8 +19,11 @@ import time
 
 from openpilot.common.swaglog import cloudlog
 
+from openpilot.sunnypilot.accelerators import Accelerator
 from openpilot.sunnypilot.accelerators.jetlink import helpers, spec_cache
 
+# modelDataV2SP.acceleratorName while this backend has joined modeld
+NAME = 'jetlink'
 # how long one attempt holds the gadget open waiting for a host. Not a deadline
 # on the large model: JoiningModelState retries for the drive, since the Jetson
 # boots after the comma is already onroad
@@ -36,6 +39,8 @@ PRESENT_TIMEOUT = 5.0
 SHUTDOWN_TIMEOUT = 25.0
 
 _missing_reported = False
+# prepare() said yes in this process, so load() may join modeld
+_prepared = False
 
 
 def _package_missing(what: str) -> bool:
@@ -238,12 +243,16 @@ def unavailable_reason() -> str | None:
 
 
 def prepare() -> bool:
+  global _prepared
+  _prepared = False
+  if not enabled():
+    return False
   # the link is not worth waiting for: make_model_state joins in the background.
   # The warp is: scons builds it before manager starts, so one missing now stays
   # missing for the drive, and saying no keeps modeld on the plain small model
   if _package_missing('the large model'):
     return False
-  # modeld decides on enabled() alone, so this is where a device that cannot
+  # enabled() is the toggle alone, so this is where a device that cannot
   # present a gadget at all says so; nothing here would ever reach a Jetson
   if not helpers.link_configured():
     cloudlog.warning("jetlink: no usable gadget (%s), staying on the small model",
@@ -256,7 +265,25 @@ def prepare() -> bool:
   # the last hook before modeld goes SCHED_FIFO on core 7, and the GPU's init
   # spawns a thread that would inherit that. See warp_cache.init_device
   warp_cache.init_device()
+  _prepared = True
   return True
+
+
+def load(cam_w: int, cam_h: int, small) -> Accelerator | None:
+  # without prepare() the GPU's thread would start on modeld's realtime core
+  if not _prepared:
+    return None
+  try:
+    model = make_model_state(cam_w, cam_h, small)
+  except Exception:
+    cloudlog.exception("jetlink load failed")
+    model = None
+  if model is None:
+    model = small
+  from openpilot.sunnypilot.accelerators.jetlink.status import JetlinkStatus
+  # the model, not its client: the link arrives after this is built and may
+  # come and go mid-drive. Reading model.client per send follows it
+  return Accelerator(model, JetlinkStatus(model), NAME)
 
 
 def make_model_state(cam_w: int, cam_h: int, small=None):
@@ -359,13 +386,6 @@ def _open_link(link: _Link, should_stop=None):
   except BaseException:
     link.close()
     raise
-
-
-def make_status_publisher(pm, model):
-  from openpilot.sunnypilot.accelerators.jetlink.status import JetlinkStatus
-  # the model, not its client: the link arrives after this is built and may
-  # come and go mid-drive. Reading model.client per send follows it
-  return JetlinkStatus(pm, model)
 
 
 def extends_catalog() -> bool:
