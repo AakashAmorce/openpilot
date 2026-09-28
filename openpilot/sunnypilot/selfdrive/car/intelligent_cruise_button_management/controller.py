@@ -20,6 +20,7 @@ from openpilot.common.realtime import DT_CTRL
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import get_minimum_set_speed
 from openpilot.sunnypilot.selfdrive.car.cruise_ext import CRUISE_BUTTON_TIMER, update_manual_button_timers
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import V_CRUISE_UNSET
 
 ButtonType = car.CarState.ButtonEvent.Type
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
@@ -57,6 +58,9 @@ DECEL_OVERSHOOT_RISE = 10.  # mph/s
 DECEL_OVERSHOOT_RELEASE = 3.  # mph/s
 DECEL_OVERSHOOT_SOURCES = (LongitudinalPlanSource.sccVision, LongitudinalPlanSource.sccMap,
                            LongitudinalPlanSource.speedLimitAssist)
+# Under openpilot longitudinal the planner executes these targets directly; the servo only
+# keeps the dash on the speed limit session (Mazda alpha long).
+OP_LONG_PLANNER_SOURCES = (LongitudinalPlanSource.sccVision, LongitudinalPlanSource.sccMap)
 
 # A 10 Hz hold stream registers as paced one-unit presses. Use taps for the final steps to
 # avoid overshoot from in-flight stream frames.
@@ -122,7 +126,9 @@ class IntelligentCruiseButtonManagement:
     p = self.overshoot_params
     want = 0.0
     # Do not accumulate a gap while button emission is blocked.
-    if (self.decel_overshoot_enabled and self.is_ready and not self.prompt_frozen
+    # the gap trick drives a stock ACC's own deceleration; openpilot longitudinal brakes itself
+    if (self.decel_overshoot_enabled and not self.CP.openpilotLongitudinalControl
+        and self.is_ready and not self.prompt_frozen
         and self.down_grace_timer <= 0
         and LP_SP.longitudinalPlanSource in DECEL_OVERSHOOT_SOURCES
         and LP_SP.aTarget < -p['min_decel'] and CS.vEgo > LP_SP.vTarget):
@@ -143,6 +149,12 @@ class IntelligentCruiseButtonManagement:
     self.limiter_active = LP_SP.longitudinalPlanSource != LongitudinalPlanSource.cruise
 
     v_target_ms = LP_SP.vTarget
+    if self.CP.openpilotLongitudinalControl and LP_SP.longitudinalPlanSource in OP_LONG_PLANNER_SOURCES:
+      # openpilot brakes for curves itself: the dash keeps the driver's setpoint, or the
+      # session's cap inside a zone (the mirror publishes it, V_CRUISE_UNSET when idle), and
+      # never walks down to a curve target nor back up over the cap during one
+      session_cap = LP_SP.speedLimit.assist.vTarget
+      v_target_ms = min(CS.vCruise * CV.KPH_TO_MS, session_cap if session_cap > 0. else V_CRUISE_UNSET)
     overshoot_ms = self.update_decel_overshoot(CS, LP_SP) * CV.MPH_TO_MS
     if overshoot_ms > 0:
       # Command relative to actual speed while keeping the plan target as the upper bound.

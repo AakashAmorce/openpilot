@@ -12,18 +12,19 @@ from opendbc.car.structs import car
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.controller import IntelligentCruiseButtonManagement
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import V_CRUISE_UNSET
 
 SessionState = custom.LongitudinalPlanSP.SpeedLimit.AssistState
 
 
-def make_icbm(brand=""):
-  return IntelligentCruiseButtonManagement(car.CarParams(pcmCruise=True, brand=brand),
+def make_icbm(brand="", op_long=False):
+  return IntelligentCruiseButtonManagement(car.CarParams(pcmCruise=True, brand=brand, openpilotLongitudinalControl=op_long),
                                            custom.CarParamsSP(pcmCruiseSpeed=False))
 
 
 def run_frames(icbm, target_mph, cluster_mph, n=1, source='sccVision', is_metric=False,
                v_ego_mph=None, a_target=0., overshoot=False, session_state=SessionState.disabled,
-               v_ahead_min_mph=0., button_events=None):
+               v_ahead_min_mph=0., button_events=None, v_cruise_mph=None):
   """Run the servo for n frames against a fixed plan target and dash; returns the sends."""
   # the toggle is a param the servo re-reads on its own cadence; set both so a flip takes
   # effect on this call's first frame
@@ -34,6 +35,8 @@ def run_frames(icbm, target_mph, cluster_mph, n=1, source='sccVision', is_metric
     CS = car.CarState(cruiseState={"speedCluster": cluster_mph * CV.MPH_TO_MS})
     if v_ego_mph is not None:
       CS.vEgo = float(v_ego_mph * CV.MPH_TO_MS)
+    if v_cruise_mph is not None:
+      CS.vCruise = float(v_cruise_mph * CV.MPH_TO_KPH)
     if button_events and i == 0:
       CS.buttonEvents = button_events
     CC = car.CarControl(enabled=True)
@@ -42,6 +45,7 @@ def run_frames(icbm, target_mph, cluster_mph, n=1, source='sccVision', is_metric
     LP_SP.aTarget = float(a_target)
     LP_SP.smartCruiseControl.vision.vAheadMin = float(v_ahead_min_mph * CV.MPH_TO_MS)
     LP_SP.speedLimit.assist.state = session_state
+    LP_SP.speedLimit.assist.vTarget = V_CRUISE_UNSET  # the mirror's idle value
     icbm.run(CS, CC, LP_SP, is_metric=is_metric)
     sends.append(icbm.cruise_button)
   return sends
