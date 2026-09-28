@@ -10,10 +10,11 @@ name: zoompilot prebuilt
 # when set. Use bench power for release builds.
 
 env:
-  # The runner is a comma four, but the release installs on the 3X too. Compile the model and
-  # dm warp jits for both driver cameras: the kernels are portable between them (both Adreno
-  # 630) but the jits are keyed by camera resolution, so a 3X installing a mici-only prebuilt
-  # has no warp and loses dmonitoringmodeld and modeld at startup.
+  # The runner is a comma four, but the release installs on the 3X too. Compile the model, dm
+  # warp and jetlink warp jits for both driver cameras: the kernels are portable between them
+  # (both Adreno 630) but the jits are keyed by camera resolution, so a 3X installing a
+  # mici-only prebuilt has no warp: it loses dmonitoringmodeld and modeld at startup, and
+  # jetlink's big model for good.
   PREBUILT_ALL_CAMERAS: "1"
   BUILD_DIR: "/data/openpilot"
   OUTPUT_DIR: ${{ github.workspace }}/output
@@ -38,6 +39,18 @@ jobs:
             exit 1
           fi
           echo "cutting ${{ env.TARGET_BRANCH }} from ${{ env.SOURCE_BRANCH }}"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_BRANCH }}
+
+      - name: Refuse a jetlink pin that is not on jetlink's main
+        run: |
+          pin=$(git ls-tree HEAD jetlink_repo | awk '{print $3}')
+          git init -q --bare "$RUNNER_TEMP/jetlink"
+          git -C "$RUNNER_TEMP/jetlink" fetch -q "$(git config -f .gitmodules submodule.jetlink.url)" main
+          git -C "$RUNNER_TEMP/jetlink" merge-base --is-ancestor "$pin" FETCH_HEAD || {
+            echo "::error::jetlink_repo is pinned to $pin, which is not on jetlink's main"; exit 1; }
 
   build:
     needs: [ guard ]
