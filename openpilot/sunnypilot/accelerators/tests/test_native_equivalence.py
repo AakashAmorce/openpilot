@@ -255,7 +255,7 @@ class NativeEquivalence(unittest.TestCase):
   def test_no_board_and_the_link_off_stops_at_prepare(self):
     # the real module with the link off: prepare() reads one param and nothing
     # opens a gadget
-    Params().remove(helpers.P_ENABLED)
+    Params().put(accelerators.LINK_PARAM, accelerators.LINK_MODES.index('off'), block=True)
     self.assertFalse(accelerators.enabled())
 
     accel = FakeAccelerators(prepare=accelerators.prepare)

@@ -29,13 +29,13 @@ class SelectionTest(unittest.TestCase):
   """ready() is params only, and every answer follows from three params."""
 
   def configure(self, enabled=None, model=None, ready_sha=None, spec_sha=None, gadget_error=None):
-    params = {helpers.P_ENABLED: enabled, helpers.P_READY: ready_sha}
-    # the toggle is read off the param file now, so stub the read rather than
-    # Params; everything else still goes through helpers._get
+    params = {gadget.P_LINK: enabled, gadget.P_READY: ready_sha}
+    # the link setting is read off the param file, so stub the read rather than
+    # Params: on is USB, off is off. Everything else goes through helpers._get
     for p in (mock.patch.object(helpers, '_get', side_effect=lambda k, d=None: params.get(k, d)),
               mock.patch.object(gadget, 'raw_param',
                                 side_effect=lambda k: None if params.get(k) is None else
-                                (b'1' if params[k] else b'0')),
+                                str(gadget.LINK_MODES.index('usb' if params[k] else 'off')).encode()),
               mock.patch.object(gadget, 'gadget_error', return_value=gadget_error),
               mock.patch.object(gadget, 'host_attached', return_value=False),
               mock.patch.object(gadget, 'dormant', return_value=False),

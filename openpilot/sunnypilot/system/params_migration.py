@@ -103,6 +103,21 @@ def _migrate_model_bundle_slots(_params):
     cloudlog.exception(f"Error migrating model bundle slots: {e}")
 
 
+def _migrate_jetlink_link(_params):
+  # Accelerator Link replaced the JetlinkEnabled toggle. Before manager writes
+  # JetlinkLink's default, a comma that had the toggle on keeps its link, on
+  # USB, the only host the toggle knew.
+  try:
+    if _params.get("JetlinkLink") is not None:
+      return
+    if not _params.get("JetlinkEnabled"):
+      return
+    _params.put("JetlinkLink", 1, block=True)  # 'usb', an index into accelerators.LINK_MODES
+    cloudlog.info("params_migration: JetlinkEnabled migrated to JetlinkLink USB")
+  except Exception as e:
+    cloudlog.exception(f"Error migrating JetlinkEnabled: {e}")
+
+
 def run_migration(_params):
   # migrate OnroadScreenOffBrightness
   if _params.get("OnroadScreenOffBrightnessMigrated") != ONROAD_BRIGHTNESS_MIGRATION_VERSION:
@@ -142,3 +157,6 @@ def run_migration(_params):
 
   # seed the chestnut model slot from the pre-split single slot
   _migrate_model_bundle_slots(_params)
+
+  # the Accelerator Link setting from the old on/off toggle
+  _migrate_jetlink_link(_params)

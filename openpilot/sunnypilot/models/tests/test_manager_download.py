@@ -795,9 +795,16 @@ class TestBigModelSlotWithoutChestnut(ManagerDownloadTestBase):
 
 
 def _jetlink_params(values: dict):
-  """The jetlink param store as the models package would read it."""
+  """The jetlink param store as the models package would read it: through
+  helpers, and the link setting off its file as jetlink.comma reads it."""
+  from contextlib import ExitStack
+  from jetlink.comma import gadget
   from openpilot.sunnypilot.accelerators.jetlink import helpers as jetlink_helpers
-  return mock.patch.object(jetlink_helpers, "_get", side_effect=lambda key, default=None: values.get(key, default))
+  stack = ExitStack()
+  stack.enter_context(mock.patch.object(jetlink_helpers, "_get", side_effect=lambda key, default=None: values.get(key, default)))
+  stack.enter_context(mock.patch.object(gadget, "raw_param", side_effect=lambda key: None if values.get(key) is None
+                                        else str(values[key]).encode()))
+  return stack
 
 
 class TestActiveBundleSelection(OpenpilotTestCase):
@@ -836,7 +843,7 @@ class TestActiveBundleSelection(OpenpilotTestCase):
     raw = self._raw_bundle('small')
     raw['runner'] = int(custom.ModelManagerSP.Runner.tinygrad)
     params = self._params(qcom=raw, chestnut=self._raw_bundle('big'))
-    with _jetlink_params({'JetlinkEnabled': True}), \
+    with _jetlink_params({'JetlinkLink': 1}), \
          mock.patch('openpilot.sunnypilot.models.helpers.chestnut_present', return_value=False):
       assert get_active_bundle(params).ref == 'small'
       assert helpers.get_active_model_runner(params, force_check=True) == custom.ModelManagerSP.Runner.tinygrad
@@ -957,7 +964,7 @@ class TestSmallSlotUnderTheLink(OpenpilotTestCase):
 
   def test_the_stored_bundle_reads_the_same_whatever_the_link_says(self):
     params = self._params(self._raw_bundle("custom_small"))
-    for values in ({"JetlinkEnabled": True}, {}):
+    for values in ({"JetlinkLink": 1}, {}):
       with _jetlink_params(values), mock.patch("openpilot.sunnypilot.models.helpers.chestnut_present", return_value=False):
         assert get_selected_bundle(params, "qcom").ref == "custom_small"
         assert get_active_bundle(params).ref == "custom_small"
