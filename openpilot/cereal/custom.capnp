@@ -370,6 +370,9 @@ struct OnroadEventSP @0xda96579883444c35 {
     stockEcuReady @31;
     bigModelAvailable @32;
     bigModelLinkLost @33;
+    stockLkasOff @34;
+    longitudinalEnableChime @35;
+    longitudinalDisableChime @36;
   }
 }
 
