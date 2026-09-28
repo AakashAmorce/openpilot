@@ -240,10 +240,17 @@ sections:
         - type: offroad_only
     - key: TorqueControlTune
       widget: multiple_button
-      title: Torque Control Tune Version
-      description: Select the version of Torque Control Tune to use.
+      title: Torque Control Tune Version (Small Models)
+      description: Select the version of Torque Control Tune to use while the small model is driving.
       # options come from latcontrol_torque_versions.json via generate_settings_schema's
       # _inject_dynamic_options; a static list here would be dead data that drifts
+      enablement:
+      - $ref: '#/macros/offroad'
+    - key: TorqueControlTuneBig
+      widget: multiple_button
+      title: Torque Control Tune Version (Big Models)
+      description: Select the version of Torque Control Tune to use while a big model is driving.
+      # options injected like TorqueControlTune's
       enablement:
       - $ref: '#/macros/offroad'
 - id: lane_change

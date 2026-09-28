@@ -20,7 +20,7 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.mads.helpers import MadsSteeringModeOnBrake, get_mads_limited_brands, offroad_brand
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AUTO_LANE_CHANGE_TIMER, AutoLaneChangeMode
 from openpilot.sunnypilot.selfdrive.controls.lib.lane_change_smoothing import LEVEL_OFF, read_level
-from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import load_versions, resolved_tune_version
+from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import TUNE_PARAM_BY_SIZE, jerk_aware_has_effect, versions_by_label
 from openpilot.system.ui.lib.application import gui_app
 
 MADS_STEERING_MODE_LABELS = [tr("remain"), tr("pause"), tr("disengage")]
@@ -60,7 +60,6 @@ class SteeringLayoutMici(NavScroller):
     self._alc_val = AutoLaneChangeMode.NUDGE
     self._torque_allowed = False
     self._enforce_torque = False
-    self._v2_tune = False
 
     self._mads_settings_btn = BigButtonSP(tr("mads"))
     self._lane_change_btn = BigButtonSP(tr("lane change"))
@@ -120,16 +119,19 @@ class SteeringLayoutMici(NavScroller):
                                     not ui_state.params.get_bool("NeuralNetworkLateralControl"))
 
     # Jerk-aware control is independent of EnforceTorqueControl on torque-native cars.
-    # NNLC and the v2 tune use the same controller path, so they disable this option.
+    # NNLC and the v2 tune use the same controller path, so they disable this option
+    # (v2 only when every model size runs it; see torque_tune.jerk_aware_has_effect).
     self._jerk_aware_toggle = BigParamControl(tr("jerk aware"), "LateralJerkTorqueController")
     self._jerk_aware_toggle.set_enabled(lambda: ui_state.is_offroad() and
                                         not ui_state.params.get_bool("NeuralNetworkLateralControl") and
-                                        not self._v2_tune)
+                                        jerk_aware_has_effect(ui_state.params))
 
     # An unset version resolves through the param default. Keep a fallback for unreadable metadata.
-    tq_versions = self._load_torque_versions() or {tr("default"): 2.0}
-    self._tq_version = BigMultiParamToggleSP(tr("tune version"), "TorqueControlTune",
-                                             list(tq_versions), values=list(tq_versions.values()))
+    tq_versions = versions_by_label() or {tr("default"): 2.0}
+    # one tune per model size; controlsd swaps them as modelV2.big changes
+    self._tq_versions = [BigMultiParamToggleSP(tr("tune version") + "\n" + size, TUNE_PARAM_BY_SIZE[big],
+                                               list(tq_versions), values=list(tq_versions.values()))
+                         for big, size in ((False, tr("small models")), (True, tr("big models")))]
 
     self._tq_self_tune_btn = BigButtonSP(tr("self tune"))
     self._tq_self_tune_btn.set_subtitle_font_size(24)
@@ -162,25 +164,11 @@ class SteeringLayoutMici(NavScroller):
     self._tq_items_rest = [self._tq_self_tune_btn, self._tq_custom_btn]
     for item in self._tq_items_rest:
       item.set_enabled(lambda: self._enforce_torque)
-    # controlsd selects the tune at startup.
-    self._tq_version.set_enabled(lambda: self._enforce_torque and ui_state.is_offroad())
+    # controlsd builds both tunes at startup.
+    for item in self._tq_versions:
+      item.set_enabled(lambda: self._enforce_torque and ui_state.is_offroad())
     self._tq_view = self._torque_settings_btn.link_sub_panel([self._torque_toggle, self._jerk_aware_toggle,
-                                                              self._tq_version] + self._tq_items_rest)
-
-  @staticmethod
-  def _load_torque_versions() -> dict[str, float]:
-    """Load torque versions in ascending order for the selector."""
-    try:
-      data = load_versions()
-    except (OSError, ValueError):
-      return {}
-    versions: dict[str, float] = {}
-    for label, info in data.items():
-      try:
-        versions[label] = float(info["version"])
-      except (KeyError, ValueError, TypeError):
-        pass
-    return dict(sorted(versions.items(), key=lambda kv: kv[1]))
+                                                              *self._tq_versions] + self._tq_items_rest)
 
   def _update_state(self):
     super()._update_state()
@@ -232,7 +220,6 @@ class SteeringLayoutMici(NavScroller):
                                         (tr("road-edge"), road_edge), (tr("smooth"), LC_LEVEL_LABELS[lc_level])])
 
     enforce_torque = self._enforce_torque = ui_state.params.get_bool("EnforceTorqueControl")
-    self._v2_tune = resolved_tune_version(ui_state.params) == 2.0
     jerk_aware = ui_state.params.get_bool("LateralJerkTorqueController")
     self_tune_on = ui_state.params.get_bool("LiveTorqueParamsToggle")
     custom_on = ui_state.params.get_bool("CustomTorqueParams")
@@ -243,7 +230,7 @@ class SteeringLayoutMici(NavScroller):
     else:
       # set_badges hides entries whose value is "off".
       self._torque_settings_btn.set_badges([(tr("enabled"), _on_off(enforce_torque)), (tr("jerk-aware"), _on_off(jerk_aware)),
-                                            (tr("self-tune"), _on_off(self_tune_on)), (tr("custom-tuning"), _on_off(custom_on))])
+                                            (tr("self-tune"), _on_off(self_tune_on)), (tr("custom"), _on_off(custom_on))])
     self._nnlc_toggle.set_enabled(torque_allowed and offroad and not enforce_torque and not jerk_aware)
 
     self._update_mads_state()

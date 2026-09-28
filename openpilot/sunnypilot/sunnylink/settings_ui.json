@@ -511,8 +511,19 @@
                 {
                   "key": "TorqueControlTune",
                   "widget": "multiple_button",
-                  "title": "Torque Control Tune Version",
-                  "description": "Select the version of Torque Control Tune to use.",
+                  "title": "Torque Control Tune Version (Small Models)",
+                  "description": "Select the version of Torque Control Tune to use while the small model is driving.",
+                  "enablement": [
+                    {
+                      "type": "offroad_only"
+                    }
+                  ]
+                },
+                {
+                  "key": "TorqueControlTuneBig",
+                  "widget": "multiple_button",
+                  "title": "Torque Control Tune Version (Big Models)",
+                  "description": "Select the version of Torque Control Tune to use while a big model is driving.",
                   "enablement": [
                     {
                       "type": "offroad_only"

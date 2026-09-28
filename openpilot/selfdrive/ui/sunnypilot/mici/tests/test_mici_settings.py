@@ -159,22 +159,23 @@ class TestMultiParamValueMapping:
     assert w.value == ALC_LABELS[AutoLaneChangeMode.OFF]
     assert params.get("AutoLaneChangeTimer") == AutoLaneChangeMode.OFF
 
-  def test_torque_tune_unset_shows_declared_default(self, params):
+  @pytest.mark.parametrize("key", ["TorqueControlTune", "TorqueControlTuneBig"])
+  def test_torque_tune_unset_shows_declared_default(self, params, key):
     """controlsd_ext resolves an unset param through the params_keys.h default with
-    return_default, so the selector must agree. If these drift, the UI claims a tune the car
-    isn't running."""
-    from openpilot.selfdrive.ui.sunnypilot.mici.layouts.steering import SteeringLayoutMici
+    return_default, so each size's selector must agree. If these drift, the UI claims a tune
+    the car isn't running."""
     from openpilot.selfdrive.ui.sunnypilot.mici.widgets.button import BigMultiParamToggleSP
+    from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import versions_by_label
 
-    versions = SteeringLayoutMici._load_torque_versions()
+    versions = versions_by_label()
     assert list(versions.values()) == sorted(versions.values()), "must be oldest-first"
 
-    params.remove("TorqueControlTune")
-    w = BigMultiParamToggleSP("t", "TorqueControlTune", list(versions), values=list(versions.values()))
-    assert versions[w.value] == pytest.approx(float(params.get("TorqueControlTune", return_default=True)))
+    params.remove(key)
+    w = BigMultiParamToggleSP("t", key, list(versions), values=list(versions.values()))
+    assert versions[w.value] == pytest.approx(float(params.get(key, return_default=True)))
 
     for label, version in versions.items():
-      params.put("TorqueControlTune", version, block=True)
+      params.put(key, version, block=True)
       w.refresh()
       assert w.value == label
 
@@ -346,6 +347,21 @@ class TestJerkAwareToggle:
     assert not layout._jerk_aware_toggle.enabled
 
     params.put_bool("NeuralNetworkLateralControl", False, block=True)
+    render(layout._tq_view)
+    assert layout._jerk_aware_toggle.enabled
+
+  def test_jerk_aware_locked_while_every_model_size_runs_v2(self, params):
+    """v2 forces the jerk-aware controller off; one size on another tune keeps it meaningful."""
+    from openpilot.selfdrive.ui.sunnypilot.mici.layouts.steering import SteeringLayoutMici
+
+    params.put_bool("EnforceTorqueControl", True, block=True)
+    params.put("TorqueControlTune", 2.0, block=True)
+    params.put("TorqueControlTuneBig", 2.0, block=True)
+    layout = SteeringLayoutMici()
+    render(layout._tq_view)
+    assert not layout._jerk_aware_toggle.enabled
+
+    params.put("TorqueControlTuneBig", 1.0, block=True)
     render(layout._tq_view)
     assert layout._jerk_aware_toggle.enabled
 

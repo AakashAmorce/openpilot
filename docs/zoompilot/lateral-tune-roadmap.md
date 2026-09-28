@@ -3,7 +3,8 @@
 `openpilot/sunnypilot/selfdrive/controls/lib/latcontrol_torque_v2.py`, selected by
 `TorqueControlTune = 2.0`, seeded once per steer-to-zero Mazda by `_seed_mazda_torque_defaults`
 (from card at fingerprint, and from manager start off the last drive's CarParams; the marker is
-`MazdaTorqueTuneSeeded`, because manager_init writes the 0.0 default to disk before card runs).
+`MazdaTorqueTuneSeeded`, because manager_init writes the declared default to disk before card
+runs; the default is 2.0 since 2026-09-11, the seed still moves devices that materialized 0.0).
 v2 is v0's algorithm (setpoint == the live request, error corrected
 in lateral acceleration space, the speed-dependent extension owning the feedforward params)
 plus four mechanisms. Each one is there because the 2026-09-01 leave-one-out replay of the

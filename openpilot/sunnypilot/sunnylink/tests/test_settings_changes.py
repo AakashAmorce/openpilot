@@ -19,6 +19,7 @@ from openpilot.common.parameterized import parameterized
 
 from openpilot.sunnypilot.sunnylink.tools.generate_settings_schema import (
   DEFINITION_PATH,
+  TORQUE_TUNE_KEYS,
   TORQUE_VERSIONS_PATH,
   _build_torque_options,
   _load_torque_versions,
@@ -172,9 +173,10 @@ class TestTorqueOptionGeneration(OpenpilotTestCase):
     versions = _load_torque_versions()
     assert versions, "latcontrol_torque_versions.json must have at least one version"
     expected = _build_torque_options(versions)
-    item = _find_item(schema, "TorqueControlTune")
-    assert item is not None, "TorqueControlTune item must be present"
-    assert item.get("options") == expected
+    for key in TORQUE_TUNE_KEYS:
+      item = _find_item(schema, key)
+      assert item is not None, f"{key} item must be present"
+      assert item.get("options") == expected
 
   def test_torque_versions_path_resolves(self):
     assert os.path.exists(TORQUE_VERSIONS_PATH), (
@@ -182,13 +184,14 @@ class TestTorqueOptionGeneration(OpenpilotTestCase):
     )
 
   def test_no_static_torque_options_in_definition(self):
-    """The injector overwrites TorqueControlTune's options for every consumer, so a static
+    """The injector overwrites the tune keys' options for every consumer, so a static
     list in settings_ui.json is dead data that silently drifts from the versions file."""
     with open(DEFINITION_PATH) as f:
       raw = json.load(f)
-    item = _find_item(raw, "TorqueControlTune")
-    assert item is not None, "TorqueControlTune item must be present"
-    assert "options" not in item, "TorqueControlTune must not carry static options; they come from latcontrol_torque_versions.json"
+    for key in TORQUE_TUNE_KEYS:
+      item = _find_item(raw, key)
+      assert item is not None, f"{key} item must be present"
+      assert "options" not in item, f"{key} must not carry static options; they come from latcontrol_torque_versions.json"
 
 
 class TestReleaseBranchGates(OpenpilotTestCase):
