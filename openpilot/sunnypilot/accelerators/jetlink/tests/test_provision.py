@@ -136,16 +136,27 @@ class TestProvisionCost(OpenpilotTestCase):
       assert d.provision() is True
     assert d.client.ensure_engine.call_args.kwargs['onnx_path'] is None
 
-  def test_a_server_that_wants_the_bytes_gets_them_fetched(self):
+  def test_a_server_that_wants_the_bytes_gets_them_in_the_same_run(self):
+    d = provision.ProvisioningRun()
+    d.client = serving_client()
+    with mock.patch.object(provision.helpers, 'shipped_model_path', return_value=None), \
+         mock.patch.object(d, 'fetch_model', return_value=self.model) as fetch, \
+         mock.patch.object(provision, 'ensure', side_effect=[EngineMissing('no engine'), FakeSpec()]) as ensure:
+      # one run: the owner lends the link for all of it, and leaving after the
+      # download put the upload and build five minutes out
+      assert d.provision() is True
+    fetch.assert_called_once()
+    assert [c.args[3] for c in ensure.call_args_list] == [None, self.model]
+    assert d.client.hello.call_count == 2, "a new session after the download"
+
+  def test_a_download_that_fails_leaves_the_engine_missing(self):
     d = provision.ProvisioningRun()
     d.client = serving_client()
     d.client.ensure_engine.side_effect = EngineMissing('no engine')
     with mock.patch.object(provision.helpers, 'shipped_model_path', return_value=None), \
-         mock.patch.object(d, 'fetch_model', return_value=self.model) as fetch:
-      # False, not an exception: the download takes minutes and the link is
-      # not held through it; the next poll tries again.
-      assert d.provision() is False
-    fetch.assert_called_once()
+         mock.patch.object(d, 'fetch_model', return_value=None), \
+         self.assertRaises(EngineMissing):
+      d.provision()
 
   def _wants_the_bytes(self):
     d = provision.ProvisioningRun()

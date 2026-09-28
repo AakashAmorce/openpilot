@@ -257,11 +257,16 @@ class ProvisioningRun:
       spec = ensure(self.client, sha256, nbytes, model_path,
                     progress=report_with_eta, should_stop=lambda: self.stop)
     except EngineMissing:
-      # nothing to give. Fetch it and let the next poll try again rather than
-      # holding the link through a download that takes minutes
-      if model_path is None and self.fetch_model() is not None:
-        return False
-      raise
+      # the server has nothing to build from, and neither have we: fetch the
+      # model and hand it over in this run. The owner lends the link for the
+      # whole run, so leaving after the download only put the build a
+      # WORKER_BACKOFF later, five minutes of a finished download doing nothing
+      if model_path is not None or (model_path := self.fetch_model()) is None:
+        raise
+      # a download of minutes can outlast the session; a hello starts a new one
+      self.client.hello(timeout=10.0)
+      spec = ensure(self.client, sha256, nbytes, model_path,
+                    progress=report_with_eta, should_stop=lambda: self.stop)
 
     accelerators.report_progress('ready', 1.0, 'engine ready')
     cloudlog.warning("jetlink: engine ready for %s", spec.sha256[:16])
