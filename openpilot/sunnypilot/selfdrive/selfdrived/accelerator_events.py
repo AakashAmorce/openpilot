@@ -30,7 +30,9 @@ class AcceleratorEvents:
 
     # stale status does not rearm the chime; only a fresh unavailable state does
     if all(sm.seen[s] and sm.alive[s] and sm.valid[s] for s in ('modelV2', 'modelDataV2SP')):
-      available = status.bigModelAvailable and not sm['modelV2'].big
+      # connected and waiting for a window to switch; availability, not proof
+      # of inference, which modelV2.big reports
+      available = status.acceleratorState == AcceleratorState.ready and not sm['modelV2'].big
       # once when it turns up, and again at every stop while it is still
       # waiting. On a MADS car latActive is true whenever the car is moving, so
       # the window only opens at a standstill: one three second alert ten

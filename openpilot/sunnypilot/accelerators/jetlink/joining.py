@@ -144,7 +144,7 @@ class JoiningModelState:
 
   @property
   def big_model_available(self) -> bool:
-    """Connected and waiting to switch; published with each small-model frame."""
+    """Connected and waiting to switch: what big_model_state calls ready."""
     return not self._stop.is_set() and self._available and self._active is self._small
 
   @property

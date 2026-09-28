@@ -199,7 +199,6 @@ class LoadTest(OpenpilotTestCase):
     build.assert_called_once_with(1928, 1208, self.small)
     self.assertIsInstance(loaded, accelerators.Accelerator)
     self.assertIs(loaded.model, joining)
-    self.assertEqual(loaded.name, 'jetlink')
     # the status reads the model's client per send: the link comes and goes mid-drive
     self.assertIs(loaded.status.client, joining.client)
     joining.client = None
@@ -211,10 +210,10 @@ class LoadTest(OpenpilotTestCase):
          mock.patch.object(backend.cloudlog, 'exception') as log:
       loaded = accelerators.load(1928, 1208, self.small)
     log.assert_called_once_with("jetlink load failed")
-    # as modeld always did it: the accelerator's name and status, over the small model
+    # as modeld always did it: the accelerator's status, over the small model
     self.assertIs(loaded.model, self.small)
     self.assertIs(loaded.status.model, self.small)
-    self.assertEqual(loaded.name, 'jetlink')
+
 
 class DaemonTest(OpenpilotTestCase):
   def test_jetlinkd_is_offered_and_gated_on_enabled(self):

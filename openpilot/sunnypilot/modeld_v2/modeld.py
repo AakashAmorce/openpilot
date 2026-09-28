@@ -552,9 +552,7 @@ def main(demo=False):
       drivingdata_send = messaging.new_message('drivingModelData')
       posenet_send = messaging.new_message('cameraOdometry')
       mdv2sp_send = messaging.new_message('modelDataV2SP')
-      mdv2sp_send.modelDataV2SP.bigModelAvailable = getattr(model, 'big_model_available', False)
       mdv2sp_send.modelDataV2SP.acceleratorState = getattr(model, 'big_model_state', 'none')
-      mdv2sp_send.modelDataV2SP.acceleratorName = accelerator.name if accelerator else ''
 
       action = model.get_action_from_model(model_output, prev_action, lat_action_t, long_action_t, v_ego)
       prev_action = action

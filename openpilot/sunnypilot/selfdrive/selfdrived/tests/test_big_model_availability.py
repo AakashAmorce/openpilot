@@ -24,7 +24,8 @@ class TestBigModelAvailability(OpenpilotTestCase):
       self.sm.valid[service] = True
 
   def update(self, available=False, big=False, standstill=False):
-    self.sm['modelDataV2SP'].bigModelAvailable = available
+    # ready is the joining state connected and waiting for a window to switch
+    self.sm['modelDataV2SP'].acceleratorState = 'ready' if available else 'none'
     self.sm['modelV2'].big = big
     self.events.clear()
     self.events_sp.clear()
@@ -54,7 +55,7 @@ class TestBigModelAvailability(OpenpilotTestCase):
     self.assertFalse(self.update(big=True, standstill=True))
 
   def test_chestnut_and_old_messages_do_not_announce_availability(self):
-    self.assertFalse(custom.ModelDataV2SP.new_message().bigModelAvailable)
+    self.assertEqual(custom.ModelDataV2SP.new_message().acceleratorState, 'none')
     self.assertFalse(self.update())
     self.assertFalse(self.update(big=True))
     self.assertFalse(self.update())

@@ -145,12 +145,11 @@ class Daemon(NamedTuple):
 class Accelerator(NamedTuple):
   """The accelerator joined to modeld, from load().
 
-  Everything modeld keeps of it: the model to run, what goes where a chestnut
-  puts its ChestnutState, and the name modelDataV2SP.acceleratorName reports.
+  Everything modeld keeps of it: the model to run, and what goes where a
+  chestnut puts its ChestnutState.
   """
   model: Any
   status: Any
-  name: str
 
 
 def installed() -> bool:

@@ -25,8 +25,6 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.accelerators import Accelerator
 from openpilot.sunnypilot.accelerators.jetlink import helpers, spec_cache, warp_cache
 
-# modelDataV2SP.acceleratorName while this backend has joined modeld
-NAME = 'jetlink'
 # how long one attempt holds the gadget open waiting for a host. Not a deadline
 # on the large model: JoiningModelState retries for the drive, since the Jetson
 # boots after the comma is already onroad
@@ -292,7 +290,7 @@ def load(cam_w: int, cam_h: int, small) -> Accelerator | None:
   from openpilot.sunnypilot.accelerators.jetlink.status import JetlinkStatus
   # the model, not its client: the link arrives after this is built and may
   # come and go mid-drive. Reading model.client per send follows it
-  return Accelerator(model, JetlinkStatus(model), NAME)
+  return Accelerator(model, JetlinkStatus(model))
 
 
 def make_model_state(cam_w: int, cam_h: int, small=None):

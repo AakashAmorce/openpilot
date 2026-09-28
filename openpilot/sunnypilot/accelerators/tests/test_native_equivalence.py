@@ -17,7 +17,7 @@ prepared, because `if not CHESTNUT` guards the call, so its load() answers
 None; no board and the link off stops at prepare(), which answers from the
 toggle and opens no link. The rest pins the footprint: chestnut statements
 are develop's byte for byte, and the module is reachable from two call sites
-in five hunks.
+in four hunks.
 """
 import ast
 import subprocess
@@ -139,7 +139,7 @@ class FakeAccelerators:
     if not self.prepared:
       return None
     model = SimpleNamespace(chestnut=True, big_model_available=True, big_model_state='joining')
-    return accelerators.Accelerator(model, SimpleNamespace(send=lambda *a: None, big=True), 'fake')
+    return accelerators.Accelerator(model, SimpleNamespace(send=lambda *a: None))
 
 
 class FakeParams:
@@ -315,7 +315,7 @@ class NativeEquivalence(OpenpilotTestCase):
 
 
 class UpstreamFootprint(OpenpilotTestCase):
-  """modeld.py stays five hunks wide, and chestnut's lines stay develop's."""
+  """modeld.py's jetlink path stays four hunks wide, and chestnut's lines stay develop's."""
 
   @classmethod
   def setUpClass(cls):
@@ -335,13 +335,14 @@ class UpstreamFootprint(OpenpilotTestCase):
     if body is None:
       self.skipTest(f"no {BASELINE} here: not a checkout of this fork, or the branch is gone")
 
-  def test_the_module_is_reachable_from_two_calls_in_five_hunks(self):
+  def test_the_module_is_reachable_from_two_calls_in_four_hunks(self):
     lines = self.src.splitlines()
     calls = _accelerator_calls(self.tree)
     sites = [f"  modeld.py:{lineno} {lines[lineno - 1].strip()}" for lineno, _ in calls]
 
-    # the five hunks: decision, load, status publisher, fallback re-raise and
-    # the modelDataV2SP fields. Lines closer than a hunk's context are one hunk
+    # the four hunks that name it: decision, load, status publisher and the
+    # fallback re-raise. The fifth site, modelDataV2SP.acceleratorState, reads
+    # the model. Lines closer than a hunk's context are one hunk
     jetlink = sorted({n.lineno for n in ast.walk(self.tree) if isinstance(n, ast.Name) and n.id == 'accelerator'}
                      | {lineno for lineno, _ in calls})
     hunk_starts = [line for i, line in enumerate(jetlink) if i == 0 or line - jetlink[i - 1] > 8]
@@ -349,7 +350,7 @@ class UpstreamFootprint(OpenpilotTestCase):
 
     self.assertEqual({attr for _, attr in calls}, ACCELERATOR_CALLS, f"the seam widened:\n{detail}")
     self.assertEqual(len(calls), 2, f"expected prepare/load and nothing else:\n{detail}")
-    self.assertEqual(len(hunk_starts), 5, f"modeld.py's jetlink path is no longer five hunks:\n{detail}")
+    self.assertEqual(len(hunk_starts), 4, f"modeld.py's jetlink path is no longer four hunks:\n{detail}")
 
   def test_the_chestnut_block_never_mentions_the_accelerator_module(self):
     _assert_chestnut_blocks_ignore_the_accelerator(self, self.tree)

@@ -11,7 +11,7 @@ on modeld_v2, so the link has to be reachable from that process too. This
 reads modeld_v2/modeld.py rather than importing it (that costs tinygrad and a
 vision stream) and pins the same seam test_native_equivalence pins for stock
 modeld: the two calls, the decision before the process goes realtime, the
-fallback opening with the re-raise, and the modelDataV2SP fields the UI reads.
+fallback opening with the re-raise, and the modelDataV2SP field the UI reads.
 """
 import ast
 import unittest
@@ -67,9 +67,8 @@ class ModeldV2Seam(OpenpilotTestCase):
     self.assertTrue(_tests_name(guard, 'accelerator') and isinstance(guard.body[0], ast.Raise),
                     "the fallback no longer opens with `if accelerator: raise`")
 
-  def test_the_ui_fields_are_published(self):
-    for field in ('bigModelAvailable', 'acceleratorState', 'acceleratorName'):
-      self.assertIn(f'modelDataV2SP.{field}', self.src, f"modeld_v2 no longer publishes {field}")
+  def test_the_ui_field_is_published(self):
+    self.assertIn('modelDataV2SP.acceleratorState', self.src, "modeld_v2 no longer publishes acceleratorState")
 
   def test_the_loop_reads_the_per_model_face_off_the_model(self):
     from openpilot.sunnypilot.accelerators.jetlink.joining import JoiningModelState

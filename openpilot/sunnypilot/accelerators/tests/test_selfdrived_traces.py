@@ -47,7 +47,7 @@ INIT = 'selfdriveInitializing'
 
 class TraceTest(OpenpilotTestCase):
   def step(self, loading=False, active=None, big=False, alive=True,
-           state=AcceleratorState.none, available=False, standstill=False) -> tuple[list[str], list[str]]:
+           state=AcceleratorState.none, standstill=False) -> tuple[list[str], list[str]]:
     """One update_events, and everything it raised."""
     sd = self.sd
     sd.params.get_bool.return_value = loading
@@ -59,7 +59,6 @@ class TraceTest(OpenpilotTestCase):
       sd.sm.seen[service] = sd.sm.seen[service] or alive
     sd.sm['modelV2'].big = big
     sd.sm['modelDataV2SP'].acceleratorState = state
-    sd.sm['modelDataV2SP'].bigModelAvailable = available
     # carState reaches selfdrived on its own socket, not through the SubMaster
     sd.update_events(SimpleNamespace(standstill=standstill))
     return ([EVENT_NAME[n] for n in sd.events.names], [EVENT_NAME_SP[n] for n in sd.events_sp.names])
@@ -103,7 +102,7 @@ class JetlinkTrace(TraceTest):
   Nothing in this trace writes ChestnutLoading or ChestnutActive - the joining
   state stopped doing that - so the native block sees a device with no board
   and stays silent for the whole drive. Everything said is said by the
-  adapter, from modelV2.big and the additive modelDataV2SP fields.
+  adapter, from modelV2.big and modelDataV2SP.acceleratorState.
   """
 
   def setUp(self):
@@ -117,10 +116,10 @@ class JetlinkTrace(TraceTest):
     # background and stops blocking the moment there is something to drive on.
     self.assertEqual(self.step(state=AcceleratorState.joining), ([INIT], []))
     # The promotion gate: a big model is there, waiting for a disengagement.
-    self.assertEqual(self.step(state=AcceleratorState.joining, available=True), ([INIT], ['bigModelAvailable']))
-    self.assertEqual(self.step(state=AcceleratorState.joining, available=True), ([INIT], []))
+    self.assertEqual(self.step(state=AcceleratorState.ready), ([INIT], ['bigModelAvailable']))
+    self.assertEqual(self.step(state=AcceleratorState.ready), ([INIT], []))
     # and again at a stop: carState's standstill reaches the adapter
-    self.assertEqual(self.step(state=AcceleratorState.joining, available=True, standstill=True), ([INIT], ['bigModelAvailable']))
+    self.assertEqual(self.step(state=AcceleratorState.ready, standstill=True), ([INIT], ['bigModelAvailable']))
     # It swaps. One chime, from modelV2.big and nothing else.
     self.assertEqual(self.step(state=AcceleratorState.running, big=True), ([INIT], ['bigModelReady']))
     for _ in range(10):
