@@ -284,7 +284,7 @@ class TestTheRun(OpenpilotTestCase):
       p = mock.patch.object(d, name, mock.Mock(return_value=value))
       self.addCleanup(p.stop)
       p.start()
-    for module, name, value in ((jetlinkd.helpers, 'migrate_selection', None), (gadget, 'enabled', True),
+    for module, name, value in ((gadget, 'enabled', True),
                                 (gadget, 'pending_shutdown', None), (gadget, 'wait_for_host', True),
                                 (jetlinkd.warp_cache, 'built', True)):
       p = mock.patch.object(module, name, mock.Mock(return_value=value))

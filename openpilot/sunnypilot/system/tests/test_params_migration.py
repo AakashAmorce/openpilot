@@ -7,7 +7,7 @@ See the LICENSE.md file in the root directory for more details.
 
 from openpilot.common.params import Params
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.sunnypilot.system.params_migration import _migrate_jetlink_link, _migrate_model_bundle_slots
+from openpilot.sunnypilot.system.params_migration import _migrate_model_bundle_slots
 
 
 class TestModelBundleSlotMigration(OpenpilotTestCase):
@@ -35,30 +35,3 @@ class TestModelBundleSlotMigration(OpenpilotTestCase):
     _migrate_model_bundle_slots(params)
     assert params.get("ModelManager_ActiveBundleChestnut") is None
 
-
-class TestJetlinkLinkMigration(OpenpilotTestCase):
-  """JetlinkEnabled became Accelerator Link. manager writes JetlinkLink's default
-  of off right after the migrations run, so a comma with the toggle on has to be
-  moved to USB here or it comes up with the link off."""
-
-  def test_the_toggle_on_is_usb(self):
-    from openpilot.sunnypilot.accelerators import LINK_MODES
-    params = Params()
-    params.put_bool("JetlinkEnabled", True, block=True)
-    _migrate_jetlink_link(params)
-    assert LINK_MODES[params.get("JetlinkLink")] == "usb"
-
-  def test_the_toggle_off_or_unset_is_left_to_the_default(self):
-    params = Params()
-    _migrate_jetlink_link(params)
-    assert params.get("JetlinkLink") is None
-    params.put_bool("JetlinkEnabled", False, block=True)
-    _migrate_jetlink_link(params)
-    assert params.get("JetlinkLink") is None
-
-  def test_a_setting_already_made_wins(self):
-    params = Params()
-    params.put_bool("JetlinkEnabled", True, block=True)
-    params.put("JetlinkLink", 2, block=True)
-    _migrate_jetlink_link(params)
-    assert params.get("JetlinkLink") == 2

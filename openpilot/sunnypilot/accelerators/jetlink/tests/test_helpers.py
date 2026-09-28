@@ -258,7 +258,7 @@ class TestSelectedModel(OpenpilotTestCase):
     assert self.select_with(None, index=[]) is None
 
 
-class TestSelectedRef(OpenpilotTestCase):
+class TestSelectedSlot(OpenpilotTestCase):
   def setUp(self):
     helpers._slot_cache = None
     self.addCleanup(setattr, helpers, '_slot_cache', None)
@@ -266,18 +266,18 @@ class TestSelectedRef(OpenpilotTestCase):
   def read_with(self, slot):
     helpers._slot_cache = None
     with mock.patch.object(helpers, '_get', return_value=slot):
-      return helpers.selected_ref()
+      return helpers.selected_slot()
 
   def test_a_second_read_within_the_ttl_costs_nothing(self):
     # the UI names the active model every frame
     with mock.patch.object(helpers, '_get', return_value={'ref': REF_A}) as read:
       helpers._slot_cache = None
-      assert helpers.selected_ref() == REF_A
-      assert helpers.selected_ref() == REF_A
+      assert helpers.selected_slot()[0] == REF_A
+      assert helpers.selected_slot()[0] == REF_A
     assert read.call_count == 1
 
   def test_reads_the_slots_ref(self):
-    assert self.read_with({'ref': REF_A, 'displayName': 'Alpha'}) == REF_A
+    assert self.read_with({'ref': REF_A, 'displayName': 'Alpha'})[0] == REF_A
 
   def test_the_slot_carries_its_name(self):
     helpers._slot_cache = None
@@ -290,63 +290,6 @@ class TestSelectedRef(OpenpilotTestCase):
   def test_anything_else_is_no_pick(self):
     for slot in (None, {}, {'ref': ''}, {'ref': 7}, 'junk'):
       assert self.read_with(slot) is None, slot
-
-
-class TestMigrateSelection(OpenpilotTestCase):
-  """JetlinkModel was the accelerator's own pick. It moves into the big-model slot
-  once; a name from before the catalog maps to the engine that is ready, so a
-  160 s rebuild is not the price of the rename."""
-
-  CATALOG = [{'name': 'Alpha', 'ref': REF_A}, {'name': 'Beta', 'ref': REF_B}]
-
-  def migrate(self, legacy, ready=None, slot_ref=None, resolve=None, listed=True):
-    values = {helpers.P_MODEL_LEGACY: legacy, gadget.P_READY: ready}
-    params = mock.patch.object(helpers, 'params').start()
-    self.addCleanup(mock.patch.stopall)
-    self.stored = mock.patch.object(helpers, '_store_slot', **({'side_effect': listed} if isinstance(listed, Exception) else {'return_value': listed})).start()
-    with mock.patch.object(helpers, '_get', side_effect=lambda k, d=None: values.get(k, d)), \
-         mock.patch.object(helpers, 'selected_ref', return_value=slot_ref), \
-         mock.patch.object(helpers, 'catalog', return_value=self.CATALOG), \
-         mock.patch.object(helpers, 'resolve_pointer', side_effect=resolve or (lambda ref: self.fail("nothing to look up"))):
-      helpers.migrate_selection()
-    return params.return_value
-
-  def test_a_ref_becomes_the_slot(self):
-    params = self.migrate(REF_A)
-    self.stored.assert_called_once_with(params, REF_A)
-    params.remove.assert_called_once_with(helpers.P_MODEL_LEGACY)
-
-  def test_an_old_name_becomes_the_slot_of_the_model_that_is_provisioned(self):
-    params = self.migrate('Beta v6', ready='b' * 64, resolve=lambda ref: ({REF_A: 'a' * 64, REF_B: 'b' * 64}[ref], 1))
-    self.stored.assert_called_once_with(params, REF_B)
-    params.remove.assert_called_once_with(helpers.P_MODEL_LEGACY)
-
-  def test_an_old_name_with_nothing_provisioned_is_dropped(self):
-    params = self.migrate('Beta v6')
-    self.stored.assert_not_called()
-    params.remove.assert_called_once_with(helpers.P_MODEL_LEGACY)
-
-  def test_a_ref_the_catalog_does_not_list_is_dropped(self):
-    params = self.migrate(REF_C, listed=False)
-    params.remove.assert_called_once_with(helpers.P_MODEL_LEGACY)
-
-  def test_no_catalog_yet_is_left_for_the_next_run(self):
-    params = self.migrate(REF_A, listed=LookupError('no catalog'))
-    params.remove.assert_not_called()
-
-  def test_a_slot_already_picked_wins(self):
-    params = self.migrate(REF_A, slot_ref=REF_B)
-    self.stored.assert_not_called()
-    params.remove.assert_called_once_with(helpers.P_MODEL_LEGACY)
-
-  def test_nothing_to_migrate_touches_nothing(self):
-    params = self.migrate(None)
-    params.remove.assert_not_called()
-
-  def test_offline_is_left_for_the_next_run(self):
-    params = self.migrate('Beta v6', ready='b' * 64, resolve=OSError('offline'))
-    self.stored.assert_not_called()
-    params.remove.assert_not_called()
 
 
 class TestSelectedModelReadiness(OpenpilotTestCase):

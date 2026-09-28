@@ -124,7 +124,6 @@ def connect(loan, deadline: float | None = None, name: str | None = None):
 
 # -- the model ------------------------------------------------------------
 
-P_MODEL_LEGACY = "JetlinkModel"      # the accelerator's own pick, before the big-model slot was the one choice
 P_POINTERS = "JetlinkModelPointers"  # ref -> {oid, size}; a commit's tree never changes
 # the model manager's copy of sunnypilot's big-model catalog; the key is
 # models.fetcher.ModelFetcher.MODEL_SOURCES['chestnut']'s
@@ -222,11 +221,6 @@ def selected_slot() -> tuple[str, str] | None:
   return pick
 
 
-def selected_ref() -> str | None:
-  pick = selected_slot()
-  return pick[0] if pick else None
-
-
 def selected_model() -> dict | None:
   """The big model the device picked, or the fork's default big model, or the newest.
 
@@ -250,63 +244,6 @@ def selected_model() -> dict | None:
   if not models:
     return None
   return next((m for m in models if m['ref'] == DEFAULT_BIG_MODEL_REF), models[0])
-
-
-def migrate_selection() -> None:
-  """JetlinkModel was the accelerator's own pick; the big-model slot is the one
-  choice now. Move it there, once, at jetlinkd start.
-
-  A ref is written as the slot the model manager would write, minus the files,
-  which it fetches itself if a chestnut is fitted. A name from before the
-  catalog maps to the ref of the engine that is ready, a pointer fetch per
-  catalog model until the match. Without the network, or the catalog, it is
-  left for the next run. A slot already picked wins.
-  """
-  wanted = _get(P_MODEL_LEGACY)
-  if not wanted:
-    return
-  store = params()
-  if selected_ref() is None:
-    ref = wanted if _REF.fullmatch(wanted) else None
-    if ref is None and (ready := _get(gadget.P_READY)):
-      for m in catalog():
-        try:
-          oid, _ = resolve_pointer(m['ref'])
-        except Exception as e:
-          cloudlog.warning("jetlink: cannot migrate the selection %r yet: %s", wanted, e)
-          return
-        if oid == ready:
-          ref = m['ref']
-          break
-    if ref is not None:
-      try:
-        stored = _store_slot(store, ref)
-      except LookupError as e:
-        cloudlog.warning("jetlink: cannot migrate the selection %r yet: %s", wanted, e)
-        return
-      if stored:
-        cloudlog.warning("jetlink: selection %r is now the big-model slot, %s", wanted, ref[:10])
-      else:
-        cloudlog.warning("jetlink: selection %r is not a catalog model, using the default", wanted)
-  store.remove(P_MODEL_LEGACY)
-
-
-def _store_slot(params, ref: str) -> bool:
-  """Write the big-model slot as the model manager does for a bundle it has
-  downloaded. False if the catalog does not list the ref; LookupError if
-  there is no catalog to ask yet."""
-  global _slot_cache
-  from openpilot.sunnypilot.models.fetcher import get_cached_bundles
-  from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS, resolve_bundle_by_ref
-  bundles = get_cached_bundles(params, "chestnut")
-  if not bundles:
-    raise LookupError("no big-model catalog cached")
-  resolved = resolve_bundle_by_ref(ref, {"chestnut": bundles})
-  if resolved is None:
-    return False
-  params.put(ACTIVE_BUNDLE_KEYS["chestnut"], resolved[0].to_dict(), block=True)
-  _slot_cache = None
-  return True
 
 
 def model_dir() -> Path:

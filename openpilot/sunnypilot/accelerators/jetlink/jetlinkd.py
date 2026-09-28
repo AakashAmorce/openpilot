@@ -232,10 +232,6 @@ class Jetlinkd:
     """One provisioning round. True when there is nothing left to do."""
     if not gadget.enabled():
       return True
-    try:
-      helpers.migrate_selection()
-    except Exception:
-      cloudlog.exception("jetlink: could not migrate the model selection")
 
     reason = gadget.pending_shutdown()
     if reason is not None:
