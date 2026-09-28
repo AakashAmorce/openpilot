@@ -54,10 +54,13 @@ class TestTheShim(OpenpilotTestCase):
                                  cwd=BASEDIR, env={'PYTHONPATH': BASEDIR})
     self.assertIsNotNone(importlib.util.find_spec(owner.WORKER))
 
-  def test_manager_runs_the_shim(self):
+  def test_manager_runs_the_shim_as_jetlinkd_while_the_link_is_on(self):
     from openpilot.sunnypilot import accelerators
     [daemon] = accelerators.daemons()
-    self.assertEqual(daemon.module, owner.__name__)
+    self.assertEqual((daemon.name, daemon.module), ('jetlinkd', owner.__name__))
+    for enabled in (False, True):
+      with mock.patch.object(gadget, 'enabled', return_value=enabled):
+        self.assertEqual(daemon.should_run(False, None, None), enabled)
 
 
 class TestTheNamesTheLayerReads(OpenpilotTestCase):

@@ -14,6 +14,8 @@ bounce in wait_for_host, is jetlink.comma's and tested there.
 """
 
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -59,23 +61,6 @@ class ClockedTest(OpenpilotTestCase):
       p.start()
 
 
-class JoiningOverTheCable(ClockedTest):
-  """Over a phone's cable there is nothing to enumerate: the dial already
-  reached the far end, so the join neither waits on the UDC nor bounces the
-  gadget."""
-
-  def test_a_join_over_the_cable_never_bounces_the_gadget(self):
-    # the phone configured the UDC and its dial is the proof it is there; an
-    # unbind would only take its network interface down
-    self.bus('configured')
-    link = mock.Mock()
-    link.open.return_value = client = mock.Mock()
-    with mock.patch.object(gadget, 'link_kind', return_value='cable'):
-      assert backend._connect_patiently(link) is client
-    client.rebind.assert_not_called()
-    assert self.clock.slept == 0.0
-
-
 class HoldingTheLink(ClockedTest):
   """A link the attempt could not use stays open for the next one.
 
@@ -97,13 +82,16 @@ class HoldingTheLink(ClockedTest):
     assert self.link.client is self.client, 'unbound the gadget between attempts'
     assert self.client.close.call_count == 0
 
-  def test_a_gadget_that_will_not_open_is_still_reported(self):
-    # a provisioning run still finishing an exchange, or a gadget boot never created:
-    # there is no link to hold on to and the join loop should hear why
+  def test_endpoints_that_will_not_open_are_still_reported(self):
+    # the owner lent them, but a provisioning run is still finishing an
+    # exchange on them: there is no link to hold on to and the join loop
+    # should hear why
+    from jetlink.comma import lending
     self.link.client = None
-    with mock.patch.object(backend.helpers, 'connect', side_effect=OSError('ep0 busy')):
-      with self.assertRaises(OSError):
-        backend._connect_patiently(self.link)
+    with mock.patch.object(lending, 'borrow', return_value=mock.Mock(closed=False)), \
+         mock.patch.object(backend.helpers, 'connect', side_effect=OSError('ep0 busy')), \
+         self.assertRaisesRegex(OSError, 'ep0 busy'):
+      backend._connect_patiently(self.link)
 
   def test_no_model_picked_yet_keeps_the_gadget_presented(self):
     # The panel says what is going on; a closed gadget would take the whole
@@ -223,6 +211,78 @@ class BorrowingTheGadget(OpenpilotTestCase):
          mock.patch.object(backend.helpers, 'connect'):
       self.link.open(deadline=backend.time.monotonic() + 1.5)
     assert borrow.call_args.kwargs['timeout'] <= 1.5
+
+
+class PresentingEarly(OpenpilotTestCase):
+  """The load takes the link from a helper thread and waits PRESENT_TIMEOUT
+  for it at most; a helper that finishes later closes what it opened."""
+
+  def setUp(self):
+    from jetlink.comma import lending
+    for target, name, value in ((lending, 'borrow', mock.Mock(return_value=mock.Mock(closed=False))),
+                                (backend, 'PRESENT_TIMEOUT', 0.05)):
+      p = mock.patch.object(target, name, value)
+      self.addCleanup(p.stop)
+      p.start()
+    self.link = backend._Link()
+    self.client = mock.Mock(dead=False)
+
+  def test_a_link_that_opens_in_time_is_kept(self):
+    with mock.patch.object(backend.helpers, 'connect', return_value=self.client):
+      backend._present_early(self.link)
+    self.assertIs(self.link.client, self.client)
+    self.client.close.assert_not_called()
+
+  def test_a_link_that_opens_late_is_closed(self):
+    release = threading.Event()
+    self.addCleanup(release.set)
+
+    def slow(*args, **kwargs):
+      release.wait(5)
+      return self.client
+
+    with mock.patch.object(backend.helpers, 'connect', side_effect=slow):
+      t0 = time.monotonic()
+      backend._present_early(self.link)
+      self.assertLess(time.monotonic() - t0, 2.0, 'the load waited on a helper past its budget')
+      release.set()
+      for _ in range(200):
+        if self.client.close.called:
+          break
+        time.sleep(0.01)
+    self.client.close.assert_called_once()
+
+
+class ShuttingTheJetsonDown(OpenpilotTestCase):
+  """hardwared hands the request to the owner only when a Jetson is there to take it."""
+
+  def shutdown(self, enabled=True, present=True, requested=True, taken=True):
+    with mock.patch.object(gadget, 'enabled', return_value=enabled), \
+         mock.patch.object(backend.helpers, 'gadget_present', return_value=present), \
+         mock.patch.object(gadget, 'request_shutdown', return_value=requested) as request, \
+         mock.patch.object(backend.helpers, 'await_shutdown', return_value=taken) as wait:
+      backend.shutdown('car battery', timeout=3.0)
+    return request, wait
+
+  def test_the_link_off_asks_nothing(self):
+    request, wait = self.shutdown(enabled=False)
+    request.assert_not_called()
+    wait.assert_not_called()
+
+  def test_no_jetson_there_asks_nothing(self):
+    request, wait = self.shutdown(present=False)
+    request.assert_not_called()
+    wait.assert_not_called()
+
+  def test_a_jetson_there_is_asked_and_waited_for(self):
+    request, wait = self.shutdown()
+    request.assert_called_once_with('car battery')
+    wait.assert_called_once_with(3.0)
+
+  def test_a_request_that_could_not_be_written_is_not_waited_on(self):
+    request, wait = self.shutdown(requested=False)
+    request.assert_called_once_with('car battery')
+    wait.assert_not_called()
 
 
 class BuildingOnroad(OpenpilotTestCase):

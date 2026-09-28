@@ -333,7 +333,7 @@ class UpstreamFootprint(OpenpilotTestCase):
 
   def _skip_without_baseline(self, body):
     if body is None:
-      self.skipTest(f"no {BASELINE} here: not a checkout of this fork, or the branch is gone")
+      self.skipTest(f"local only: needs the {BASELINE} branch to compare with, and CI's shallow checkout has none")
 
   def test_the_module_is_reachable_from_two_calls_in_four_hunks(self):
     lines = self.src.splitlines()

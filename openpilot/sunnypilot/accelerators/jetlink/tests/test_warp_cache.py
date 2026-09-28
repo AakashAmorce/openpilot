@@ -56,17 +56,14 @@ class WarpCacheTest(OpenpilotTestCase):
 
 class TestValidity(WarpCacheTest):
   def test_a_warp_that_is_there_is_used(self):
+    """A bare pickle is what scons writes, and all it writes; asking for a
+    sidecar would reject every warp the build produces."""
     self.write()
+    self.assertFalse(warp_cache.warp_path(*GEOM).with_suffix('.json').exists())
     self.assertTrue(warp_cache.is_cached(*GEOM))
 
   def test_nothing_cached_is_a_miss(self):
     self.assertFalse(warp_cache.is_cached(*GEOM))
-
-  def test_a_bare_pickle_needs_no_sidecar(self):
-    """What scons writes, and all it writes; asking for a sidecar would reject every warp the build produces."""
-    self.write()
-    self.assertFalse(warp_cache.warp_path(*GEOM).with_suffix('.json').exists())
-    self.assertTrue(warp_cache.is_cached(*GEOM))
 
   def test_the_cache_is_in_the_tree_where_scons_can_write_it(self):
     """Not under comma_home: on AGNOS that is a tmpfs overlay that loses the

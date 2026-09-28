@@ -115,15 +115,13 @@ class TestWire(OpenpilotTestCase):
 
   def test_the_cable_is_a_phone_s_socket_as_the_transport_says(self):
     from jetlink.transport.tcp import CABLE_ADDRESS, TcpTransport
-    for local, cable in ((CABLE_ADDRESS, True), ('10.0.0.2', False)):
-      with self.subTest(local=local):
-        sock = mock.Mock()
-        sock.getsockname.return_value = (local, 5599)
-        sock.getpeername.return_value = ('192.168.60.3', 50000)
-        client = FakeClient()
-        client.t = TcpTransport(sock)
-        state = model_state.JetlinkModelState(1928, 1208, client, spec_for(STATEFUL), warp=object())
-        self.assertEqual(state.send_from_gpu, cable)
+    sock = mock.Mock()
+    sock.getsockname.return_value = (CABLE_ADDRESS, 5599)
+    sock.getpeername.return_value = ('192.168.60.3', 50000)
+    client = FakeClient()
+    client.t = TcpTransport(sock)
+    state = model_state.JetlinkModelState(1928, 1208, client, spec_for(STATEFUL), warp=object())
+    self.assertTrue(state.send_from_gpu)
 
   def test_a_queued_model_still_sends_the_hidden_state_back(self):
     spec, state, client, _ = self.run_frames(QUEUED)

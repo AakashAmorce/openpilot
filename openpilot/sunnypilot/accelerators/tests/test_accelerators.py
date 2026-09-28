@@ -24,7 +24,6 @@ from jetlink.comma import gadget
 
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot import accelerators
-from openpilot.sunnypilot.accelerators import Daemon
 from openpilot.sunnypilot.accelerators.jetlink import backend, helpers
 
 
@@ -53,20 +52,15 @@ class SelectionTest(OpenpilotTestCase):
       self.addCleanup(p.stop)
     helpers._last_configured = 0.0
 
-  def test_disabled_by_absence(self):
-    self.configure(enabled=None, model='m', spec_sha='a' * 64, ready=True)
-    self.assertFalse(accelerators.present())
-    self.assertFalse(accelerators.ready())
-    self.assertIsNone(accelerators.unavailable_reason())
-    self.assertFalse(accelerators.enabled())
-
-  def test_disabled_explicitly(self):
-    self.configure(enabled=False, model='m', spec_sha='a' * 64, ready=True, gadget_error='no gadget')
-    self.assertFalse(accelerators.present())
-    self.assertFalse(accelerators.ready())
-    # A device with the feature off is never nagged about its kernel.
-    self.assertIsNone(accelerators.unavailable_reason())
-    self.assertFalse(accelerators.enabled())
+  def test_the_link_off_or_unset_is_disabled(self):
+    for enabled in (None, False):
+      with self.subTest(enabled=enabled):
+        self.configure(enabled=enabled, model='m', spec_sha='a' * 64, ready=True, gadget_error='no gadget')
+        self.assertFalse(accelerators.present())
+        self.assertFalse(accelerators.ready())
+        # A device with the feature off is never nagged about its kernel.
+        self.assertIsNone(accelerators.unavailable_reason())
+        self.assertFalse(accelerators.enabled())
 
   def test_enabled_but_not_provisioned(self):
     self.configure(enabled=True, model='m')
@@ -213,18 +207,6 @@ class LoadTest(OpenpilotTestCase):
     # as modeld always did it: the accelerator's status, over the small model
     self.assertIs(loaded.model, self.small)
     self.assertIs(loaded.status.model, self.small)
-
-
-class DaemonTest(OpenpilotTestCase):
-  def test_jetlinkd_is_offered_and_gated_on_enabled(self):
-    (d,) = accelerators.daemons()
-    self.assertIsInstance(d, Daemon)
-    self.assertEqual(d.name, 'jetlinkd')
-    __import__(d.module)
-    with mock.patch.object(gadget, 'enabled', return_value=False):
-      self.assertFalse(d.should_run(False, None, None))
-    with mock.patch.object(gadget, 'enabled', return_value=True):
-      self.assertTrue(d.should_run(False, None, None))
 
 
 class TestProgress(OpenpilotTestCase):

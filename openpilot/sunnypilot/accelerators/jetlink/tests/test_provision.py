@@ -13,13 +13,12 @@ parked.
 """
 
 import json
-import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from jetlink.client import EngineMissing
 from jetlink.comma import gadget
 
 from openpilot.common.test import OpenpilotTestCase
@@ -54,25 +53,6 @@ class FakeSpecCache:
     self.ready = False
 
 
-def fake_jetlink_spec_module(counter: list):
-  """A stand-in for jetlink.spec, which is not importable without the package."""
-  mod = types.ModuleType('jetlink.spec')
-
-  def sha256_file(path, *a, **kw):
-    counter.append(path)
-    return 'deadbeef', 1 << 20
-
-  mod.sha256_file = sha256_file
-
-  client = types.ModuleType('jetlink.client')
-
-  class EngineMissing(Exception):
-    pass
-
-  client.EngineMissing = EngineMissing
-  return {'jetlink': types.ModuleType('jetlink'), 'jetlink.spec': mod, 'jetlink.client': client}
-
-
 def serving_client(spec=None):
   """A client whose server already has the engine."""
   client = mock.Mock()
@@ -102,7 +82,12 @@ class TestProvisionCost(OpenpilotTestCase):
       p = mock.patch.object(provision.helpers, name, return_value=value)
       self.addCleanup(p.stop)
       p.start()
-    p = mock.patch.dict(sys.modules, fake_jetlink_spec_module(self.hashed))
+
+    def sha256_file(path, *args, **kwargs):
+      self.hashed.append(path)
+      return 'deadbeef', 1 << 20
+
+    p = mock.patch('jetlink.spec.sha256_file', side_effect=sha256_file)
     self.addCleanup(p.stop)
     p.start()
 
@@ -152,7 +137,6 @@ class TestProvisionCost(OpenpilotTestCase):
     assert d.client.ensure_engine.call_args.kwargs['onnx_path'] is None
 
   def test_a_server_that_wants_the_bytes_gets_them_fetched(self):
-    from jetlink.client import EngineMissing
     d = provision.ProvisioningRun()
     d.client = serving_client()
     d.client.ensure_engine.side_effect = EngineMissing('no engine')
@@ -164,17 +148,16 @@ class TestProvisionCost(OpenpilotTestCase):
     fetch.assert_called_once()
 
   def _wants_the_bytes(self):
-    from jetlink.client import EngineMissing
     d = provision.ProvisioningRun()
     d.client = serving_client()
     d.client.ensure_engine.side_effect = EngineMissing('no engine')
-    return d, EngineMissing
+    return d
 
   def test_a_file_that_is_not_the_registry_model_is_never_uploaded(self):
     # Trusting the pointer for the identity is right for asking and wrong for
     # answering: uploading under a sha the bytes do not have would leave the
     # Jetson with a plan whose name lies about its contents.
-    d, EngineMissing = self._wants_the_bytes()
+    d = self._wants_the_bytes()
     with mock.patch.object(provision.helpers, 'selected_model',
                            return_value={**self.ENTRY, 'oid': 'not-what-the-file-hashes-to'}), \
          self.assertRaises(EngineMissing):
@@ -182,7 +165,7 @@ class TestProvisionCost(OpenpilotTestCase):
     assert all(c.kwargs['onnx_path'] is None for c in d.client.ensure_engine.call_args_list)
 
   def test_a_file_of_the_wrong_size_is_never_uploaded(self):
-    d, EngineMissing = self._wants_the_bytes()
+    d = self._wants_the_bytes()
     with mock.patch.object(provision.helpers, 'selected_model',
                            return_value={**self.ENTRY, 'size': 999999}), \
          self.assertRaises(EngineMissing):
@@ -191,7 +174,7 @@ class TestProvisionCost(OpenpilotTestCase):
     assert self.hashed == [], "size is the cheap check and comes first"
 
   def test_the_file_is_uploaded_once_it_is_proven_to_be_the_model(self):
-    d, _ = self._wants_the_bytes()
+    d = self._wants_the_bytes()
     d.client.ensure_engine.side_effect = [d.client.ensure_engine.side_effect, FakeSpec()]
     assert d.provision() is True
     calls = d.client.ensure_engine.call_args_list

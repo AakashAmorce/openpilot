@@ -37,6 +37,7 @@ import json
 import signal
 from pathlib import Path
 
+from jetlink.client import EngineMissing
 from jetlink.comma import gadget, lending
 
 from openpilot.common.swaglog import cloudlog
@@ -110,7 +111,6 @@ def ensure(client, sha256: str, nbytes: int, model_path: Path | None, *,
   a drive. EngineMissing means the Jetson has neither the plan nor the bytes
   and neither has the caller.
   """
-  from jetlink.client import EngineMissing
   ask = functools.partial(client.ensure_engine, sha256, nbytes, progress=progress,
                           build_timeout=build_timeout, should_stop=should_stop)
   try:
@@ -234,10 +234,6 @@ class ProvisioningRun:
     The file is only fetched when the server asks for the bytes; the Jetson
     keeps its own copy of every ONNX and never prunes it.
     """
-    # imported here: the jetlink package may be absent and this module must
-    # still import. Same as backend._open_link
-    from jetlink.client import EngineMissing
-
     entry = helpers.selected_model()
     if entry is None:
       # no catalog yet; not an error

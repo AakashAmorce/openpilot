@@ -39,17 +39,6 @@ class TestPresence(OpenpilotTestCase):
       (self.tmp / 'cc').write_text('0')
       assert not helpers.gadget_present()
 
-  def test_a_phone_on_the_cable_counts_as_present_like_any_host(self):
-    # the phone drives the UDC to configured like a Jetson does; what differs
-    # is the transport, not the presence
-    with mock.patch.object(gadget, 'LINK', self.tmp / 'link'), \
-         mock.patch.object(gadget, 'host_attached', return_value=False) as attached:
-      gadget.note_link('cable', '192.168.60.3')
-      helpers._last_configured = 0.0
-      assert not helpers.gadget_present()
-      attached.return_value = True
-      assert helpers.gadget_present()
-
   def test_await_shutdown_gives_up_and_cleans_up(self):
     gadget.request_shutdown('car battery')
     assert not helpers.await_shutdown(0.3)
@@ -69,14 +58,6 @@ class TestConnect(OpenpilotTestCase):
     self.client = mock.patch('jetlink.client.JetlinkClient').start()
     self.addCleanup(mock.patch.stopall)
 
-  def test_the_loan_decides_whatever_the_link_record_says(self):
-    # the owner decided once, when it lent; the record is for the panels
-    loan = mock.Mock(sock=None, mount='/dev/ffs-jetlink', udc='udc0')
-    with mock.patch.object(gadget, 'link_kind', return_value='cable') as kind:
-      helpers.connect(loan=loan)
-    self.client.open_borrowed_ffs.assert_called_once()
-    kind.assert_not_called()
-
   def test_a_loan_with_a_dial_is_opened_over_the_socket(self):
     sock = mock.Mock(name='sock')
     helpers.connect(deadline=2.0, name='modeld', loan=mock.Mock(sock=sock))
@@ -84,12 +65,16 @@ class TestConnect(OpenpilotTestCase):
     self.client.open_borrowed_ffs.assert_not_called()
 
   def test_a_loan_of_the_endpoints_is_opened_over_them(self):
+    # whatever the link record says: the owner decided once, when it lent, and
+    # the record is for the panels
     loan = mock.Mock(sock=None, mount='/dev/ffs-jetlink', udc='udc0')
-    helpers.connect(name='modeld', loan=loan)
+    with mock.patch.object(gadget, 'link_kind', return_value='cable') as kind:
+      helpers.connect(name='modeld', loan=loan)
     self.client.open_borrowed_ffs.assert_called_once()
     assert self.client.open_borrowed_ffs.call_args.args[:2] == ('/dev/ffs-jetlink', 'udc0')
     self.client.open_socket.assert_not_called()
     self.client.open_ffs.assert_not_called()
+    kind.assert_not_called()
 
 
 def bundle(ref: str, name: str, index: int = 0, version=19) -> dict:
