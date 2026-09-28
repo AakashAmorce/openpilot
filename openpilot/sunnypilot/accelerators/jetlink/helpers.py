@@ -335,15 +335,45 @@ def shipped_model_path() -> Path | None:
   return None
 
 
+def lfs_endpoints() -> list[str]:
+  """Where a model's bytes are asked for, nearest first: the LFS server this
+  checkout's .lfsconfig names (a release ships none), then the ones the Jetson
+  asks."""
+  from jetlink.registry.lfs import LFS_ENDPOINTS
+  out = []
+  try:
+    for line in (Path(BASEDIR) / '.lfsconfig').read_text().splitlines():
+      key, sep, value = line.strip().partition('=')
+      if sep and key.strip() == 'url' and value.strip():
+        out.append(value.strip().removesuffix('/'))
+        break
+  except OSError:
+    pass
+  return out + [e for e in LFS_ENDPOINTS if e not in out]
+
+
 def fetch_shipped_model(progress=None, should_stop=None) -> Path | None:
-  """Download the chosen large model if it is not here yet. None when nothing is chosen."""
-  from openpilot.sunnypilot.accelerators.jetlink import lfs
+  """Download the chosen large model if it is not here yet. None when nothing is chosen.
+
+  jetlink's registry streams it to a .part file and hashes it on the way, so
+  only the whole model ever takes the name.
+  """
+  from jetlink.registry.catalog import NetworkError
+  from jetlink.registry.lfs import Pointer, lfs_download, lfs_resolve
   model = selected_model()
   if model is None or not model['oid']:
     return None
   dest = model_dir() / model_file_name(model)
-  return lfs.fetch_oid(model['oid'], model['size'], dest, Path(BASEDIR),
-                       progress=progress, should_stop=should_stop)
+  if dest.is_file() and dest.stat().st_size == model['size']:
+    return dest
+  pointer = Pointer(model['oid'], int(model['size']))
+  for endpoint in lfs_endpoints():
+    href = lfs_resolve(endpoint, pointer)
+    if href is None:
+      continue
+    cloudlog.warning("jetlink: fetching the large model (%d MB) from %s", pointer.size >> 20, endpoint)
+    return lfs_download(href, pointer, dest, progress=progress, should_stop=should_stop)
+  raise NetworkError(f"no LFS server has {pointer.oid[:16]}")
 
 
 # -- readiness ------------------------------------------------------------

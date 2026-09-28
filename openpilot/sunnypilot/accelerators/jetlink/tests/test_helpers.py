@@ -406,3 +406,63 @@ class TestShippedModelPath(OpenpilotTestCase):
   def test_no_model_chosen_is_no_path(self):
     with mock.patch.object(helpers, 'selected_model', return_value=None):
       assert helpers.shipped_model_path() is None
+
+
+class TestFetchShippedModel(OpenpilotTestCase):
+  """The bytes come through jetlink's registry downloader; all the fork adds is
+  the LFS server its own .lfsconfig names, asked first."""
+
+  MODEL = {'name': 'Alpha', 'ref': REF_A, 'oid': 'a' * 64, 'size': 4096}
+
+  def setUp(self):
+    self.root = Path(tempfile.mkdtemp())
+    for target, value in (('BASEDIR', str(self.root)), ('Paths', mock.Mock(model_root=lambda: str(self.root / 'models')))):
+      patcher = mock.patch.object(helpers, target, value)
+      self.addCleanup(patcher.stop)
+      patcher.start()
+    chosen = mock.patch.object(helpers, 'selected_model', return_value=self.MODEL)
+    self.addCleanup(chosen.stop)
+    chosen.start()
+
+  def test_the_checkouts_server_comes_first(self):
+    from jetlink.registry.lfs import LFS_ENDPOINTS
+    (self.root / '.lfsconfig').write_text('[lfs]\n\turl = https://example.com/info/lfs/\n')
+    self.assertEqual(helpers.lfs_endpoints(), ['https://example.com/info/lfs', *LFS_ENDPOINTS])
+
+  def test_without_one_it_is_jetlinks_list(self):
+    # a release ships no .lfsconfig
+    from jetlink.registry.lfs import LFS_ENDPOINTS
+    self.assertEqual(helpers.lfs_endpoints(), list(LFS_ENDPOINTS))
+
+  def test_no_duplicate_when_it_is_already_one_of_jetlinks(self):
+    from jetlink.registry.lfs import LFS_ENDPOINTS
+    (self.root / '.lfsconfig').write_text(f'[lfs]\n\turl = {LFS_ENDPOINTS[0]}\n')
+    self.assertEqual(helpers.lfs_endpoints(), list(LFS_ENDPOINTS))
+
+  def test_already_fetched_is_returned_as_is(self):
+    dest = helpers.model_dir() / helpers.model_file_name(self.MODEL)
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b'\0' * 4096)
+    with mock.patch('jetlink.registry.lfs.lfs_resolve') as resolve:
+      self.assertEqual(helpers.fetch_shipped_model(), dest)
+    resolve.assert_not_called()
+
+  def test_falls_through_to_the_next_server(self):
+    from jetlink.registry.lfs import LFS_ENDPOINTS, Pointer
+    (self.root / '.lfsconfig').write_text('[lfs]\n\turl = https://dead.example/info/lfs\n')
+    stop = object()
+    with mock.patch('jetlink.registry.lfs.lfs_resolve', side_effect=[None, 'https://x/y']) as resolve, \
+         mock.patch('jetlink.registry.lfs.lfs_download', side_effect=lambda href, pointer, dest, **kw: dest) as download:
+      dest = helpers.fetch_shipped_model(should_stop=stop)
+    self.assertEqual([c.args[0] for c in resolve.call_args_list], ['https://dead.example/info/lfs', LFS_ENDPOINTS[0]])
+    self.assertEqual(download.call_args.args[:3], ('https://x/y', Pointer('a' * 64, 4096), dest))
+    self.assertIs(download.call_args.kwargs['should_stop'], stop)
+
+  def test_nowhere_to_get_it_raises(self):
+    from jetlink.registry.catalog import NetworkError
+    with mock.patch('jetlink.registry.lfs.lfs_resolve', return_value=None), self.assertRaises(NetworkError):
+      helpers.fetch_shipped_model()
+
+  def test_nothing_chosen_is_nothing_fetched(self):
+    with mock.patch.object(helpers, 'selected_model', return_value={**self.MODEL, 'oid': None}):
+      self.assertIsNone(helpers.fetch_shipped_model())
