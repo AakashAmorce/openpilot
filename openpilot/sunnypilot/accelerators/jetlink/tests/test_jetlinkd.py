@@ -275,66 +275,21 @@ class TestTimedOut(unittest.TestCase):
 
 
 
-class TestWarpFallback(unittest.TestCase):
-  """scons builds the warp; build_warp only covers one that is missing."""
-
-  def setUp(self):
-    p = mock.patch.object(jetlinkd, 'accelerators', mock.Mock())
-    self.addCleanup(p.stop)
-    p.start()
-
-  def warp_daemon(self):
-    d = jetlinkd.Jetlinkd()
-    d.warp_built = False
-    return d
-
-  def test_a_warp_the_build_made_is_left_alone(self):
-    # Reporting before checking put a "compiling the camera warp" through the
-    # UI on every start for a warp that was already on disk.
-    d = self.warp_daemon()
-    with mock.patch.object(jetlinkd.warp_cache, 'is_cached', return_value=True), \
-         mock.patch.object(jetlinkd.warp_cache, 'ensure') as ensure:
-      d.build_warp()
-    ensure.assert_not_called()
-    assert jetlinkd.accelerators.report_progress.call_count == 0
-    assert d.warp_thread is None
-
-  def test_a_missing_warp_is_still_built(self):
-    d = self.warp_daemon()
-    with mock.patch.object(jetlinkd.warp_cache, 'is_cached', return_value=False), \
-         mock.patch.object(jetlinkd.warp_cache, 'ensure', return_value=True) as ensure:
-      d.build_warp()
-      assert d.warp_thread is not None
-      d.warp_thread.join(30)
-    assert not d.warp_thread.is_alive()
-    ensure.assert_called_once()
-    assert jetlinkd.accelerators.report_progress.call_args.args[0] == 'warp'
-
-  def test_it_is_attempted_once_per_run(self):
-    d = self.warp_daemon()
-    with mock.patch.object(jetlinkd.warp_cache, 'is_cached', return_value=True) as cached:
-      d.build_warp()
-      d.build_warp()
-    cached.assert_called_once()
-
-
 class TestTheRun(unittest.TestCase):
   """One round, then the process exits. What it leaves behind is what the owner
   cannot work out for itself."""
 
   def setUp(self):
     self.tmp = Path(tempfile.mkdtemp())
-    for target, new in (('accelerators', mock.Mock()), ('warp_cache', mock.Mock())):
-      p = mock.patch.object(jetlinkd, target, new)
-      self.addCleanup(p.stop)
-      p.start()
+    p = mock.patch.object(jetlinkd, 'accelerators', mock.Mock())
+    self.addCleanup(p.stop)
+    p.start()
     p = mock.patch.object(gadget, 'STATE', self.tmp / 'state')
     self.addCleanup(p.stop)
     p.start()
 
   def worker(self, work=True):
     d = jetlinkd.Jetlinkd()
-    d.warp_built = True
     for name, value in (('has_work', work), ('open_link', True), ('provision', True)):
       p = mock.patch.object(d, name, mock.Mock(return_value=value))
       self.addCleanup(p.stop)

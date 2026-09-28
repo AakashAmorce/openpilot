@@ -4,17 +4,17 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of zoompilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 
-The comma-side warp JIT: what builds it, and what loads it.
+The comma-side warp JIT: where it lives, and what loads it.
 
 The warp stays on the comma (see model_state), and upstream's fused run_model
 JIT (#38684) has no warp to borrow, so compile_modeld.make_warp is JIT-compiled
-as a scons target; see accelerators/SConscript. Not in modeld, where the ~9 s
-compile would hold back the first frame on every ignition, and not in jetlinkd,
-which only runs offroad and can lose the compile to ignition.
+as a scons target by compile_warp.py; see accelerators/SConscript. A source
+build makes the one for its own camera, a prebuilt release one for every camera
+it installs on. Nothing compiles one at runtime: in modeld the ~9 s compile
+would hold back the first frame on every ignition, and in jetlinkd, which only
+runs offroad, it was lost to ignition. A device without one runs the small model.
 
-jetlinkd still builds one that is missing outright (`ensure`), for a prebuilt
-image made without the target. load_warp is what stands between a bad pickle
-and the car.
+load_warp is what stands between a bad pickle and the car.
 """
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ from pathlib import Path
 from openpilot.common.swaglog import cloudlog
 
 # in the source tree, next to upstream's dm_warp_*.pkl and under the *.pkl
-# ignore. Not Paths.comma_home(): on AGNOS that is a tmpfs overlay, the pickle
-# was gone every boot and jetlinkd lost the ~9 s compile race to ignition
+# ignore, which the release scripts add past with -f. Not Paths.comma_home():
+# on AGNOS that is a tmpfs overlay and the pickle was gone every boot
 CACHE_DIR = Path(__file__).resolve().with_name('models')
 
 
@@ -69,8 +69,9 @@ def init_device() -> None:
 def device_geometry() -> tuple[int, int, int, int]:
   """(cam_w, cam_h, model_w, model_h) for this device.
 
-  The same choice modeld/SConscript makes, so the warp built is the one modeld
-  asks for. If they disagree, load_warp raises and the drive is small-model.
+  The same choice modeld/SConscript makes. accelerators/SConscript builds this
+  geometry on a source build, so the warp built is the one modeld asks for. If
+  they disagree, load_warp raises and the drive is small-model.
   """
   from openpilot.common.hardware import HARDWARE
   from openpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
@@ -78,23 +79,6 @@ def device_geometry() -> tuple[int, int, int, int]:
 
   camera = _os_fisheye if HARDWARE.get_device_type() == "mici" else _ar_ox_fisheye
   return camera.width, camera.height, *MEDMODEL_INPUT_SIZE
-
-
-def ensure(cam_w: int, cam_h: int, model_w: int, model_h: int) -> bool:
-  """Build the warp if there is none at all. Offroad only. Never raises.
-
-  The build normally makes it, so this only runs on a prebuilt image made
-  without the target. False means the small model, not a dead daemon.
-  """
-  if is_cached(cam_w, cam_h, model_w, model_h):
-    return True
-  try:
-    pkl = compile_warp(cam_w, cam_h, model_w, model_h)
-  except Exception:
-    cloudlog.exception("jetlink: could not compile the warp")
-    return False
-  prune(keep={pkl})
-  return True
 
 
 def warp_path(cam_w: int, cam_h: int, model_w: int, model_h: int) -> Path:
@@ -110,49 +94,6 @@ def is_cached(cam_w: int, cam_h: int, model_w: int, model_h: int) -> bool:
   return warp_path(cam_w, cam_h, model_w, model_h).is_file()
 
 
-def compile_warp(cam_w: int, cam_h: int, model_w: int, model_h: int, out: Path | None = None) -> Path:
-  """Build the warp JIT and pickle it. Offroad only: this holds the GPU.
-
-  `out` is for scons; jetlinkd's fallback defaults to warp_path. Three runs
-  before pickling: TinyJit captures on the second call, and a pickle taken
-  earlier is an empty jit that silently does nothing.
-  """
-  import numpy as np
-  from tinygrad.device import Device
-  from tinygrad.engine.jit import TinyJit
-  from tinygrad.tensor import Tensor
-
-  from openpilot.selfdrive.modeld.compile_modeld import NV12Frame, make_warp
-  from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
-
-  nv12 = NV12Frame(cam_w, cam_h, *get_nv12_info(cam_w, cam_h))
-  warp_jit = TinyJit(make_warp(nv12, model_w, model_h), prune=True)
-
-  # one set of input tensors: TinyJit captures against the buffers it is
-  # first handed. Random so nothing constant-folds
-  rng = np.random.default_rng(42)
-  tfm_npy, big_tfm_npy = np.eye(3, dtype=np.float32), np.eye(3, dtype=np.float32)
-  tfm = Tensor(tfm_npy, device='NPY')
-  big_tfm = Tensor(big_tfm_npy, device='NPY')
-  frame = Tensor.randint(nv12.size, low=0, high=256, dtype='uint8', device=Device.DEFAULT).realize()
-  big_frame = Tensor.randint(nv12.size, low=0, high=256, dtype='uint8', device=Device.DEFAULT).realize()
-  for _ in range(3):
-    tfm_npy[:] = rng.standard_normal((3, 3)).astype(np.float32)
-    big_tfm_npy[:] = rng.standard_normal((3, 3)).astype(np.float32)
-    call_warp(warp_jit, tfm, big_tfm, frame, big_frame).realize()
-  Device.default.synchronize()
-
-  pkl = warp_path(cam_w, cam_h, model_w, model_h) if out is None else Path(out)
-  pkl.parent.mkdir(parents=True, exist_ok=True)
-  # through a temporary: modeld may read this while jetlinkd writes it
-  tmp = pkl.with_suffix('.pkl.tmp')
-  with open(tmp, 'wb') as f:
-    pickle.dump(warp_jit, f)
-  tmp.replace(pkl)
-  cloudlog.warning("jetlink: compiled the warp for %dx%d -> %dx%d", cam_w, cam_h, model_w, model_h)
-  return pkl
-
-
 def load_warp(cam_w: int, cam_h: int, model_w: int, model_h: int):
   """The cached warp JIT. Raises if it is not there or is stale.
 
@@ -161,7 +102,7 @@ def load_warp(cam_w: int, cam_h: int, model_w: int, model_h: int):
   """
   if not is_cached(cam_w, cam_h, model_w, model_h):
     raise RuntimeError(f"no warp built for {cam_w}x{cam_h} -> {model_w}x{model_h}; "
-                       + "the build makes it, jetlinkd rebuilds one that is missing")
+                       + "accelerators/SConscript makes it")
   with open(warp_path(cam_w, cam_h, model_w, model_h), 'rb') as f:
     warp = pickle.load(f)
 
@@ -199,12 +140,3 @@ def warm(warp, cam_w: int, cam_h: int) -> None:
     call_warp(warp, tfm, big_tfm, blobs[0], blobs[1]).realize()
   Device.default.synchronize()
 
-
-def prune(keep: set[Path]) -> None:
-  """Drop warps for a geometry this device does not have.
-
-  jetlinkd's fallback only; removing a file scons built just makes it build again.
-  """
-  for p in CACHE_DIR.glob('warp_*_tinygrad.pkl'):
-    if p not in keep:
-      p.unlink(missing_ok=True)

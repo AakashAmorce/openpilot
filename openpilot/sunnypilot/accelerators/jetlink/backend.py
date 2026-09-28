@@ -248,8 +248,9 @@ def prepare() -> bool:
   if not enabled():
     return False
   # the link is not worth waiting for: make_model_state joins in the background.
-  # The warp is: scons builds it before manager starts, so one missing now stays
-  # missing for the drive, and saying no keeps modeld on the plain small model
+  # The warp is checked here: it is a build product (accelerators/SConscript)
+  # and nothing compiles one at runtime, so one missing now stays missing, and
+  # saying no keeps modeld on the plain small model
   if _package_missing('the large model'):
     return False
   # enabled() is the toggle alone, so this is where a device that cannot
@@ -260,7 +261,7 @@ def prepare() -> bool:
     return False
   from openpilot.sunnypilot.accelerators.jetlink import warp_cache
   if not warp_cache.is_cached(*warp_cache.device_geometry()):
-    cloudlog.warning("jetlink: no warp compiled yet, staying on the small model")
+    cloudlog.warning("jetlink: no warp built for this camera, staying on the small model")
     return False
   # the last hook before modeld goes SCHED_FIFO on core 7, and the GPU's init
   # spawns a thread that would inherit that. See warp_cache.init_device

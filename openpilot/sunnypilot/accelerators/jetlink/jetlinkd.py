@@ -8,12 +8,12 @@ See the LICENSE.md file in the root directory for more details.
 Provisions whatever large model is selected, then exits.
 
 A download, an upload and a TensorRT build take minutes, so this runs offroad,
-and it is the heavy half of jetlink: numpy, the client, tinygrad for the warp.
-That is why it is a run and not a daemon. owner.py holds the gadget for the
-whole time the link is enabled and starts one of these when something changes;
-this borrows the endpoint files from it exactly as modeld does (lending.py), so
-the gadget never leaves the bus and a parked car keeps one resident jetlink
-process of about 13 MB instead of this one's 47.
+and it is the heavy half of jetlink: numpy and the client. That is why it is a
+run and not a daemon. owner.py holds the gadget for the whole time the link is
+enabled and starts one of these when something changes; this borrows the
+endpoint files from it exactly as modeld does (lending.py), so the gadget never
+leaves the bus and a parked car keeps one resident jetlink process of about
+13 MB instead of this one's 47.
 
 Without an owner to borrow from, this opens the gadget itself, as it always
 did: a device whose owner died still provisions.
@@ -30,13 +30,12 @@ from __future__ import annotations
 
 import json
 import signal
-import threading
 
 from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot import accelerators
 from openpilot.common.params import Params
-from openpilot.sunnypilot.accelerators.jetlink import gadget, helpers, lending, provision, spec_cache, warp_cache
+from openpilot.sunnypilot.accelerators.jetlink import gadget, helpers, lending, provision, spec_cache
 
 # how long to wait for the Jetson to enumerate before giving up on this run.
 # The owner presented the gadget; a box that is asleep answers the bind in
@@ -61,8 +60,6 @@ class Jetlinkd:
     self.client = None
     self.stop = False
     self.fetch_failed = False
-    self.warp_built = False  # tried the comma-side warp this run
-    self.warp_thread: threading.Thread | None = None
     # does the far end suspend when the gadget goes? From the server's hello.
     # The owner needs it to decide whether letting go is worth what it costs,
     # and cannot ask: it never speaks the protocol. None until a hello says:
@@ -126,34 +123,6 @@ class Jetlinkd:
       self.fetch_failed = True
       return None
     return path
-
-  def build_warp(self) -> None:
-    """Build a comma-side warp only if one is missing.
-
-    scons builds it before manager starts, so this only covers a prebuilt
-    image made without the target. Independent of provision(): the warp
-    depends on the camera and the small model's input size, not on the
-    Jetson. On a thread because the ~9 s compile cannot poll `stop` and
-    manager SIGKILLs the daemon 5 s after SIGINT, which landed mid-transfer
-    twice in one evening; a killed compile writes through a temporary and
-    leaves nothing behind.
-    """
-    if self.warp_built:
-      return
-    self.warp_built = True
-    geometry = warp_cache.device_geometry()
-    if warp_cache.is_cached(*geometry):
-      return
-    # only past here is there a compile to report; reporting first flashed
-    # "compiling the camera warp" through the UI on every start
-    accelerators.report_progress('warp', 0.0, 'compiling the camera warp')
-
-    def build() -> None:
-      if warp_cache.ensure(*geometry):
-        accelerators.clear_progress()
-
-    self.warp_thread = threading.Thread(target=build, daemon=True, name='jetlink_warp')
-    self.warp_thread.start()
 
   def provision(self) -> bool:
     """Make the Jetson ready for the selected model. Host must be attached.
@@ -226,8 +195,7 @@ class Jetlinkd:
 
 
   def has_work(self) -> bool:
-    """Is there a reason to wake the Jetson? Only things the link can fix
-    count; the warp is local and build_warp handles it."""
+    """Is there a reason to wake the Jetson? Only things the link can fix count."""
     spec = spec_cache.load()
     if spec is None or not helpers.engine_ready_for(spec.sha256):
       return True
@@ -287,9 +255,6 @@ class Jetlinkd:
       helpers.migrate_selection()
     except Exception:
       cloudlog.exception("jetlink: could not migrate the model selection")
-    # neither the link nor the Jetson is needed for this, and modeld will not
-    # start the large model without it
-    self.build_warp()
 
     reason = helpers.pending_shutdown()
     if reason is not None:
@@ -316,8 +281,6 @@ class Jetlinkd:
     finally:
       self.note_state(unfinished=not finished)
       self.close_link()
-      if self.warp_thread is not None and self.warp_thread.is_alive():
-        cloudlog.warning("jetlink: leaving with the warp still compiling; it will rebuild next run")
     return finished
 
 

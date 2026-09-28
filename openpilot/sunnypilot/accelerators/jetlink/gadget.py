@@ -149,7 +149,7 @@ def offroad() -> bool:
   """Is the car parked?
 
   The owner runs onroad too, to keep hold of the gadget, and everything else
-  jetlink does belongs to a parked car: a download, a build, a warp compile.
+  jetlink does belongs to a parked car: a download, an upload, an engine build.
   A missing param is manager not having written one yet, which reads as parked.
   """
   value = param_bool("IsOffroad")

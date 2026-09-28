@@ -20,12 +20,12 @@ files are never lent, and the gadget is never released, settled or bounced,
 since every unbind drops the phone's network interface with it.
 
 It is deliberately small. Everything heavy jetlink does is episodic, so none of
-it lives here: a download, an upload, a TensorRT build and a warp compile all
-belong to jetlinkd, which this spawns when there is something to do and which
-exits when there is not. That keeps a parked car and a drive alike at one
-resident jetlink process of about 13 MB rather than 47.5 MB, and it is why
-nothing in this module may import swaglog, Params, numpy, capnp or zmq; see
-gadget.py and tests/test_gadget.py.
+it lives here: a download, an upload and a TensorRT build all belong to
+jetlinkd, which this spawns when there is something to do and which exits when
+there is not. That keeps a parked car and a drive alike at one resident jetlink
+process of about 13 MB rather than 47.5 MB, and it is why nothing in this
+module may import swaglog, Params, numpy, capnp or zmq; see gadget.py and
+tests/test_gadget.py.
 
 manager stops this on shutdown with SIGINT and SIGKILLs it 5 s later, so every
 long wait polls `stop`: a FunctionFS owner killed mid-transfer leaves the

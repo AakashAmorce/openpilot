@@ -6,7 +6,8 @@ See the LICENSE.md file in the root directory for more details.
 
 When the warp JIT is trusted, and when it is not.
 
-The compile needs a GPU and is not exercised here. Staleness is scons' job now,
+The compile is a build step that needs a GPU and is not exercised here;
+test_warp_build.py covers which warps the build makes. Staleness is scons' job,
 so what is left is the file on disk being wrong: a TinyJit from another
 tinygrad, or one pickled before it captured, loads into something that does not
 compute the warp. Each is a raise out of load_warp into the small-model fallback.
@@ -124,33 +125,11 @@ class TestLoadValidation(WarpCacheTest):
     self.assertIn('computes nothing', str(e.exception))
 
 
-class TestEnsure(WarpCacheTest):
-  def test_a_cached_warp_is_not_rebuilt(self):
-    self.write()
-    with mock.patch.object(warp_cache, 'compile_warp') as compile_warp:
-      self.assertTrue(warp_cache.ensure(*GEOM))
-    compile_warp.assert_not_called()
-
-  def test_a_failed_compile_is_reported_not_raised(self):
-    """jetlinkd's loop must survive this: no warp costs the large model, and
-    taking the daemon down with it would also drop the USB gadget."""
-    with mock.patch.object(warp_cache, 'compile_warp', side_effect=RuntimeError("no gpu")):
-      self.assertFalse(warp_cache.ensure(*GEOM))
-
-  def test_a_successful_build_prunes_the_others(self):
-    stale = self.write(geom=(1344, 760, 512, 256))
-    fresh = warp_cache.warp_path(*GEOM)
-    with mock.patch.object(warp_cache, 'compile_warp', side_effect=lambda *a: self.write()):
-      self.assertTrue(warp_cache.ensure(*GEOM))
-    self.assertTrue(fresh.is_file())
-    self.assertFalse(stale.is_file())
-
-
 class TestGeometry(WarpCacheTest):
   def test_mici_and_tici_want_different_warps(self):
-    """The same split accelerators/SConscript makes, so the build produces what
-    modeld asks for. If these ever drift, load_warp misses and the drive is
-    small-model."""
+    """The same split modeld/SConscript makes, and the geometry
+    accelerators/SConscript builds from source. If these ever drift, load_warp
+    misses and the drive is small-model."""
     with mock.patch("openpilot.common.hardware.HARDWARE.get_device_type", return_value="mici"):
       mici = warp_cache.device_geometry()
     with mock.patch("openpilot.common.hardware.HARDWARE.get_device_type", return_value="tici"):
@@ -211,7 +190,7 @@ class TestCallConvention(unittest.TestCase):
     # a second direct call site would diverge again. Read the sources: importing
     # model_state pulls in tinygrad and msgq, and this runs off the device
     pkg = Path(warp_cache.__file__).parent
-    for name in ('warp_cache.py', 'model_state.py'):
+    for name in ('compile_warp.py', 'warp_cache.py', 'model_state.py'):
       for line in (pkg / name).read_text().splitlines():
         stripped = line.strip()
         if ('warp_jit(' in stripped or 'self.warp(' in stripped) and 'call_warp' not in stripped:
