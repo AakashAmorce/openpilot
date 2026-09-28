@@ -14,10 +14,8 @@ holds the gadget for the whole time the link is enabled and starts one of
 these when something changes; this borrows the endpoint files from it exactly
 as modeld does (jetlink.comma.lending), so the gadget never leaves the bus and
 a parked car keeps one resident jetlink process of about 13 MB instead of this
-one's 47.
-
-Without an owner to borrow from, this opens the gadget itself, as it always
-did: a device whose owner died still provisions.
+one's 47. Only the owner ever holds ep0: a run that gets no loan logs it and
+exits, and the owner starts another.
 
 The result is cached on the Jetson, recorded in a param and left loaded on the
 server. modeld does its own provisioning over its borrowed link when the picked
@@ -86,19 +84,16 @@ class Jetlinkd:
 
 
   def open_link(self) -> bool:
-    """Borrow the endpoints from the owner, or open the gadget ourselves.
-
-    A loan is the ordinary case. None means nobody is listening, which is a
-    device whose owner died or one where the link was only just turned on; the
-    gadget is ours to open then, as it was before there was an owner.
-    """
+    """Borrow the link from the owner that started this run. Without a loan
+    there is nothing to open: only the owner ever holds ep0."""
     if self.client is not None:
       return True
     try:
       loan = lending.borrow('jetlinkd')
-      self.client = helpers.connect(deadline=5.0, name='jetlinkd', loan=loan)
       if loan is None:
-        cloudlog.warning("jetlink: no owner to borrow from, presenting the gadget ourselves")
+        cloudlog.error("jetlink: the owner lent no link, nothing to provision over")
+        return False
+      self.client = helpers.connect(loan, deadline=5.0, name='jetlinkd')
       return True
     except Exception:
       cloudlog.exception("jetlink: could not open the link")
@@ -225,8 +220,7 @@ class Jetlinkd:
   # -- one run --------------------------------------------------------------
 
   def bounce(self) -> bool:
-    """Ask whoever owns the gadget to bounce it. Ours to do only when we opened
-    it ourselves; otherwise the owner does it for us over the lease. Over TCP
+    """Ask the owner to bounce the gadget, over the lease. On a phone's cable
     the client's rebind is a no-op: nothing is stuck in an endpoint file."""
     try:
       return bool(self.client.rebind()) if self.client is not None else False

@@ -128,7 +128,8 @@ class BorrowingTheGadget(unittest.TestCase):
 
   jetlinkd holds ep0 and the bind for as long as the link is enabled, so the
   comma stays enumerated across the ignition edge; modeld asks for the endpoint
-  files and gives them back by exiting.
+  files and gives them back by exiting. It never opens the gadget itself: only
+  the owner holds ep0.
   """
 
   def setUp(self):
@@ -189,11 +190,12 @@ class BorrowingTheGadget(unittest.TestCase):
       return False
     loan.renew.side_effect = gone
     self.link.loan = loan
-    with mock.patch.object(self.lending, 'borrow', return_value=None) as borrow, \
+    fresh = mock.Mock(closed=False)
+    with mock.patch.object(self.lending, 'borrow', return_value=fresh) as borrow, \
          mock.patch.object(backend.helpers, 'connect') as connect:
       self.link.open()
     borrow.assert_called_once()
-    assert connect.call_args.kwargs['loan'] is None
+    assert connect.call_args.kwargs['loan'] is fresh
 
   def test_a_lease_that_ended_is_asked_for_again(self):
     with mock.patch.object(self.lending, 'borrow', return_value=mock.Mock(closed=True)) as borrow, \
@@ -203,24 +205,20 @@ class BorrowingTheGadget(unittest.TestCase):
       self.link.open()
     assert borrow.call_count == 2
 
-  def test_no_daemon_to_ask_still_opens_the_gadget(self):
-    # the link was only just turned on, or jetlinkd died: a drive must not lose
-    # the large model to a daemon fault
+  def test_no_loan_is_no_join_and_no_gadget_of_our_own(self):
+    # nobody lent the link: the small model drives and the join loop asks
+    # again. Opening the endpoints here would be a second owner of ep0
     with mock.patch.object(self.lending, 'borrow', return_value=None), \
-         mock.patch.object(backend.helpers, 'connect') as connect:
-      self.link.open()
-    assert connect.call_args.kwargs['loan'] is None
-
-  def test_a_daemon_that_throws_is_not_a_lost_drive(self):
-    with mock.patch.object(self.lending, 'borrow', side_effect=OSError('no socket')), \
-         mock.patch.object(backend.helpers, 'connect') as connect:
-      self.link.open()
-    assert connect.call_args.kwargs['loan'] is None
+         mock.patch('jetlink.client.JetlinkClient') as client:
+      with self.assertRaises(TimeoutError):
+        self.link.open()
+    assert client.method_calls == []
+    assert self.link.client is None and self.link.loan is None
 
   def test_the_early_present_does_not_spend_its_whole_budget_asking(self):
     # PRESENT_TIMEOUT blocks modeld's main thread, and a borrow that outlasts
     # it leaves nothing to open the link with
-    with mock.patch.object(self.lending, 'borrow', return_value=None) as borrow, \
+    with mock.patch.object(self.lending, 'borrow', return_value=mock.Mock(closed=False)) as borrow, \
          mock.patch.object(backend.helpers, 'connect'):
       self.link.open(deadline=backend.time.monotonic() + 1.5)
     assert borrow.call_args.kwargs['timeout'] <= 1.5

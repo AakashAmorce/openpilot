@@ -277,6 +277,29 @@ class TestTimedOut(unittest.TestCase):
 
 
 
+class TestTheLoan(unittest.TestCase):
+  """Only the owner that started this run holds ep0; the run borrows from it."""
+
+  def test_no_loan_is_one_error_and_no_gadget_of_our_own(self):
+    d = jetlinkd.Jetlinkd()
+    with mock.patch.object(jetlinkd.lending, 'borrow', return_value=None), \
+         mock.patch('jetlink.client.JetlinkClient') as client, \
+         mock.patch.object(jetlinkd.cloudlog, 'error') as error:
+      assert d.open_link() is False
+    error.assert_called_once()
+    assert client.method_calls == []
+    assert d.client is None
+
+  def test_a_loan_is_opened_over(self):
+    d = jetlinkd.Jetlinkd()
+    loan = mock.Mock(sock=None, mount='/dev/ffs-jetlink', udc='udc0')
+    with mock.patch.object(jetlinkd.lending, 'borrow', return_value=loan), \
+         mock.patch.object(jetlinkd.helpers, 'connect') as connect:
+      assert d.open_link() is True
+    assert connect.call_args.args == (loan,)
+    assert d.client is connect.return_value
+
+
 class TestTheRun(unittest.TestCase):
   """One round, then the process exits. What it leaves behind is what the owner
   cannot work out for itself."""

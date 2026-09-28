@@ -62,22 +62,12 @@ class TestPresence(unittest.TestCase):
 
 
 class TestConnect(unittest.TestCase):
-  """Which transport the client is opened over: a loan that carries a phone's
-  dial, a loan of the endpoint files, or the gadget."""
+  """Which transport the client is opened over: whatever the owner lent, a
+  phone's dial or the endpoint files. Never the gadget itself."""
 
   def setUp(self):
     self.client = mock.patch('jetlink.client.JetlinkClient').start()
     self.addCleanup(mock.patch.stopall)
-    self.ios = mock.patch.object(gadget, 'ios', return_value=False).start()
-
-  def test_ios_without_an_owner_never_opens_the_endpoint_files(self):
-    # nobody to lend is nobody who took the phone's dial, and a phone does not
-    # read the endpoint files: a hello there blocks 15 s
-    from jetlink.transport.base import LinkError
-    self.ios.return_value = True
-    with self.assertRaises(LinkError):
-      helpers.connect(loan=None)
-    self.client.open_ffs.assert_not_called()
 
   def test_the_loan_decides_whatever_the_link_record_says(self):
     # the owner decided once, when it lent; the record is for the panels
@@ -99,10 +89,7 @@ class TestConnect(unittest.TestCase):
     self.client.open_borrowed_ffs.assert_called_once()
     assert self.client.open_borrowed_ffs.call_args.args[:2] == ('/dev/ffs-jetlink', 'udc0')
     self.client.open_socket.assert_not_called()
-
-  def test_no_loan_opens_the_gadget(self):
-    helpers.connect()
-    self.client.open_ffs.assert_called_once()
+    self.client.open_ffs.assert_not_called()
 
 
 def bundle(ref: str, name: str, index: int = 0, version=19) -> dict:

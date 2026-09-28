@@ -12,9 +12,11 @@ off, on but not provisioned, and ready gets told, and that a backend that
 hangs costs the large model and nothing else. A missing package is
 test_comma_layer's. No hardware.
 """
+import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -111,6 +113,27 @@ class SelectionTest(unittest.TestCase):
     with mock.patch.object(gadget, 'dormant', return_value=True), \
          mock.patch.object(gadget, 'CC_ORIENTATION', mock.Mock(read_text=lambda: '1')):
       self.assertTrue(accelerators.present())
+
+
+class LenderFailureTest(unittest.TestCase):
+  """Only the owner holds ep0. When its lender cannot listen it keeps the
+  gadget, retries, and says why in the gadget status: that line is the
+  offroad alert, and modeld is not prepared while it stands."""
+
+  def test_the_owners_error_line_is_the_alert_and_a_no(self):
+    status = Path(tempfile.mkdtemp()) / 'jetlink-gadget'
+    status.write_text('error: the lender could not listen: address in use\n')
+    with mock.patch.object(gadget, 'GADGET_STATUS', status), \
+         mock.patch.object(backend, 'enabled', return_value=True), \
+         mock.patch.object(backend.warp_cache, 'built', return_value=True), \
+         mock.patch.object(backend.warp_cache, 'init_device') as init_device:
+      self.assertEqual(accelerators.unavailable_reason(), 'the lender could not listen: address in use')
+      self.assertFalse(accelerators.ready())
+      self.assertFalse(accelerators.prepare())
+      init_device.assert_not_called()
+      # cleared once the lender listens again
+      status.write_text('ok\n')
+      self.assertIsNone(accelerators.unavailable_reason())
 
 
 class LoadTest(unittest.TestCase):

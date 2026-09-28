@@ -103,33 +103,23 @@ def gadget_present() -> bool:
   return now - _last_configured < PRESENCE_HOLD
 
 
-def connect(deadline: float | None = None, name: str | None = None, loan=None):
-  """Open the link.
+def connect(loan, deadline: float | None = None, name: str | None = None):
+  """Open the link over what jetlinkd lent (see jetlink.comma.lending).
 
-  `deadline` is per frame and defaults to FRAME_TIMEOUT: modeld blocks on a
-  frame the way it blocks on a chestnut. `name` is what the server logs this
-  connection as; two comma processes share one gadget and the Jetson's journal
-  has no clock to tell them apart by. With a `loan`, jetlinkd owns the gadget
-  and has decided which link this is (see jetlink.comma.lending): a phone's
-  dial, which the link rides on, or the endpoint files, which are all this
-  end opens.
+  Only the owner ever holds ep0, and it decided which link this is when it
+  lent it: a phone's dial, which the link rides on, or the endpoint files,
+  which are all this end opens. `deadline` is per frame and defaults to
+  FRAME_TIMEOUT: modeld blocks on a frame the way it blocks on a chestnut.
+  `name` is what the server logs this connection as; two comma processes share
+  one gadget and the Jetson's journal has no clock to tell them apart by.
   """
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
   deadline = FRAME_TIMEOUT if deadline is None else deadline
-  if loan is not None:
-    if loan.sock is not None:
-      cloudlog.warning("jetlink: connecting over the phone's dial (%s)", gadget.link_peer())
-      return JetlinkClient.open_socket(loan.sock, deadline=deadline, name=name)
-    return JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce,
-                                           deadline=deadline, name=name)
-  if gadget.ios():
-    # nobody to lend: a phone dials the owner, and never reads the endpoint
-    # files; a hello there blocks 15 s
-    from jetlink.transport.base import LinkError
-    raise LinkError("no owner to take the phone's dial")
-  # the comma is the gadget and the Jetson the host; see gadget_present()
-  return JetlinkClient.open_ffs(str(gadget.FFS_MOUNT), gadget=str(gadget.GADGET_PATH), deadline=deadline, name=name)
-
+  if loan.sock is not None:
+    cloudlog.warning("jetlink: connecting over the phone's dial (%s)", gadget.link_peer())
+    return JetlinkClient.open_socket(loan.sock, deadline=deadline, name=name)
+  return JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce,
+                                         deadline=deadline, name=name)
 
 
 # -- the model ------------------------------------------------------------

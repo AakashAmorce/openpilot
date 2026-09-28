@@ -97,11 +97,10 @@ class _Link:
         cloudlog.exception("jetlink: error closing the link")
 
   def _borrow(self, deadline: float | None):
-    """The lease on the gadget jetlinkd owns, or None if there is nobody to ask.
-
-    None is the ordinary answer on a device where the link was only just turned
-    on, or whose daemon died: we open the gadget ourselves then, as modeld
-    always did, so a drive never loses the large model to a daemon fault.
+    """The lease on the gadget jetlinkd owns. Raises without one: only the
+    owner ever holds ep0, so there is no link to open, and the join loop asks
+    again with the small model driving. An owner whose lender cannot listen
+    says so in the gadget status, which is the offroad alert.
     """
     from jetlink.comma import lending
     # bounded by whatever the caller has left: an early present that spends its
@@ -113,14 +112,11 @@ class _Link:
       if self.loan.renew(timeout):
         return self.loan
       if not self.loan.closed:
-        # the owner is still holding for a phone; opening the endpoints
-        # ourselves would write to one
+        # the owner is still holding for a phone
         raise TimeoutError("jetlinkd has not lent the link yet")
-    try:
-      self.loan = lending.borrow(self.name, timeout=timeout)
-    except Exception:
-      cloudlog.exception("jetlink: could not ask jetlinkd for the gadget")
-      self.loan = None
+    self.loan = lending.borrow(self.name, timeout=timeout)
+    if self.loan is None:
+      raise TimeoutError("jetlinkd lent no link")
     return self.loan
 
 
