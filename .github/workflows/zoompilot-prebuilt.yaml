@@ -40,6 +40,18 @@ jobs:
           fi
           echo "cutting ${{ env.TARGET_BRANCH }} from ${{ env.SOURCE_BRANCH }}"
 
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_BRANCH }}
+
+      - name: Refuse a jetlink pin that is not on jetlink's main
+        run: |
+          pin=$(git ls-tree HEAD jetlink_repo | awk '{print $3}')
+          git init -q --bare "$RUNNER_TEMP/jetlink"
+          git -C "$RUNNER_TEMP/jetlink" fetch -q "$(git config -f .gitmodules submodule.jetlink.url)" main
+          git -C "$RUNNER_TEMP/jetlink" merge-base --is-ancestor "$pin" FETCH_HEAD || {
+            echo "::error::jetlink_repo is pinned to $pin, which is not on jetlink's main"; exit 1; }
+
   build:
     needs: [ guard ]
     runs-on: [ self-hosted, tici ]
