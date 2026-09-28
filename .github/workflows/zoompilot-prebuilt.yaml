@@ -10,10 +10,11 @@ name: zoompilot prebuilt
 # when set. Use bench power for release builds.
 
 env:
-  # The runner is a comma four, but the release installs on the 3X too. Compile the model and
-  # dm warp jits for both driver cameras: the kernels are portable between them (both Adreno
-  # 630) but the jits are keyed by camera resolution, so a 3X installing a mici-only prebuilt
-  # has no warp and loses dmonitoringmodeld and modeld at startup.
+  # The runner is a comma four, but the release installs on the 3X too. Compile the model, dm
+  # warp and jetlink warp jits for both driver cameras: the kernels are portable between them
+  # (both Adreno 630) but the jits are keyed by camera resolution, so a 3X installing a
+  # mici-only prebuilt has no warp: it loses dmonitoringmodeld and modeld at startup, and
+  # jetlink's big model for good.
   PREBUILT_ALL_CAMERAS: "1"
   BUILD_DIR: "/data/openpilot"
   OUTPUT_DIR: ${{ github.workspace }}/output
@@ -103,6 +104,11 @@ jobs:
           scons -j2 cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal openpilot/sunnypilot/selfdrive/locationd
           scons -j1 cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal openpilot/selfdrive/locationd
           scons -j$(nproc) cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal
+          # nothing compiles the jetlink warp at runtime, so a camera without one
+          # never runs the big model. scons ignores a failed warp compile so a
+          # source build still boots; a release has to have both
+          test -f openpilot/sunnypilot/accelerators/jetlink/models/warp_1344x760_512x256_tinygrad.pkl
+          test -f openpilot/sunnypilot/accelerators/jetlink/models/warp_1928x1208_512x256_tinygrad.pkl
           touch ${BUILD_DIR}/prebuilt
 
       - name: Prepare output
