@@ -993,6 +993,37 @@ class TestAcceleratorLinkToggle:
       assert shown() == ("", True)
 
 
+class TestDefaultBigModelMici:
+  """The big-models button names whose default an empty slot runs: the chestnut's
+  model in the tree when a board is fitted, else the accelerator's."""
+
+  def _big_models_value(self, monkeypatch, board):
+    from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import ModelsLayoutMici
+    from openpilot.selfdrive.ui.ui_state import ui_state
+    from openpilot.system.ui.lib.application import gui_app
+
+    pushed = []
+    monkeypatch.setattr(gui_app, "push_widget", lambda w: pushed.append(w))
+    monkeypatch.setattr(ui_state, "chestnut_present", board)
+    with mock.patch("openpilot.sunnypilot.accelerators.default_big_model_name", return_value="Cinque Terre V3 Model"):
+      layout = ModelsLayoutMici()
+      render(layout)
+      layout._show_folders()
+      buttons = pushed[-1]._scroller.items
+      for button in buttons:
+        render(button)
+    return buttons[1].get_value().removesuffix(" (active)")
+
+  def test_a_fitted_chestnut_names_the_in_tree_model(self, params, monkeypatch):
+    from openpilot.sunnypilot.models.model_name import DEFAULT_BIG_MODEL
+    params.remove("ModelManager_ActiveBundleChestnut")
+    assert self._big_models_value(monkeypatch, True) == f"{DEFAULT_BIG_MODEL} (Default)".lower()
+
+  def test_without_a_chestnut_the_accelerator_names_its_default(self, params, monkeypatch):
+    params.remove("ModelManager_ActiveBundleChestnut")
+    assert self._big_models_value(monkeypatch, False) == "cinque terre v3 model (default)"
+
+
 class TestAlphaLongSwitchMici:
   """The alpha switch is the saved preference, editable offroad only (forced offroad included)."""
 

@@ -40,7 +40,14 @@ def bundles_for_source(source: str):
 
 
 def default_model(source: str) -> str:
-  return DEFAULT_BIG_MODEL if source == 'chestnut' else DEFAULT_MODEL
+  """What an empty slot runs. The big slot's is the chestnut's model in the tree
+  when a board is fitted; with none, the slot is the accelerator's, whose
+  default is its own."""
+  if source != 'chestnut':
+    return DEFAULT_MODEL
+  if not ui_state.chestnut_present and (name := accelerators.default_big_model_name()):
+    return name
+  return DEFAULT_BIG_MODEL
 
 
 def default_model_name(source: str) -> str:

@@ -11,7 +11,9 @@ from openpilot.common.test import OpenpilotTestCase
 from openpilot.selfdrive.ui.sunnypilot import model_info
 from openpilot.selfdrive.ui.ui_state import ChestnutState
 from openpilot.sunnypilot.models.helpers import REQUIRED_JSON_VERSION
-from openpilot.sunnypilot.models.model_name import DEFAULT_MODEL
+from openpilot.sunnypilot.models.model_name import DEFAULT_BIG_MODEL, DEFAULT_MODEL
+
+V3_REF = "bf3e3631b3f91d92a1020a5e0dd4298b93ff4244"
 
 
 def _raw_bundle(ref: str) -> dict:
@@ -66,3 +68,38 @@ class TestCarryingModel(OpenpilotTestCase):
     self.ui_state.params.get.side_effect = lambda key: {"ModelManager_ActiveBundleChestnut": _raw_bundle("big_custom")}.get(key)
     with mock.patch("openpilot.sunnypilot.accelerators.active_model_name", return_value="jetlink_big"):
       assert model_info.carrying_model() == ("chestnut", "big_custom", "big_custom")
+
+
+class TestDefaultBigModelName(OpenpilotTestCase):
+  """An empty big slot runs the chestnut's in-tree model when a board is fitted,
+  and the accelerator's default when none is: jetlink's, named from its catalog."""
+
+  def setUp(self):
+    super().setUp()
+    self.ui_state = mock.MagicMock()
+    patcher = mock.patch.object(model_info, "ui_state", self.ui_state)
+    patcher.start()
+    self.addCleanup(patcher.stop)
+
+  def test_a_fitted_chestnut_names_the_in_tree_model(self):
+    self.ui_state.chestnut_present = True
+    with mock.patch("openpilot.sunnypilot.accelerators.default_big_model_name",
+                    side_effect=AssertionError("a chestnut never asks the accelerator")):
+      assert model_info.default_model_name("chestnut") == f"{DEFAULT_BIG_MODEL} (Default)"
+      assert model_info.default_model_name("qcom") == f"{DEFAULT_MODEL} (Default)"
+
+  def test_without_a_chestnut_the_accelerator_names_its_default(self):
+    from openpilot.sunnypilot.accelerators.jetlink import helpers
+    self.ui_state.chestnut_present = False
+    rows = [{"name": "Cinque Terre V3 Model (September 17, 2026)", "ref": V3_REF, "oid": None, "size": None},
+            {"name": "BMRLNAP Model v4 (August 30, 2026)", "ref": "f877d7a0ccc3cce943c76e285214c020cd65c899",
+             "oid": None, "size": None}]
+    # jetlink's default ref, from the pinned jetlink, not the fork's model_name
+    with mock.patch.object(helpers, "_index", return_value=(rows, {})):
+      assert model_info.default_model_name("chestnut") == "Cinque Terre V3 Model (Default)"
+    assert model_info.default_model_name("qcom") == f"{DEFAULT_MODEL} (Default)"
+
+  def test_an_accelerator_with_no_catalog_falls_back_to_the_in_tree_name(self):
+    self.ui_state.chestnut_present = False
+    with mock.patch("openpilot.sunnypilot.accelerators.default_big_model_name", return_value=None):
+      assert model_info.default_model_name("chestnut") == f"{DEFAULT_BIG_MODEL} (Default)"

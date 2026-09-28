@@ -340,6 +340,25 @@ class TestTiciModelsPanel(UITest):
       layout = self._layout()
       layout.render(rl.Rectangle(0, 0, 800, 600))
 
+  def test_an_empty_big_slot_names_whose_default_runs(self):
+    # a chestnut runs the model in the tree; without one the slot is the
+    # accelerator's, and so is its default
+    import pyray as rl
+    from openpilot.sunnypilot.models.model_name import DEFAULT_BIG_MODEL
+    ui_state = ui_state_module().ui_state
+    saved = ui_state.chestnut_present
+    self.params.remove("ModelManager_ActiveBundleChestnut")
+    try:
+      for board, expected in ((True, f"{DEFAULT_BIG_MODEL} (Default)"), (False, "Cinque Terre V3 Model (Default)")):
+        with accelerator(present=True), \
+             mock.patch("openpilot.sunnypilot.accelerators.default_big_model_name", return_value="Cinque Terre V3 Model"):
+          ui_state.chestnut_present = board
+          layout = self._layout()
+          layout.render(rl.Rectangle(0, 0, 800, 600))
+          assert layout.big_model_item.action_item.value == expected
+    finally:
+      ui_state.chestnut_present = saved
+
   def test_refresh_spins_beside_the_link_until_both_catalogs_are_stamped(self):
     # sunnypilot's refresh, as upstream: the model manager restamps each catalog it
     # refetches, the big-model one extended for the accelerator or not
