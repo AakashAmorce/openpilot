@@ -23,12 +23,12 @@ import time
 from pathlib import Path
 
 from jetlink.comma import gadget
+from jetlink.registry.catalog import DEFAULT_BIG_MODEL_REF
 
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.hardware.hw import Paths
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
-from openpilot.sunnypilot.models.model_name import DEFAULT_BIG_MODEL_REF
 
 
 # One handle per params store. Constructing a Params costs 144 us on the comma
@@ -128,6 +128,8 @@ CATALOG_PARAM = "ModelManager_ModelsCache_Chestnut"
 
 POINTER_TIMEOUT = 10.0
 _REF = re.compile(r'[0-9a-f]{40}')
+# the build date a catalog name ends in, " (September 17, 2026)"; any other parenthesis stays
+_TRAILING_DATE = re.compile(r' \([A-Za-z]+ \d{1,2}, \d{4}\)$')
 # the index and the slot are JSON params, and the UI names the active model
 # every frame; the status line can lag a new pick by this long
 INDEX_TTL = 2.0
@@ -222,13 +224,27 @@ def selected_slot() -> dict | None:
   return pick
 
 
+def default_model() -> dict | None:
+  """What runs with no pick: jetlink's default big model, else the newest the
+  catalog lists. Not the chestnut's default, which is the model in the tree."""
+  models = model_index()
+  return next((m for m in models if m['ref'] == DEFAULT_BIG_MODEL_REF), models[0] if models else None)
+
+
+def default_model_name() -> str | None:
+  """default_model()'s name without the catalog's trailing build date, the
+  form the chestnut's DEFAULT_BIG_MODEL has. Per frame from the UI, off the
+  index's cache."""
+  model = default_model()
+  return _TRAILING_DATE.sub('', model['name']) if model else None
+
+
 def selected_model() -> dict | None:
   """The slot's pick, listed in the catalog or not: a ref is enough to find its
-  pointer. With no pick, the fork's default big model, else the newest."""
-  models, known = _index()
+  pointer. With no pick, default_model()."""
   if (pick := selected_slot()) is not None:
-    return _row(pick['name'], pick['ref'], known)
-  return next((m for m in models if m['ref'] == DEFAULT_BIG_MODEL_REF), models[0] if models else None)
+    return _row(pick['name'], pick['ref'], _index()[1])
+  return default_model()
 
 
 def model_dir() -> Path:

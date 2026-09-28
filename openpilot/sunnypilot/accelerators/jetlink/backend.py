@@ -446,6 +446,11 @@ def active_model_name() -> str | None:
   return selected_model_name() if ready() else None
 
 
+def default_big_model_name() -> str | None:
+  """What runs with no pick, jetlink's default, in the chestnut label's form."""
+  return helpers.default_model_name()
+
+
 def shutdown(reason: str, timeout: float = SHUTDOWN_TIMEOUT) -> None:
   """Take the Jetson down with the comma. Runs in hardwared, which cannot
   touch the link: the owner holds the gadget, wakes a sleeping Jetson and

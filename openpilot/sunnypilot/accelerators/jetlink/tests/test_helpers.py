@@ -218,8 +218,13 @@ class TestSelectedModel(OpenpilotTestCase):
          mock.patch.object(helpers, 'selected_slot', return_value=pick):
       return helpers.selected_model()
 
-  def test_an_empty_slot_takes_the_forks_default_big_model(self):
+  def test_an_empty_slot_takes_the_default_big_model(self):
     assert self.select_with(None)['name'] == 'Beta'
+
+  def test_the_default_is_jetlinks_not_the_chestnuts(self):
+    # a chestnut's default is the model in the tree; the accelerator's is jetlink's
+    from jetlink.registry.catalog import DEFAULT_BIG_MODEL_REF
+    assert helpers.DEFAULT_BIG_MODEL_REF == DEFAULT_BIG_MODEL_REF
 
   def test_a_default_not_in_the_catalog_falls_to_the_newest(self):
     assert self.select_with(None, default='f' * 40)['name'] == 'Alpha'
@@ -238,6 +243,29 @@ class TestSelectedModel(OpenpilotTestCase):
 
   def test_no_pick_and_no_catalog_is_no_model(self):
     assert self.select_with(None, index=[]) is None
+
+
+class TestDefaultModelName(OpenpilotTestCase):
+  """The accelerator's default, named as the chestnut's DEFAULT_BIG_MODEL is: the
+  catalog's display name without its build date."""
+
+  def name_with(self, names, default=REF_B):
+    index = [{'name': name, 'ref': ref, 'oid': None, 'size': None} for name, ref in zip(names, (REF_A, REF_B), strict=False)]
+    with mock.patch.object(helpers, '_index', return_value=(index, {})), \
+         mock.patch.object(helpers, 'DEFAULT_BIG_MODEL_REF', default):
+      return helpers.default_model_name()
+
+  def test_the_build_date_is_dropped(self):
+    assert self.name_with(['Alpha', 'Cinque Terre V3 Model (September 17, 2026)']) == 'Cinque Terre V3 Model'
+
+  def test_a_parenthesis_that_is_not_a_date_stays(self):
+    assert self.name_with(['Alpha', 'Beta (big)']) == 'Beta (big)'
+
+  def test_a_default_not_listed_names_the_newest(self):
+    assert self.name_with(['Alpha (September 01, 2026)', 'Beta'], default='f' * 40) == 'Alpha'
+
+  def test_no_catalog_is_no_name(self):
+    assert self.name_with([]) is None
 
 
 class TestSelectedSlot(OpenpilotTestCase):

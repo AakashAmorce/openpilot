@@ -101,6 +101,10 @@ class _NoBackend:
     return None
 
   @staticmethod
+  def default_big_model_name() -> str | None:
+    return None
+
+  @staticmethod
   def active_model_name() -> str | None:
     return None
 
@@ -234,6 +238,13 @@ def selected_model_name() -> str | None:
 def active_model_name() -> str | None:
   """selected_model_name() once the accelerator can run it, else None."""
   return _backend().active_model_name()
+
+
+def default_big_model_name() -> str | None:
+  """The big model the accelerator runs with no pick, named as the chestnut's
+  default is, without a build date. None when it has no catalog to name it
+  from. Per frame from the UI: off a cache, never the network."""
+  return _backend().default_big_model_name()
 
 
 def daemons() -> list[Daemon]:
