@@ -12,8 +12,8 @@ from openpilot.cereal import custom
 from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS, get_selected_bundle, resolve_bundle_by_ref
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.ui_state import device, ui_state
-from openpilot.selfdrive.ui.sunnypilot.accelerator_link import LINK_MODES, LINK_MODE_TITLES, link_mode, link_status, \
-  link_toggle_meaningful, set_link_mode
+from openpilot.selfdrive.ui.sunnypilot.accelerator_link import LINK_MODES, LINK_MODE_TITLES, LINK_PARAM, link_mode, \
+  link_status, link_toggle_meaningful
 from openpilot.sunnypilot import accelerators
 from openpilot.selfdrive.ui.sunnypilot.model_info import (big_model_state, bundles_for_source, carrying_model, default_model_name,
                                                            model_cache_size_mb, queued_name, refresh_in_progress, refresh_model_list)
@@ -71,14 +71,13 @@ class ModelsLayout(Widget):
       callback=lambda: self._open_source_dialog("chestnut")
     )
 
-    # not param-bound: the write is refused onroad and is two params, so it
-    # goes through accelerator_link by hand
+    # param-bound; disabled onroad in _refresh_accelerator_items, since the
+    # gadget changes only once the car is parked
     self.accelerator_link_item = multiple_button_item_sp(
       tr("Accelerator Link"),
       self._link_description(""),
       buttons=[lambda m=m: tr(LINK_MODE_TITLES[m]) for m in LINK_MODES],
-      selected_index=LINK_MODES.index(link_mode()),
-      button_width=300, callback=self._set_link_mode, inline=False)
+      param=LINK_PARAM, button_width=300, inline=False)
 
     self.download_item = download_status_item(lambda: tr("Download") if self._downloading else tr("Model Status"))
 
@@ -124,12 +123,6 @@ class ModelsLayout(Widget):
                   self.download_item, self.refresh_item, self.clear_cache_item,
                   self.lane_turn_desire_toggle, self.lane_turn_value_control, self.lagd_toggle, self.delay_control, self.camera_offset]
     self._refresh_accelerator_items()
-
-  def _set_link_mode(self, index: int):
-    # the buttons are disabled onroad (see _refresh_accelerator_items); this
-    # guards a tap that lands on the tick the car starts
-    if ui_state.is_offroad():
-      set_link_mode(LINK_MODES[index])
 
   @staticmethod
   def _link_description(status: str) -> str:

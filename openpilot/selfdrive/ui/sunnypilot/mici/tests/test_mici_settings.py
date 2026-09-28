@@ -836,9 +836,9 @@ class TestAcceleratorIconState:
 
 
 class TestAcceleratorLinkToggle:
-  """on is the only enable, and the control is hidden on a device it means nothing to"""
+  """off, usb or ios in one param, and the control is hidden on a device it means nothing to"""
 
-  PARAM = "JetlinkEnabled"
+  PARAM = "JetlinkLink"
 
   @staticmethod
   def _accelerators(present=False, ready=False, reason=None, installed=False):
@@ -899,49 +899,43 @@ class TestAcceleratorLinkToggle:
     assert self._meaningful(reason="no gadget")
 
   def test_shown_once_the_user_has_turned_it_on(self, params):
-    params.put_bool(self.PARAM, True, block=True)
+    params.put(self.PARAM, 1, block=True)
     assert self._meaningful()
 
   def test_hidden_when_off_with_nothing_attached(self, params):
-    params.put_bool(self.PARAM, False, block=True)
+    params.put(self.PARAM, 0, block=True)
     assert not self._meaningful()
 
-  def test_absent_reads_as_off_and_on_is_usb(self, params):
+  def test_absent_reads_as_off(self, params):
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import link_mode
 
     params.remove(self.PARAM)
-    params.remove("JetlinkIOS")
     assert link_mode() == "off"
-    params.put_bool(self.PARAM, True, block=True)
-    assert link_mode() == "usb", "a link that was on before the modes is USB"
-    params.put_bool("JetlinkIOS", True, block=True)
-    assert link_mode() == "ios"
-    params.put_bool(self.PARAM, False, block=True)
-    assert link_mode() == "off"
+    for index, mode in enumerate(("off", "usb", "ios")):
+      params.put(self.PARAM, index, block=True)
+      assert link_mode() == mode
 
   def test_tap_cycles_off_usb_ios(self, params):
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import AcceleratorLinkToggle
     from openpilot.system.ui.lib.application import MousePos
 
     params.remove(self.PARAM)
-    params.remove("JetlinkIOS")
     toggle = AcceleratorLinkToggle()
     assert toggle._mode == "off"
     # the small model is the model manager's: the toggle never touches the runner cache
     with mock.patch.object(params, "remove", wraps=params.remove) as remove, \
          mock.patch('openpilot.selfdrive.ui.sunnypilot.mici.layouts.models.ui_state.is_offroad', return_value=True):
-      for enabled, ios in ((True, False), (True, True), (False, False)):
+      for index in (1, 2, 0):
         toggle._handle_mouse_release(MousePos(0, 0))
-        assert (params.get_bool(self.PARAM), params.get_bool("JetlinkIOS")) == (enabled, ios)
+        assert params.get(self.PARAM) == index
     assert "ModelRunnerTypeCache" not in {c.args[0] for c in remove.call_args_list}
 
-  def test_refresh_follows_the_params(self, params):
+  def test_refresh_follows_the_param(self, params):
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import AcceleratorLinkToggle
 
     params.remove(self.PARAM)
     toggle = AcceleratorLinkToggle()
-    params.put_bool(self.PARAM, True, block=True)
-    params.put_bool("JetlinkIOS", True, block=True)
+    params.put(self.PARAM, 2, block=True)
     toggle.refresh()
     assert toggle._mode == "ios"
 
@@ -951,14 +945,11 @@ class TestAcceleratorLinkToggle:
     from openpilot.system.ui.lib.application import MousePos
 
     params.remove(self.PARAM)
-    params.remove("JetlinkIOS")
     toggle = AcceleratorLinkToggle()
-    with mock.patch('openpilot.selfdrive.ui.sunnypilot.mici.layouts.models.ui_state.is_offroad', return_value=False), \
-         mock.patch('openpilot.selfdrive.ui.sunnypilot.mici.layouts.models.set_link_mode') as write:
+    with mock.patch('openpilot.selfdrive.ui.sunnypilot.mici.layouts.models.ui_state.is_offroad', return_value=False):
       toggle._handle_mouse_release(MousePos(0, 0))
-      write.assert_not_called()
     assert params.get(self.PARAM) is None
-    assert toggle._mode == "off", "the pills must not show a mode the params do not have"
+    assert toggle._mode == "off", "the pills must not show a mode the param does not have"
 
   def test_layout_hides_the_toggle_until_it_means_something(self, params):
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import ModelsLayoutMici

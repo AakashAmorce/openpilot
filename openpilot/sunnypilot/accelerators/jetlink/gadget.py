@@ -50,10 +50,11 @@ def set_logger(logger) -> None:
 # gets the old value or the new one and never a torn one. The path rule is
 # params.cc's: PARAMS_ROOT or /data/params, plus "/" and OPENPILOT_PREFIX,
 # which defaults to "d".
-P_ENABLED = "JetlinkEnabled"        # user toggle; only True enables
+P_ENABLED = "JetlinkEnabled"        # the on/off switch before P_LINK; read once, to migrate
 P_READY = "JetlinkEngineReady"      # sha256 of the model the Jetson has built
 P_ENDPOINT = "JetlinkEndpoint"      # optional "host:port" to use TCP instead of USB
-P_IOS = "JetlinkIOS"                # Accelerator Link "iOS": an iPhone on the cable
+P_LINK = "JetlinkLink"              # Accelerator Link, an index into LINK_MODES
+LINK_MODES = ('off', 'usb', 'ios')  # off; a Jetson or a Mac on USB; an iPhone on the cable
 
 
 _dirs: dict[tuple[str, str], Path] = {}
@@ -102,13 +103,46 @@ def param_json(key: str):
     return None
 
 
-def enabled() -> bool:
-  """Has the user switched the link on? JetlinkEnabled == True and nothing else.
+def link_mode() -> str:
+  """Accelerator Link: 'off', 'usb' or 'ios'. A comma that predates the setting
+  answers from its old on/off switch, on being USB, until the owner migrates it."""
+  raw = raw_param(P_LINK)
+  if raw is None:
+    return 'usb' if param_bool(P_ENABLED) is True else 'off'
+  try:
+    return LINK_MODES[int(raw)]
+  except (ValueError, IndexError):
+    return 'off'
 
-  Not "absent means auto": the gadget comes up at boot with the package
-  installed, so auto turned installation into enablement.
-  """
-  return param_bool(P_ENABLED) is True
+
+def enabled() -> bool:
+  """Is the link on, for either host? Not "absent means auto": the gadget comes
+  up at boot with the package installed, so auto turned installation into
+  enablement."""
+  return link_mode() != 'off'
+
+
+def ios() -> bool:
+  """Is the link set to iOS, an iPhone on the cable?"""
+  return link_mode() == 'ios'
+
+
+def migrate_link_mode() -> None:
+  """Once, for a comma that predates the setting: write what its on/off switch
+  meant, so the panels show the mode the owner acts on. Written as params.cc
+  writes, a temporary file renamed over the key."""
+  if raw_param(P_LINK) is not None:
+    return
+  path = params_dir() / P_LINK
+  tmp = path.with_name(f".tmp_{P_LINK}")
+  try:
+    with open(tmp, 'w') as f:
+      f.write(str(LINK_MODES.index(link_mode())))
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, path)
+  except OSError:
+    log.exception("jetlink: could not migrate the link setting")
 
 
 def offroad() -> bool:
@@ -147,11 +181,6 @@ NET_STATUS = Path("/dev/shm/jetlink-net")   # setup_gadget.sh: "ok 192.168.60.1"
 CABLE_ADDR = ('192.168.60.1', 5599)
 
 
-def ios() -> bool:
-  """Is the link set to iOS? JetlinkIOS == True and nothing else."""
-  return param_bool(P_IOS) is True
-
-
 def _link_record() -> list[str]:
   try:
     return LINK.read_text().split()
@@ -170,13 +199,6 @@ def link_kind() -> str:
   if record[:1] in (['cable'], ['usb']):
     return record[0]
   return 'cable' if ios() else 'usb'
-
-
-def link_mode() -> str:
-  """The setting, for the panels: 'off', 'usb' or 'ios'."""
-  if not enabled():
-    return 'off'
-  return 'ios' if ios() else 'usb'
 
 
 def link_peer() -> str | None:

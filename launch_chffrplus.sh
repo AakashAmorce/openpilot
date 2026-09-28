@@ -80,8 +80,6 @@ function launch {
   ln -sfn teleoprtc_repo/teleoprtc teleoprtc
   ln -sfn tinygrad_repo/tinygrad tinygrad
   ln -sfn jetlink_repo/jetlink jetlink
-  # accelerator backends: USB gadgets, symlinks, anything needing root at boot
-  ./openpilot/sunnypilot/accelerators/setup.sh
 
   # hardware specific init
   if [ -f /AGNOS ]; then

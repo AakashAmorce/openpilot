@@ -222,7 +222,7 @@ class TestTiciModelsPanel:
   def test_shown_wherever_the_package_is_installed(self, params):
     # with the link off there is no gadget for a Jetson to enumerate, so present()
     # alone would hide the toggle that turns the link on
-    params.remove("JetlinkEnabled")
+    params.remove("JetlinkLink")
     with accelerator(installed=True):
       layout = self._layout()
     assert layout.accelerator_link_item.is_visible
@@ -266,28 +266,25 @@ class TestTiciModelsPanel:
     with accelerator(installed=True, present=True), mock.patch(f"{gadget}.link_kind", side_effect=OSError):
       assert link_status() == "Accelerator connected: USB."
 
-  def test_the_modes_write_the_params_and_leave_the_runner_alone(self, params):
+  def test_the_buttons_are_bound_to_the_one_param(self, params):
     # the small model is the model manager's: the link does not decide which modeld runs
-    with accelerator(present=True), mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=True), \
-         mock.patch.object(params, "remove", wraps=params.remove) as remove:
+    with accelerator(present=True), mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=True):
       layout = self._layout()
-      for index, (enabled, ios) in enumerate(((False, False), (True, False), (True, True))):
-        layout._set_link_mode(index)
-        assert (params.get_bool("JetlinkEnabled"), params.get_bool("JetlinkIOS")) == (enabled, ios)
-      layout._set_link_mode(1)
-      assert params.get_bool("JetlinkIOS") is False, "back to USB from iOS"
-    assert "ModelRunnerTypeCache" not in {c.args[0] for c in remove.call_args_list}
+      action = layout.accelerator_link_item.action_item
+      assert action.param_key == "JetlinkLink"
+      for index, mode in enumerate(("off", "usb", "ios")):
+        params.put("JetlinkLink", index, block=True)
+        layout._refresh_accelerator_items()
+        assert action.get_selected_button() == index
+        from openpilot.sunnypilot import accelerators
+        assert accelerators.link_mode() == mode
 
   def test_the_modes_are_inert_onroad(self, params):
-    params.remove("JetlinkEnabled")
-    params.remove("JetlinkIOS")
+    params.remove("JetlinkLink")
     with accelerator(present=True), mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=False):
       layout = self._layout()
       layout._refresh_accelerator_items()
       assert not layout.accelerator_link_item.action_item.enabled
-      layout._set_link_mode(2)
-      assert params.get("JetlinkEnabled") is None and params.get("JetlinkIOS") is None
-      assert layout.accelerator_link_item.action_item.get_selected_button() == 0
 
   def test_status_note_names_the_accelerator_not_the_chestnut(self, params):
     from openpilot.selfdrive.ui.sunnypilot.ui_state import AcceleratorView

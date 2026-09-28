@@ -202,12 +202,9 @@ class Owner:
       return False
 
   def ensure_gadget(self) -> bool:
-    """Is there a gadget to present? Create it if boot did not.
-
-    Boot only sets the gadget up with the link already on, so a link turned on
-    afterwards finds nothing to open. Setting it up here is what makes the
-    toggle act at once instead of at the next reboot.
-    """
+    """Is there a gadget to present? Create it if there is none: nothing sets
+    it up at boot, so the owner's first step does, parked or onroad, and a
+    link turned on later gets one at once."""
     if gadget.link_endpoint() is not None or gadget.link_configured():
       return True
     if not gadget.can_setup_gadget():
@@ -526,6 +523,7 @@ class Owner:
 
   def run(self) -> None:
     gadget.clear_link()   # ours to write, and a record from a previous owner is stale
+    gadget.migrate_link_mode()
     if not self.lender.start():
       gadget.log.error("jetlink: nothing can borrow the gadget from us; modeld will open it itself")
     try:

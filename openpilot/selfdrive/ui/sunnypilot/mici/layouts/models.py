@@ -13,8 +13,8 @@ from openpilot.selfdrive.ui.mici.widgets.dialog import BigConfirmationDialog, Bi
 from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS, get_selected_bundle
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigMultiToggle
 from openpilot.selfdrive.ui.ui_state import ui_state, device
-from openpilot.selfdrive.ui.sunnypilot.accelerator_link import LINK_MODES, LINK_MODE_TITLES, link_mode, link_status, \
-  link_toggle_meaningful, set_link_mode
+from openpilot.selfdrive.ui.sunnypilot.accelerator_link import LINK_MODES, LINK_MODE_TITLES, LINK_PARAM, link_mode, \
+  link_status, link_toggle_meaningful
 from openpilot.selfdrive.ui.sunnypilot.model_info import (active_source, big_model_progress, big_model_state, bundles_for_source,
                                                            carrying_model, default_model_name, model_cache_size_mb, model_info,
                                                            queued_name, refresh_in_progress, refresh_model_list)
@@ -26,9 +26,9 @@ from openpilot.system.ui.widgets.scroller import NavScroller
 
 
 class AcceleratorLinkToggle(BigMultiToggle):
-  """off, usb, ios, a pill each. Not BigMultiParamToggle: the write is two
-  params and refused onroad. The value line carries what is on the port as
-  well as the mode, so the pills follow the mode rather than the value."""
+  """off, usb, ios, a pill each. Not BigMultiParamToggleSP: the value line
+  carries what is on the port as well as the mode, so the pills follow the
+  mode rather than the value. Taps are refused onroad."""
 
   def __init__(self):
     super().__init__(tr("accelerator link"), [tr(LINK_MODE_TITLES[m]).lower() for m in LINK_MODES])
@@ -46,7 +46,7 @@ class AcceleratorLinkToggle(BigMultiToggle):
     BigButton._handle_mouse_release(self, mouse_pos)
     if ui_state.is_offroad():
       self._mode = LINK_MODES[(LINK_MODES.index(self._mode) + 1) % len(LINK_MODES)]
-      set_link_mode(self._mode)
+      ui_state.params.put(LINK_PARAM, LINK_MODES.index(self._mode), block=True)
     self._show()
 
   def _draw_content(self, btn_y: float) -> None:

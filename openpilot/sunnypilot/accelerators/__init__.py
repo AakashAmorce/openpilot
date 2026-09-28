@@ -113,8 +113,11 @@ def enabled() -> bool:
   return _backend().enabled()
 
 
-# Accelerator Link: off, a Jetson or a Mac on USB, or an iPhone (iOS)
-LINK_MODES = ('off', 'usb', 'ios')
+# Accelerator Link, stored in LINK_PARAM as an index into LINK_MODES: off, a
+# Jetson or a Mac on USB, or an iPhone (iOS). The panels write the param; the
+# gadget follows once the car is parked. gadget is stdlib-only, so this import
+# costs the UI nothing
+from openpilot.sunnypilot.accelerators.jetlink.gadget import LINK_MODES, P_LINK as LINK_PARAM  # noqa: F401  re-exported
 
 
 def link_mode() -> str:
@@ -122,12 +125,6 @@ def link_mode() -> str:
   so it never raises."""
   from openpilot.sunnypilot.accelerators.jetlink import gadget
   return gadget.link_mode()
-
-
-def set_link_mode(mode: str) -> None:
-  """Store the setting. The gadget follows once the car is parked."""
-  from openpilot.sunnypilot.accelerators.jetlink import helpers
-  helpers.set_link_mode(mode)
 
 
 def link_transport() -> str:

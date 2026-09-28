@@ -24,7 +24,7 @@ class OwnerTest(unittest.TestCase):
     self.tmp = Path(tempfile.mkdtemp())
     self.params = self.tmp / 'params'
     self.params.mkdir()
-    self.write('JetlinkEnabled', b'1')
+    self.write('JetlinkLink', b'1')   # USB
     self.write('IsOffroad', b'1')
     for name, value in (('DORMANT', self.tmp / 'dormant'),
                         ('SHUTDOWN_REQUEST', self.tmp / 'shutdown'),
@@ -345,7 +345,7 @@ class TestTheToggle(OwnerTest):
     o = self.owner()
     o.vm_tuned = True
     worker = o.worker = mock.Mock(**{'poll.return_value': None})
-    self.write('JetlinkEnabled', b'0')
+    self.write('JetlinkLink', b'0')
     o.step()
     o.close_link.assert_called_once()
     worker.terminate.assert_called_once()
@@ -372,7 +372,7 @@ class TestTheToggle(OwnerTest):
 
   def test_turning_it_off_gives_the_port_back(self):
     o = self.owner()
-    self.write('JetlinkEnabled', b'0')
+    self.write('JetlinkLink', b'0')
     o.step()
     o.port.off.assert_called_once()
     o.port.update.assert_not_called()
@@ -415,7 +415,7 @@ class IosTest(OwnerTest):
 
   def setUp(self):
     super().setUp()
-    self.write('JetlinkIOS', b'1')
+    self.write('JetlinkLink', b'2')   # iOS
 
   def owner(self, **kw):
     o = super().owner(**kw)
@@ -615,7 +615,7 @@ class TestSwitchingMode(OwnerTest):
   def switched(self, **kw):
     o = self.owner(**kw)
     o.built_ios = False
-    self.write('JetlinkIOS', b'1')
+    self.write('JetlinkLink', b'2')   # iOS
     return o
 
   def test_parked_it_rebuilds_for_the_new_host(self):
@@ -661,7 +661,7 @@ class TestSwitchingMode(OwnerTest):
     o = self.switched()
     o.step()
     self.assertTrue(o.built_ios)
-    self.write('JetlinkIOS', b'0')
+    self.write('JetlinkLink', b'1')
     o.step()
     self.assertFalse(o.built_ios)
     self.assertEqual(self.setup_gadget.call_count, 2)

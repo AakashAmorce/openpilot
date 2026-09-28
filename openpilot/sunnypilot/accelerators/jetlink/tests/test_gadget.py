@@ -206,3 +206,38 @@ class TestTheTwoGadgets(unittest.TestCase):
       self.assertFalse(gadget.built_for_ios())
       (config / 'ncm.usb0').touch()
       self.assertTrue(gadget.built_for_ios())
+
+
+class TestLinkMode(unittest.TestCase):
+  """Accelerator Link is one param, JetlinkLink: 0 off, 1 USB, 2 iOS. A comma
+  that predates it had JetlinkEnabled, and on is USB."""
+
+  def setUp(self):
+    self.dir = Path(tempfile.mkdtemp())
+    p = unittest.mock.patch.object(gadget, 'params_dir', return_value=self.dir)
+    self.addCleanup(p.stop)
+    p.start()
+
+  def write(self, key: str, value: str) -> None:
+    (self.dir / key).write_text(value)
+
+  def test_the_three_modes(self):
+    for raw, mode in (('0', 'off'), ('1', 'usb'), ('2', 'ios'), ('7', 'off'), ('x', 'off')):
+      self.write('JetlinkLink', raw)
+      self.assertEqual(gadget.link_mode(), mode, raw)
+    self.write('JetlinkLink', '2')
+    self.assertTrue(gadget.enabled() and gadget.ios())
+
+  def test_before_the_setting_on_is_usb(self):
+    self.assertEqual(gadget.link_mode(), 'off')
+    self.write('JetlinkEnabled', '1')
+    self.assertEqual(gadget.link_mode(), 'usb')
+
+  def test_the_owner_migrates_once_and_leaves_a_set_mode_alone(self):
+    self.write('JetlinkEnabled', '1')
+    gadget.migrate_link_mode()
+    self.assertEqual((self.dir / 'JetlinkLink').read_text(), '1')
+    self.write('JetlinkLink', '2')
+    gadget.migrate_link_mode()
+    self.assertEqual((self.dir / 'JetlinkLink').read_text(), '2')
+    self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ['JetlinkEnabled', 'JetlinkLink'], 'left a temp file')

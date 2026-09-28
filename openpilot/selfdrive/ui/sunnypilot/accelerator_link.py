@@ -12,7 +12,7 @@ the accelerator joins it, so the setting never changes which modeld runs.
 from openpilot.common.hardware.usb import TYPEC_CC_ORIENTATION_PATH, read
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot import accelerators
-from openpilot.sunnypilot.accelerators import LINK_MODES, link_mode, set_link_mode  # noqa: F401  the panels' imports
+from openpilot.sunnypilot.accelerators import LINK_MODES, LINK_PARAM, link_mode  # noqa: F401  the panels' imports
 from openpilot.system.ui.lib.multilang import tr
 
 LINK_MODE_TITLES = {"off": "Off", "usb": "USB", "ios": "iOS"}
