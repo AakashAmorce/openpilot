@@ -267,7 +267,8 @@ def main(demo=False):
   else:
     params.remove("ChestnutActive")
   # before going realtime: prepare() starts tinygrad's device thread, which would inherit FIFO 54 on core 7
-  JETLINK = not CHESTNUT and accelerators.prepare()
+  if not CHESTNUT:
+    accelerators.prepare()
 
   config_realtime_process(7, 54)
 
@@ -320,7 +321,7 @@ def main(demo=False):
   small_model = ModelState(vipc_client_main.width, vipc_client_main.height, False) if model is None or CHESTNUT else None
   if model is None:
     model = small_model
-  accelerator = accelerators.load(vipc_client_main.width, vipc_client_main.height, small_model) if JETLINK else None
+  accelerator = accelerators.load(vipc_client_main.width, vipc_client_main.height, small_model)
   if accelerator:
     model = accelerator.model
   params.put_bool("ChestnutLoading", False)
@@ -451,7 +452,7 @@ def main(demo=False):
       model_output = model.run(bufs, transforms, inputs, chestnut_state.send if send_chestnut else None)
     except Exception:
       # the joining state does its own fallback; the handler below would orphan its threads and link
-      if JETLINK:
+      if accelerator:
         raise
       if not params.get_bool("ChestnutActive"):
         raise
