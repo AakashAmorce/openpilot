@@ -117,3 +117,34 @@ class TestDefaultBigModelName(OpenpilotTestCase):
     for jetlink in (_jetlink(default_model=None), None):
       self.ui_state.jetlink = jetlink
       assert model_info.default_model_name("chestnut") == f"{DEFAULT_BIG_MODEL} (Default)"
+
+
+class TestAChestnutArrivingMidRender(OpenpilotTestCase):
+  """The params thread sets ui_state.jetlink to None when a chestnut is
+  plugged in, between any two reads the render thread makes. Each function
+  reads it once, so a layout drawing at that moment cannot raise."""
+
+  def setUp(self):
+    super().setUp()
+    self.ui_state = mock.MagicMock()
+    self.ui_state.chestnut_present = False
+    self.ui_state.chestnut_state = ChestnutState.ACTIVE
+    snapshot = _jetlink(enabled=True, mode='usb', present=True, ready=True, model="big", default_model="jetlink's",
+                        progress={'stage': 'build', 'frac': 0.5, 'msg': 'building'})
+    self.reads = 0
+
+    def read():
+      # the snapshot on a call's first read, and None after it: the chestnut arrived
+      self.reads += 1
+      return snapshot if self.reads == 1 else None
+    type(self.ui_state).jetlink = mock.PropertyMock(side_effect=read)
+    patcher = mock.patch.object(model_info, "ui_state", self.ui_state)
+    patcher.start()
+    self.addCleanup(patcher.stop)
+
+  def test_each_reader_answers_from_the_snapshot_it_read(self):
+    for call, expected in ((lambda: model_info.default_model("chestnut"), "jetlink's"),
+                           (model_info.big_model_progress, ("build", 0.5, "building")),
+                           (model_info.carrying_model, ("accelerator", "big", "big"))):
+      self.reads = 0
+      assert call() == expected

@@ -44,7 +44,9 @@ def default_model(source: str) -> str:
   default is its own."""
   if source != 'chestnut':
     return DEFAULT_MODEL
-  if not ui_state.chestnut_present and ui_state.jetlink is not None and (name := ui_state.jetlink.default_model):
+  # read once: the params thread sets it to None when a chestnut turns up
+  jetlink = ui_state.jetlink
+  if not ui_state.chestnut_present and jetlink is not None and (name := jetlink.default_model):
     return name
   return DEFAULT_BIG_MODEL
 
@@ -64,7 +66,8 @@ def big_model_state() -> str | None:
 def big_model_progress() -> tuple[str, float, str] | None:
   """(stage, 0..1, message) while an accelerator is working, else None. The message
   is carried because a stage like "waiting for the accelerator" has no meaningful fraction"""
-  progress = ui_state.jetlink.progress if ui_state.jetlink is not None else None
+  jetlink = ui_state.jetlink
+  progress = jetlink.progress if jetlink is not None else None
   if not progress:
     return None
   stage = str(progress.get('stage', ''))
@@ -79,7 +82,8 @@ def carrying_model() -> tuple[str | None, str | None, str | None]:
   small slot's pick; a custom big has no automatic fallback yet -> (None, None, None)."""
   # only when no board is fitted does the chestnut state describe the jetlink view
   if not ui_state.chestnut_present and ui_state.chestnut_state == ChestnutState.ACTIVE:
-    name = ui_state.jetlink.active_model if ui_state.jetlink is not None else None
+    jetlink = ui_state.jetlink
+    name = jetlink.active_model if jetlink is not None else None
     if name is not None:
       return 'accelerator', name, name
   source = active_source()
