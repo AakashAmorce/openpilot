@@ -6,9 +6,9 @@ See the LICENSE.md file in the root directory for more details.
 
 What the comma puts on the wire for each kind of big model.
 
-A queued graph (up to Cinque Terre V2) gets the frame, the scalars and last
-frame's hidden state; a stateful one (openpilot #38916, Cinque Terre V3 on)
-keeps its hidden state on the Jetson and gets the frame and the scalars only.
+Both kinds get the frame and the scalars only. A stateful graph (openpilot
+#38916, Cinque Terre V3 on) keeps its hidden state inside itself, and the
+Jetson feeds a queued one's (up to Cinque Terre V2) back (jetlink protocol 3).
 The warp and the link are faked; the packing is the code that drives.
 """
 from __future__ import annotations
@@ -123,12 +123,13 @@ class TestWire(OpenpilotTestCase):
     state = model_state.JetlinkModelState(1928, 1208, client, spec_for(STATEFUL), warp=object())
     self.assertTrue(state.send_from_gpu)
 
-  def test_a_queued_model_still_sends_the_hidden_state_back(self):
-    spec, state, client, _ = self.run_frames(QUEUED)
-    first, second = client.sent[0][1], client.sent[1][1]
-    self.assertEqual(first.shape, (spec.packed_nelem,))
-    self.assertTrue((first[-16384:] == 0).all())
-    self.assertTrue((second[-16384:] == 0.5).all())
+  def test_a_queued_model_gets_the_frame_and_twelve_floats_too(self):
+    spec, state, client, warped = self.run_frames(QUEUED)
+    self.assertNotIn('prev_feat', state.npy)
+    for data, packed, _, _ in client.sent:
+      np.testing.assert_array_equal(data, warped)
+      self.assertEqual(packed.shape, (12,))
+      np.testing.assert_array_equal(packed[8:], np.array([1, 0, 0.1, 0.2], np.float32))
 
   def test_the_warp_is_sized_from_either_layout(self):
     for inputs in (STATEFUL, QUEUED):
