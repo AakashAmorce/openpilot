@@ -129,9 +129,10 @@ class FakeAdapter:
   owns the drive. attach() joins only after a yes, as jetlink's does.
   """
 
-  def __init__(self, prepare=None):
+  def __init__(self, prepare=None, joined_type=SimpleNamespace):
     self.calls: list[str] = []
     self._prepare = prepare if prepare is not None else (lambda: True)
+    self._joined_type = joined_type
     self.prepared = False
     self.small = None
     self.joined = None
@@ -146,7 +147,7 @@ class FakeAdapter:
     self.small = small
     if not self.prepared:
       return None
-    self.joined = SimpleNamespace(chestnut=False, big_model_state='joining')
+    self.joined = self._joined_type(chestnut=False, big_model_state='joining')
     return self.joined
 
 
@@ -312,6 +313,15 @@ class NativeEquivalence(OpenpilotTestCase):
     self.assertIs(scope['model'], adapter.joined)
     # the joining model asks for its own telemetry; nothing publishes a chestnut's state
     self.assertIsNone(scope['chestnut_state'])
+
+  def test_the_joined_model_runs_whatever_its_truth(self):
+    # a model whose __len__ is 0 is falsy, and `attach(...) or model` ran the small one instead
+    class Empty(SimpleNamespace):
+      def __len__(self):
+        return 0
+    adapter = FakeAdapter(joined_type=Empty)
+    scope = self.seam.decide_and_load(adapter, present=False, compiled=False, trained=False)
+    self.assertIs(scope['model'], adapter.joined)
 
   def test_the_link_is_decided_before_the_process_goes_realtime(self):
     # prepare() starts tinygrad's device thread; after config_realtime_process
