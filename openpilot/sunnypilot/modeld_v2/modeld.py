@@ -521,6 +521,9 @@ def main(demo=False):
     if 'lateral_control_params' in model.numpy_inputs:
       inputs['lateral_control_params'] = np.array([v_ego, lat_delay], dtype=np.float32)
 
+    # a model can change which model drives inside run() (jetlink's joining
+    # model); the stall of that handover is not lag, as for the fallback below
+    was_big = model.chestnut
     mt1 = time.perf_counter()
     try:
       send_chestnut = (chestnut_state is not None and
@@ -540,6 +543,8 @@ def main(demo=False):
       model_output = None
     mt2 = time.perf_counter()
     model_execution_time = mt2 - mt1
+    if model.chestnut != was_big:
+      run_count = 0
 
     if model_output is not None:
       modelv2_send = messaging.new_message('modelV2')
@@ -554,6 +559,8 @@ def main(demo=False):
                      publish_state, meta_main.frame_id, meta_extra.frame_id, frame_id,
                      frame_drop_ratio, meta_main.timestamp_eof, model_execution_time, live_calib_seen, meta_constants)
       modelv2_send.modelV2.big = model.chestnut
+      # as stock modeld's fill_driving_model_data: the qlog's only model message
+      drivingdata_send.drivingModelData.big = model.chestnut
 
       desire_state = modelv2_send.modelV2.meta.desireState
       l_lane_change_prob = desire_state[log.Desire.laneChangeLeft]

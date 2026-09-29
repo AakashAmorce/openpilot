@@ -442,6 +442,9 @@ def main(demo=False):
       'action_t': np.array([lat_action_t, long_action_t], dtype=np.float32),
     }
 
+    # a model can change which model drives inside run() (jetlink's joining
+    # model); the stall of that handover is not lag, as for the fallback below
+    was_big = model.chestnut
     mt1 = time.perf_counter()
     try:
       send_chestnut = (chestnut_state is not None and
@@ -462,6 +465,8 @@ def main(demo=False):
       model_output = None
     mt2 = time.perf_counter()
     model_execution_time = mt2 - mt1
+    if model.chestnut != was_big:
+      run_count = 0
 
     if model_output is not None:
       modelv2_send = messaging.new_message('modelV2')
