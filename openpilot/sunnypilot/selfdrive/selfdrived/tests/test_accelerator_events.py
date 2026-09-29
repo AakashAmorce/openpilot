@@ -11,7 +11,7 @@ EventNameSP = custom.OnroadEventSP.EventName
 
 class TestAcceleratorEvents(OpenpilotTestCase):
   """The adapter alone; the drives through SelfdriveD are traced in
-  accelerators/tests/test_selfdrived_traces.py."""
+  test_selfdrived_traces.py beside this one."""
 
   def setUp(self):
     super().setUp()

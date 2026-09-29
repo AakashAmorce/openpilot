@@ -56,9 +56,11 @@ KEYS = _Keys(link='JetlinkLink', offroad='IsOffroad', progress='AcceleratorProgr
 CHESTNUT_IDS = frozenset({(0xADD1, 0x0001), (0x3801, 0x0001), (0x174C, 0x2464), (0x174C, 0x2463)})
 
 # where the build puts the warp for each camera (SConscript) and modeld loads
-# it from: in the tree and under the *.pkl ignore, next to upstream's
-# dm_warp_*.pkl. Not Paths.comma_home(), which on AGNOS is a tmpfs overlay
-WARP_DIR = Path(__file__).resolve().parent.parent / 'accelerators' / 'jetlink' / 'models'
+# it from: in the fork's tree, never in the jetlink submodule (a file there
+# leaves it dirty for the updater), and under the *.pkl ignore, which the
+# release scripts add past. Not Paths.comma_home(), which on AGNOS is a tmpfs
+# overlay: the pickle was gone every boot
+WARP_DIR = Path(__file__).resolve().parent / 'models'
 
 OWNER_LOG = Path('/data/log/jetlink-owner.log')
 
@@ -75,6 +77,11 @@ def _params_dir() -> Path:
   if root is None:
     root = '/data/params' if _AGNOS else os.path.join(os.environ.get('HOME', ''), '.comma' + prefix, 'params')
   return Path(root) / os.environ.get('OPENPILOT_PREFIX', 'd')
+
+
+def warp_path(cam_w: int, cam_h: int, model_w: int, model_h: int) -> Path:
+  """The warp for one geometry: the build's target and what modeld opens."""
+  return WARP_DIR / f'warp_{cam_w}x{cam_h}_{model_w}x{model_h}_tinygrad.pkl'
 
 
 def owner_config():
@@ -158,7 +165,7 @@ class Adapter:
     return camera.width, camera.height, *MEDMODEL_INPUT_SIZE
 
   def warp_path(self, cam_w: int, cam_h: int, model_w: int, model_h: int) -> Path:
-    return WARP_DIR / f'warp_{cam_w}x{cam_h}_{model_w}x{model_h}_tinygrad.pkl'
+    return warp_path(cam_w, cam_h, model_w, model_h)
 
   def model_root(self) -> Path:
     from openpilot.common.hardware.hw import Paths

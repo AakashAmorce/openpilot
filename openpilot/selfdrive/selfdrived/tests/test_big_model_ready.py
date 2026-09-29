@@ -10,7 +10,7 @@ EventNameSP = custom.OnroadEventSP.EventName
 
 class TestBigModelReady(OpenpilotTestCase):
   """The chime's edge cases; a load that works and one that fails are traced
-  in accelerators/tests/test_selfdrived_traces.py."""
+  in sunnypilot/selfdrive/selfdrived/tests/test_selfdrived_traces.py."""
 
   def setUp(self):
     super().setUp()

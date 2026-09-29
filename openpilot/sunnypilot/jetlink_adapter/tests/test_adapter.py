@@ -143,9 +143,10 @@ class TestTheDevice(OpenpilotTestCase):
         self.assertEqual(Adapter().camera(), (camera.width, camera.height, *MEDMODEL_INPUT_SIZE))
 
   def test_the_warp_is_where_the_build_puts_it(self):
-    from openpilot.sunnypilot.accelerators.jetlink import warp_cache
+    # the SConscript's targets are jetlink_adapter.warp_path (test_warp_build)
     geometry = (1928, 1208, 512, 256)
-    self.assertEqual(Adapter().warp_path(*geometry), warp_cache.warp_path(*geometry))
+    self.assertEqual(Adapter().warp_path(*geometry), jetlink_adapter.warp_path(*geometry))
+    self.assertEqual(jetlink_adapter.warp_path(*geometry).parent, Path(jetlink_adapter.__file__).parent / 'models')
 
 
 class TestModeld(OpenpilotTestCase):

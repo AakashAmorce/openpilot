@@ -43,7 +43,7 @@ else:
   camera_configs = [(c.width, c.height) for c in (_ar_ox_fisheye, _os_fisheye)]
   tg_backend = 'CPU'
   tg_flags = f'DEV=CPU' if arch == 'Darwin' else 'DEV=CPU:LLVM'
-# the jetlink warp is keyed by camera the same way (sunnypilot/accelerators/SConscript)
+# the jetlink warp is keyed by camera the same way (sunnypilot/jetlink_adapter/SConscript)
 Export('camera_configs')
 
 tg_devices = { # which device to put jit inputs to at runtime

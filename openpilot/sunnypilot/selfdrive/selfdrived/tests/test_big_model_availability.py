@@ -9,7 +9,7 @@ EventName = custom.OnroadEventSP.EventName
 
 class TestBigModelAvailability(OpenpilotTestCase):
   """The adapter's offer to switch; the drive through SelfdriveD is traced in
-  accelerators/tests/test_selfdrived_traces.py."""
+  test_selfdrived_traces.py beside this one."""
 
   def setUp(self):
     super().setUp()
