@@ -107,10 +107,7 @@ class JetlinkTrace(TraceTest):
     self.sd = make_selfdrived(chestnut_present=False, enabled=True)
 
   def engage(self, enabled=False, mads=False):
-    sd = self.sd
-    sd.enabled, sd.mads.active = enabled, mads
-    sd.sm['carControl'].latActive = enabled or mads
-    sd.sm['carControl'].longActive = enabled
+    self.sd.enabled, self.sd.mads.enabled = enabled, mads
 
   def steps(self, n, **kwargs):
     return [self.step(**kwargs) for _ in range(n)]
@@ -141,6 +138,12 @@ class JetlinkTrace(TraceTest):
     self.assertEqual(set(map(str, lost[HANDBACK_TICKS:])), {str(([INIT], []))})
     # it comes back, which a chestnut never does, and waits for the next window
     self.assertEqual(self.step(state=AcceleratorState.ready), ([INIT], ['bigModelAvailable']))
+
+  def test_mads_on_at_a_stop_keeps_it_waiting(self):
+    # lateral paused at a standstill is still MADS engaged: the offer, and no
+    # swap until the driver turns it off (the adapter's gate reads the same)
+    self.engage(mads=True)
+    self.assertEqual(self.step(state=AcceleratorState.ready, standstill=True), ([INIT], ['bigModelAvailable']))
 
   def test_a_mads_only_loss_warns(self):
     self.engage(mads=True)

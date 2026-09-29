@@ -13,13 +13,13 @@ class TestBigModelAvailability(OpenpilotTestCase):
   test_selfdrived_traces.py beside this one.
 
   The large model swaps in only while nothing is in control (the adapter's
-  engagement poller: selfdriveState.enabled, carControl.latActive and
-  longActive). Ready while something is, the driver is told once to re-engage;
+  engagement poller: openpilot or MADS engaged, MADS even with its lateral
+  paused). Ready while something is, the driver is told once to re-engage;
   ready while nothing is, it swaps at once and bigModelReady says so."""
 
   def setUp(self):
     super().setUp()
-    self.sm = messaging.SubMaster(['modelV2', 'modelDataV2SP', 'carControl'])
+    self.sm = messaging.SubMaster(['modelV2', 'modelDataV2SP'])
     self.events = Events()
     self.events_sp = EventsSP()
     self.accel = AcceleratorEvents()
@@ -29,15 +29,13 @@ class TestBigModelAvailability(OpenpilotTestCase):
       self.sm.alive[service] = True
       self.sm.valid[service] = True
 
-  def update(self, available=False, big=False, enabled=False, lat=False, mads=False):
+  def update(self, available=False, big=False, enabled=False, mads=False):
     # ready is the joining state connected and waiting for a window to switch
     self.sm['modelDataV2SP'].acceleratorState = 'ready' if available else ('running' if big else 'none')
     self.sm['modelV2'].big = big
-    self.sm['carControl'].latActive = lat
-    self.sm['carControl'].longActive = enabled
     self.events.clear()
     self.events_sp.clear()
-    self.accel.update(self.sm, enabled, mads, self.events, self.events_sp)
+    self.accel.update(self.sm, enabled or mads, self.events, self.events_sp)
     return EventName.bigModelAvailable in self.events_sp.names
 
   def offered_for(self, **kwargs) -> int:
@@ -53,18 +51,15 @@ class TestBigModelAvailability(OpenpilotTestCase):
     for _ in range(1000):
       self.assertFalse(self.update(available=True, enabled=True))
 
-  def test_mads_steering_alone_is_in_control(self):
-    self.assertTrue(self.update(available=True, lat=True, mads=True))
+  def test_mads_alone_is_in_control(self):
+    # steering, or paused at a stop: either way MADS steers again on its own
+    self.assertTrue(self.update(available=True, mads=True))
 
   def test_ready_while_nothing_is_in_control_never_offers(self):
     # the swap happens at once, and bigModelReady is what the driver hears
     for _ in range(100):
       self.assertFalse(self.update(available=True))
     self.assertFalse(self.update(big=True))
-    # nor at a stop with lateral on: latActive drops at a standstill, the gate
-    # opens, and it swaps instead
-    self.assertFalse(self.update())
-    self.assertFalse(self.update(available=True, mads=True))
 
   def test_engaging_while_it_still_waits_offers(self):
     # it became ready in the gap before an engagement took the window away
@@ -72,21 +67,22 @@ class TestBigModelAvailability(OpenpilotTestCase):
     self.assertTrue(self.update(available=True, enabled=True))
 
   def test_no_repeat_at_every_stop(self):
-    self.assertTrue(self.update(available=True, lat=True, mads=True))
+    self.assertTrue(self.update(available=True, mads=True))
     for _ in range(2 * OFFER_TICKS):
-      self.update(available=True, lat=True, mads=True)
-    # a stop: latActive drops with MADS still on, then the car moves off
-    self.assertFalse(self.update(available=True, mads=True))
-    self.assertFalse(self.update(available=True, lat=True, mads=True))
+      self.update(available=True, mads=True)
+    # stopping and moving off with MADS on changes nothing: it is engaged throughout
+    for _ in range(3):
+      self.assertFalse(self.update(available=True, mads=True))
 
   def test_the_swap_ends_it_at_once(self):
     # 2026-09-29: the offer came back for ~0.9 s after "Big Model Ready" had
     # expired, reading as if the switch had not happened
-    self.assertTrue(self.update(available=True, lat=True, mads=True))
-    self.assertTrue(self.update(available=True, lat=True, mads=True))
-    self.assertFalse(self.update(big=True, mads=True))
+    self.assertTrue(self.update(available=True, mads=True))
+    self.assertTrue(self.update(available=True, mads=True))
+    # the driver turns MADS off and it swaps
+    self.assertFalse(self.update(big=True))
     for _ in range(OFFER_TICKS):
-      self.assertFalse(self.update(big=True, mads=True))
+      self.assertFalse(self.update(big=True))
 
   def test_on_screen_it_never_outlives_the_swap(self):
     am = AlertManager()
@@ -116,7 +112,7 @@ class TestBigModelAvailability(OpenpilotTestCase):
   def test_running_big_suppresses_a_pending_status_from_previous_frame(self):
     self.sm['modelDataV2SP'].acceleratorState = 'ready'
     self.sm['modelV2'].big = True
-    self.accel.update(self.sm, True, False, self.events, self.events_sp)
+    self.accel.update(self.sm, True, self.events, self.events_sp)
     self.assertNotIn(EventName.bigModelAvailable, self.events_sp.names)
 
   def test_missing_invalid_or_stale_messages_never_announce(self):

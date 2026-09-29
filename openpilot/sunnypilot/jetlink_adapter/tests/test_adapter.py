@@ -165,8 +165,10 @@ class TestModeld(OpenpilotTestCase):
     self.assertIs(face.get_action_from_model, modeld.get_action_from_model)
 
   def test_engagement_closes_the_swap_window_on_anything_in_control_or_unknown(self):
-    services = ('selfdriveState', 'carState', 'carControl')
-    states = {'selfdriveState': SimpleNamespace(enabled=False), 'carState': SimpleNamespace(standstill=True),
+    services = ('selfdriveState', 'selfdriveStateSP', 'carState', 'carControl')
+    states = {'selfdriveState': SimpleNamespace(enabled=False),
+              'selfdriveStateSP': SimpleNamespace(mads=SimpleNamespace(enabled=False, active=False)),
+              'carState': SimpleNamespace(standstill=True),
               'carControl': SimpleNamespace(latActive=False, longActive=False)}
     sm = mock.MagicMock()
     sm.__getitem__.side_effect = states.__getitem__
@@ -194,6 +196,12 @@ class TestModeld(OpenpilotTestCase):
       states['carControl'].longActive = active == 'longActive'
       self.assertTrue(engaged(0), active)
     states['carControl'].latActive = states['carControl'].longActive = False
+    # MADS engaged with its lateral paused (a stop, a blinker, the brake):
+    # latActive is false, but MADS steers again on its own, so no swap
+    states['selfdriveStateSP'].mads.enabled = True
+    self.assertTrue(engaged(0))
+    states['selfdriveStateSP'].mads.enabled = False
+    self.assertFalse(engaged(0))
     states['selfdriveState'].enabled = True
     self.assertTrue(engaged(0))
     self.assertEqual(sm.update.call_args_list[-1], mock.call(0))

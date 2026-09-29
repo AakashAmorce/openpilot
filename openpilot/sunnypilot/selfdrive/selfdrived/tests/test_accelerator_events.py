@@ -19,7 +19,7 @@ class AcceleratorEventsTest(OpenpilotTestCase):
 
   def setUp(self):
     super().setUp()
-    self.sm = messaging.SubMaster(['modelV2', 'modelDataV2SP', 'carControl'])
+    self.sm = messaging.SubMaster(['modelV2', 'modelDataV2SP'])
     self.events = Events()
     self.events_sp = EventsSP()
     self.accel = AcceleratorEvents()
@@ -28,16 +28,14 @@ class AcceleratorEventsTest(OpenpilotTestCase):
       self.sm.seen[service] = self.sm.alive[service] = self.sm.valid[service] = True
 
   def step(self, state='none', big=False, alive=True, enabled=False, mads=False) -> set[str]:
-    """One selfdrived tick; what the adapter raised, native and sunnypilot, by name."""
+    """One selfdrived tick, `mads` being MADS engaged; what the adapter raised,
+    native and sunnypilot, by name."""
     self.sm['modelDataV2SP'].acceleratorState = state
     self.sm['modelV2'].big = big
     self.sm.alive['modelV2'] = alive
-    # controlsd's view of the same engagement: MADS steers through latActive
-    self.sm['carControl'].latActive = enabled or mads
-    self.sm['carControl'].longActive = enabled
     self.events.clear()
     self.events_sp.clear()
-    self.accel.update(self.sm, enabled, mads, self.events, self.events_sp)
+    self.accel.update(self.sm, enabled or mads, self.events, self.events_sp)
     return {EVENT_NAME[e] for e in self.events.names} | {EVENT_NAME_SP[e] for e in self.events_sp.names}
 
   def drive_big(self, **kwargs) -> None:
@@ -66,6 +64,11 @@ class TestHandBack(AcceleratorEventsTest):
     self.assertEqual(self.step(state='retrying', enabled=True), {'bigModelLinkLost'})
     self.assertEqual(1 + self.ticks_with('bigModelLinkLost', state='retrying', enabled=True), HANDBACK_TICKS)
     self.assertEqual(HANDBACK_TICKS, 500)
+
+  def test_a_fall_with_mads_lateral_paused_warns_once_it_steers(self):
+    # paused (a stop, the brake) is still engaged: MADS steers again on its own
+    self.drive_big(mads=True)
+    self.assertEqual(self.step(state='retrying', mads=True), {'bigModelLinkLost'})
 
   def test_a_mads_only_fall_warns(self):
     # lateral only, cruise off: the 2026-09-29 drives lost the link three
@@ -129,7 +132,7 @@ class TestHandBackOnTheRealStateMachines(AcceleratorEventsTest):
       self.step(state='retrying', enabled=enabled, mads=mads)
       enabled, _ = main.update(self.events)
       selfdrive.enabled = enabled
-      _, mads = madsm.update()
+      mads, _ = madsm.update()
       clear = set() if ET.WARNING in main.current_alert_types else {ET.WARNING}
       am.add_many(frame, self.events.create_alerts(main.current_alert_types, []) +
                   self.events_sp.create_alerts(main.current_alert_types, []))

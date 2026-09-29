@@ -13,14 +13,14 @@ from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
 from openpilot.sunnypilot.selfdrive.selfdrived.accelerator_events import AcceleratorEvents
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 
-SERVICES = ['modelV2', 'modelDataV2SP', 'carControl', 'controlsState', 'deviceState', 'lateralManeuverPlan', 'alertDebug']
+SERVICES = ['modelV2', 'modelDataV2SP', 'controlsState', 'deviceState', 'lateralManeuverPlan', 'alertDebug']
 
 
-def make_selfdrived(chestnut_present: bool = False, enabled: bool = False, mads_active: bool = False) -> SelfdriveD:
+def make_selfdrived(chestnut_present: bool = False, enabled: bool = False, mads_enabled: bool = False) -> SelfdriveD:
   """A SelfdriveD whose update_events runs as far as its initialization gate:
   the big model block and the accelerator adapter, with no processes, no live
-  params and no car. `mads_active` is MADS steering, which the adapter reads
-  beside `enabled`; carControl says what the controls do, as controlsd would.
+  params and no car. `mads_enabled` is MADS engaged, which the adapter reads
+  beside `enabled`.
 
   Built without __init__, so every attribute that path reads is set here, and
   a new one breaks this function rather than every suite that drives it.
@@ -31,11 +31,9 @@ def make_selfdrived(chestnut_present: bool = False, enabled: bool = False, mads_
   """
   sd = SelfdriveD.__new__(SelfdriveD)
   sd.sm = messaging.SubMaster(SERVICES)
-  for service in ('modelV2', 'modelDataV2SP', 'carControl', 'deviceState'):
+  for service in ('modelV2', 'modelDataV2SP', 'deviceState'):
     sd.sm.data[service] = sd.sm[service].as_builder()
     sd.sm.valid[service] = True
-  sd.sm['carControl'].latActive = enabled or mads_active
-  sd.sm['carControl'].longActive = enabled
   sd.sm.seen['deviceState'] = sd.sm.alive['deviceState'] = True
   sd.sm['deviceState'].chestnutPresent = chestnut_present
   sd.events = Events()
@@ -47,7 +45,7 @@ def make_selfdrived(chestnut_present: bool = False, enabled: bool = False, mads_
   sd.big_model_loading = sd.big_model_active = sd.big_model_failed = sd.big_model_running = False
   sd.big_model_ready_t = 0.
   sd.enabled = enabled
-  sd.mads = SimpleNamespace(active=mads_active)
+  sd.mads = SimpleNamespace(enabled=mads_enabled)
   sd.initialized = False
   sd.startup_event = None
   return sd

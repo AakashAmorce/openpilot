@@ -42,11 +42,11 @@ class AcceleratorEvents:
     # ticks left of each event
     self.offer = self.handback = self.switching = 0
 
-  def update(self, sm: messaging.SubMaster, enabled: bool, mads_active: bool, events: Events, events_sp: EventsSP) -> None:
+  def update(self, sm: messaging.SubMaster, in_control: bool, events: Events, events_sp: EventsSP) -> None:
+    """`in_control`: openpilot or MADS is engaged, MADS even while its lateral
+    is paused. The adapter's swap gate is shut exactly then."""
     status = sm['modelDataV2SP']
     big = sm['modelV2'].big
-    cc = sm['carControl']
-    in_control = enabled or mads_active
 
     # stale status neither offers the switch nor rearms the offer
     if all(sm.seen[s] and sm.alive[s] and sm.valid[s] for s in ('modelV2', 'modelDataV2SP')):
@@ -55,9 +55,9 @@ class AcceleratorEvents:
         # screen after the switch read as if it had not happened
         self.offered = False
         self.offer = 0
-      elif (enabled or cc.latActive or cc.longActive) and not self.offered:
-        # the adapter's swap gate is shut. Open, it swaps in at once and
-        # bigModelReady says so. Once per readiness, not at every stop
+      elif in_control and not self.offered:
+        # with nothing in control it swaps in at once and bigModelReady says
+        # so. Once per readiness, not at every stop
         self.offered = True
         self.offer = OFFER_TICKS
 
