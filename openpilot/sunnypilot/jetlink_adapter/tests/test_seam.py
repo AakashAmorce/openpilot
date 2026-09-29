@@ -99,6 +99,11 @@ def _run(src: str, stmts: list[ast.stmt]) -> str:
   return textwrap.dedent('\n'.join(lines[stmts[0].lineno - 1:stmts[-1].end_lineno]))
 
 
+def _frame_loop(body: list[ast.stmt]) -> list[ast.stmt]:
+  """main()'s last loop, the one that runs the model on every frame."""
+  return [s for s in body if isinstance(s, ast.While)][-1].body
+
+
 def _git_show(ref: str, path: str) -> str | None:
   """The file at a ref, or None off a checkout that has it. Never raises."""
   try:
@@ -378,6 +383,59 @@ class Footprint:
   def test_the_ui_field_is_published(self):
     self.assertIn("modelDataV2SP.acceleratorState = getattr(model, 'big_model_state', 'none')", self.src)
 
+  def _frames(self, handover: bool, stall_at: int = 20, gap: int = 3) -> list[float]:
+    """The loop's dropped-frame filter and its handover reset, verbatim, over
+    40 frames with run() in between. Frame `stall_at` takes `gap` camera
+    frames too long; with `handover` that run() is a swap whose first large
+    frame fails and demotes, as jetlink's joining model does: modelV2.big is
+    the same before and after, and only the handover count moves. Every
+    frame's frame_drop_ratio (frameDropPerc / 100)."""
+    from openpilot.common.filter_simple import FirstOrderFilter
+    loop = _frame_loop(self.body)
+    first = _index(loop, lambda s: _assigns(s, 'vipc_dropped_frames'), 'the dropped-frame count')
+    ratio = _index(loop, lambda s: _assigns(s, 'frame_drop_ratio'), 'frame_drop_ratio')
+    was = _index(loop, lambda s: _assigns(s, 'handovers'), 'the handover count read before run()')
+    run = _index(loop, lambda s: isinstance(s, ast.Try) and 'run' in {n.attr for n in ast.walk(s) if isinstance(n, ast.Attribute)},
+                 'the try around model.run')
+    reset = _index(loop, lambda s: isinstance(s, ast.If) and 'handovers' in ast.dump(s.test), 'the handover reset')
+    self.assertLess(ratio, was)
+    self.assertEqual(run, was + 2, "more than the timer between reading the model and running it")
+    self.assertLess(run, reset)
+    lines = self.src.splitlines()
+
+    def src(a, b):
+      return lines[loop[a].lineno - 1:loop[b].end_lineno]
+    body = src(first, ratio) + src(was, was) + ['    model.run()'] + src(reset, reset)
+    frame = compile(textwrap.dedent('\n'.join(body)), str(self.PATH), 'exec')
+    model = SimpleNamespace(chestnut=False, handovers=0)
+    scope = {'frame_dropped_filter': FirstOrderFilter(0., 10., 0.05), 'run_count': 0, 'last_vipc_frame_id': 0,
+             'model': model, 'max': max, 'min': min}
+    ratios, frame_id = [], 0
+    for i in range(40):
+      frame_id += 1
+      scope['meta_main'] = SimpleNamespace(frame_id=frame_id)
+
+      def run(both=handover and i == stall_at):
+        if both:
+          model.handovers += 2   # swapped in and demoted: chestnut stays False
+      model.run = run
+      exec(frame, scope)
+      ratios.append(scope['frame_drop_ratio'])
+      scope['last_vipc_frame_id'] = frame_id
+      if i == stall_at:
+        frame_id += gap
+    return ratios
+
+  def test_a_handover_inside_run_is_not_lag(self):
+    # upstream forgives the stall of a chestnut's fallback (run_count = 0);
+    # jetlink's handover happens inside run(), where that handler never sees
+    # it, and the one long frame read as 4 to 16 s of modeldLagging
+    self.assertEqual(max(self._frames(handover=True)), 0.)
+    self.assertEqual(max(self._frames(handover=True, gap=10)), 0.)
+    # the same stall with no handover is lag, as upstream counts it: over the
+    # 1 % selfdrived raises modeldLagging at
+    self.assertGreater(max(self._frames(handover=False)) * 100, 1.)
+
   def test_the_joining_model_answers_every_read_and_keeps_every_write(self):
     # read out of main() rather than kept by hand. A read the joining model
     # cannot answer is an AttributeError on the frame thread, which modeld
@@ -636,6 +694,11 @@ class ModeldTinygrad(Footprint, OpenpilotTestCase):
     def lines(src):
       return [line.strip() for line in src.splitlines() if ADAPTER in line or 'accelerator' in line.lower()]
     self.assertEqual(lines(self.src), lines(MODELD.read_text()))
+
+  def test_driving_model_data_says_which_model_drove(self):
+    # the qlog's only model message: stock modeld copies modelV2.big into it
+    # (fill_driving_model_data), and modeld_v2 fills its own
+    self.assertIn("drivingdata_send.drivingModelData.big = model.chestnut", self.src)
 
 
 if __name__ == '__main__':

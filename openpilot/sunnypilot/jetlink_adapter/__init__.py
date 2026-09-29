@@ -197,7 +197,7 @@ class Adapter:
     """A poller over selfdrived and the car: the large model swaps in only
     while nothing is in control."""
     import openpilot.cereal.messaging as messaging
-    services = ('selfdriveState', 'carState', 'carControl')
+    services = ('selfdriveState', 'selfdriveStateSP', 'carState', 'carControl')
     sm = messaging.SubMaster(list(services))
 
     def engaged(timeout_ms: int) -> bool:
@@ -205,8 +205,11 @@ class Adapter:
       # a service that is missing, late or invalid counts as engaged
       valid = all(sm.seen[s] and sm.alive[s] and sm.valid[s] for s in services)
       cc = sm['carControl']
-      # MADS keeps lateral control active independently of enabled
-      return not valid or sm['selfdriveState'].enabled or cc.latActive or cc.longActive
+      # MADS engaged counts while its lateral is paused too (a stop, a blinker,
+      # the brake): it steers again on its own, and the switch waits for the
+      # driver to turn it off. False on a car without MADS
+      return (not valid or sm['selfdriveState'].enabled or sm['selfdriveStateSP'].mads.enabled or
+              cc.latActive or cc.longActive)
     return engaged
 
   def event(self, name: str, **fields) -> None:

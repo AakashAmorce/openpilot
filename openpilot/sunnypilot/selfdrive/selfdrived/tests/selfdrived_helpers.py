@@ -4,6 +4,7 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of zoompilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 from openpilot.cereal import messaging
@@ -15,10 +16,11 @@ from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 SERVICES = ['modelV2', 'modelDataV2SP', 'controlsState', 'deviceState', 'lateralManeuverPlan', 'alertDebug']
 
 
-def make_selfdrived(chestnut_present: bool = False, enabled: bool = False) -> SelfdriveD:
+def make_selfdrived(chestnut_present: bool = False, enabled: bool = False, mads_enabled: bool = False) -> SelfdriveD:
   """A SelfdriveD whose update_events runs as far as its initialization gate:
   the big model block and the accelerator adapter, with no processes, no live
-  params and no car.
+  params and no car. `mads_enabled` is MADS engaged, which the adapter reads
+  beside `enabled`.
 
   Built without __init__, so every attribute that path reads is set here, and
   a new one breaks this function rather than every suite that drives it.
@@ -43,6 +45,7 @@ def make_selfdrived(chestnut_present: bool = False, enabled: bool = False) -> Se
   sd.big_model_loading = sd.big_model_active = sd.big_model_failed = sd.big_model_running = False
   sd.big_model_ready_t = 0.
   sd.enabled = enabled
+  sd.mads = SimpleNamespace(enabled=mads_enabled)
   sd.initialized = False
   sd.startup_event = None
   return sd

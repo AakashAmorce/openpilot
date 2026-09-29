@@ -224,7 +224,7 @@ class SelfdriveD(CruiseHelper):
       self.big_model_active = True
     if not self.enabled and not model_unavailable:
       self.big_model_active = False
-    self.accelerator_events.update(self.sm, self.enabled, CS.standstill, self.events, self.events_sp)
+    self.accelerator_events.update(self.sm, self.enabled or self.mads.enabled, self.events, self.events_sp)
 
     if self.sm.recv_frame['lateralManeuverPlan'] > 0:
       self.events.add(EventName.lateralManeuver)
