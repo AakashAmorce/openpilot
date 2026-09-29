@@ -1,7 +1,8 @@
 from openpilot.cereal import custom, messaging
 from openpilot.common.test import OpenpilotTestCase
+from openpilot.selfdrive.selfdrived.alertmanager import AlertManager
 from openpilot.selfdrive.selfdrived.events import Events, ET
-from openpilot.sunnypilot.selfdrive.selfdrived.accelerator_events import AcceleratorEvents
+from openpilot.sunnypilot.selfdrive.selfdrived.accelerator_events import AcceleratorEvents, OFFER_TICKS
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EVENTS_SP, EventsSP
 
 EventName = custom.OnroadEventSP.EventName
@@ -9,11 +10,16 @@ EventName = custom.OnroadEventSP.EventName
 
 class TestBigModelAvailability(OpenpilotTestCase):
   """The adapter's offer to switch; the drive through SelfdriveD is traced in
-  test_selfdrived_traces.py beside this one."""
+  test_selfdrived_traces.py beside this one.
+
+  The large model swaps in only while nothing is in control (the adapter's
+  engagement poller: selfdriveState.enabled, carControl.latActive and
+  longActive). Ready while something is, the driver is told once to re-engage;
+  ready while nothing is, it swaps at once and bigModelReady says so."""
 
   def setUp(self):
     super().setUp()
-    self.sm = messaging.SubMaster(['modelV2', 'modelDataV2SP'])
+    self.sm = messaging.SubMaster(['modelV2', 'modelDataV2SP', 'carControl'])
     self.events = Events()
     self.events_sp = EventsSP()
     self.accel = AcceleratorEvents()
@@ -23,45 +29,95 @@ class TestBigModelAvailability(OpenpilotTestCase):
       self.sm.alive[service] = True
       self.sm.valid[service] = True
 
-  def update(self, available=False, big=False, standstill=False):
+  def update(self, available=False, big=False, enabled=False, lat=False, mads=False):
     # ready is the joining state connected and waiting for a window to switch
-    self.sm['modelDataV2SP'].acceleratorState = 'ready' if available else 'none'
+    self.sm['modelDataV2SP'].acceleratorState = 'ready' if available else ('running' if big else 'none')
     self.sm['modelV2'].big = big
+    self.sm['carControl'].latActive = lat
+    self.sm['carControl'].longActive = enabled
     self.events.clear()
     self.events_sp.clear()
-    self.accel.update(self.sm, False, standstill, self.events, self.events_sp)
+    self.accel.update(self.sm, enabled, mads, self.events, self.events_sp)
     return EventName.bigModelAvailable in self.events_sp.names
 
-  def test_late_boot_chimes_once_then_can_rejoin(self):
-    self.assertFalse(self.update())
-    self.assertTrue(self.update(available=True))
+  def offered_for(self, **kwargs) -> int:
+    """Ticks in a row the offer is raised from here on."""
+    for n in range(10 * OFFER_TICKS):
+      if not self.update(**kwargs):
+        return n
+    return 10 * OFFER_TICKS
+
+  def test_ready_while_engaged_offers_once_for_three_seconds(self):
+    self.assertFalse(self.update(enabled=True))
+    self.assertEqual(self.offered_for(available=True, enabled=True), OFFER_TICKS)
+    for _ in range(1000):
+      self.assertFalse(self.update(available=True, enabled=True))
+
+  def test_mads_steering_alone_is_in_control(self):
+    self.assertTrue(self.update(available=True, lat=True, mads=True))
+
+  def test_ready_while_nothing_is_in_control_never_offers(self):
+    # the swap happens at once, and bigModelReady is what the driver hears
     for _ in range(100):
       self.assertFalse(self.update(available=True))
     self.assertFalse(self.update(big=True))
-    self.assertFalse(self.update())  # fallback, waiting to reconnect
-    self.assertTrue(self.update(available=True))
+    # nor at a stop with lateral on: latActive drops at a standstill, the gate
+    # opens, and it swaps instead
+    self.assertFalse(self.update())
+    self.assertFalse(self.update(available=True, mads=True))
 
-  def test_every_stop_repeats_the_offer_while_it_is_still_waiting(self):
-    # the swap window only opens at a standstill, so the alert that tells the
-    # driver to open it is worth repeating at each one
-    self.assertTrue(self.update(available=True))
+  def test_engaging_while_it_still_waits_offers(self):
+    # it became ready in the gap before an engagement took the window away
     self.assertFalse(self.update(available=True))
-    self.assertTrue(self.update(available=True, standstill=True))
-    for _ in range(50):
-      self.assertFalse(self.update(available=True, standstill=True))
-    self.assertFalse(self.update(available=True))
-    self.assertTrue(self.update(available=True, standstill=True))
-    # once it is driving, a stop is not an offer
-    self.assertFalse(self.update(big=True, standstill=True))
+    self.assertTrue(self.update(available=True, enabled=True))
+
+  def test_no_repeat_at_every_stop(self):
+    self.assertTrue(self.update(available=True, lat=True, mads=True))
+    for _ in range(2 * OFFER_TICKS):
+      self.update(available=True, lat=True, mads=True)
+    # a stop: latActive drops with MADS still on, then the car moves off
+    self.assertFalse(self.update(available=True, mads=True))
+    self.assertFalse(self.update(available=True, lat=True, mads=True))
+
+  def test_the_swap_ends_it_at_once(self):
+    # 2026-09-29: the offer came back for ~0.9 s after "Big Model Ready" had
+    # expired, reading as if the switch had not happened
+    self.assertTrue(self.update(available=True, lat=True, mads=True))
+    self.assertTrue(self.update(available=True, lat=True, mads=True))
+    self.assertFalse(self.update(big=True, mads=True))
+    for _ in range(OFFER_TICKS):
+      self.assertFalse(self.update(big=True, mads=True))
+
+  def test_on_screen_it_never_outlives_the_swap(self):
+    am = AlertManager()
+    shown = []
+    for frame in range(4 * OFFER_TICKS):
+      big = frame >= 50
+      self.update(available=not big, big=big, enabled=True)
+      am.add_many(frame, self.events_sp.create_alerts([ET.PERMANENT], []))
+      am.process_alerts(frame, set())
+      shown.append((am.current_alert.alert_text_1, am.current_alert.alert_text_2))
+    offer = ("Big Model Ready", "Re-engage to switch")
+    self.assertIn(offer, shown[:50])
+    self.assertNotIn(offer, shown[int(0.2 / 0.01) + 50:])
+
+  def test_it_rearms_after_the_link_goes_and_comes_back(self):
+    self.assertTrue(self.update(available=True, enabled=True))
+    self.assertFalse(self.update(big=True, enabled=True))   # swapped at a window, then...
+    self.assertFalse(self.update(enabled=True))             # lost, waiting to reconnect
+    self.assertTrue(self.update(available=True, enabled=True))
 
   def test_chestnut_and_old_messages_do_not_announce_availability(self):
     self.assertEqual(custom.ModelDataV2SP.new_message().acceleratorState, 'none')
-    self.assertFalse(self.update())
-    self.assertFalse(self.update(big=True))
-    self.assertFalse(self.update())
+    self.assertFalse(self.update(enabled=True))
+    self.assertFalse(self.update(big=True, enabled=True))
+    self.assertFalse(self.update(enabled=True))
 
   def test_running_big_suppresses_a_pending_status_from_previous_frame(self):
-    self.assertFalse(self.update(available=True, big=True))
+    self.sm['modelDataV2SP'].acceleratorState = 'ready'
+    self.sm['modelV2'].big = True
+    self.accel.update(self.sm, True, False, self.events, self.events_sp)
+    self.assertNotIn(EventName.bigModelAvailable, self.events_sp.names)
 
   def test_missing_invalid_or_stale_messages_never_announce(self):
     for service in ('modelV2', 'modelDataV2SP'):
@@ -69,20 +125,22 @@ class TestBigModelAvailability(OpenpilotTestCase):
         with self.subTest(service=service, check=check):
           checks = getattr(self.sm, check)
           checks[service] = False
-          self.assertFalse(self.update(available=True))
+          self.assertFalse(self.update(available=True, enabled=True))
           checks[service] = True
-    self.assertTrue(self.update(available=True))
+    self.assertTrue(self.update(available=True, enabled=True))
 
-  def test_stale_gap_does_not_repeat_chime(self):
-    self.assertTrue(self.update(available=True))
+  def test_stale_gap_does_not_repeat_the_offer(self):
+    self.assertTrue(self.update(available=True, enabled=True))
+    self.accel.offer = 0
     self.sm.alive['modelDataV2SP'] = False
-    self.assertFalse(self.update())
+    self.assertFalse(self.update(enabled=True))
     self.sm.alive['modelDataV2SP'] = True
-    self.assertFalse(self.update(available=True))
-    self.assertFalse(self.update())  # an explicit loss rearms it
-    self.assertTrue(self.update(available=True))
+    self.assertFalse(self.update(available=True, enabled=True))
+    self.assertFalse(self.update(enabled=True))  # an explicit loss rearms it
+    self.assertTrue(self.update(available=True, enabled=True))
 
   def test_notification_has_no_control_effect(self):
     alerts = EVENTS_SP[EventName.bigModelAvailable]
     self.assertEqual(set(alerts), {ET.PERMANENT})
-    self.assertEqual(alerts[ET.PERMANENT].alert_text_2, 'Stop with cruise off,\nor turn lateral off')
+    alert = alerts[ET.PERMANENT]
+    self.assertEqual((alert.alert_text_1, alert.alert_text_2), ('Big Model Ready', 'Re-engage to switch'))

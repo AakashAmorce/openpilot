@@ -7,15 +7,27 @@ See the LICENSE.md file in the root directory for more details.
 Onroad events for an accelerator that joins mid-drive. The native big model block
 expects a board loaded before the first modelV2; an off-board one joins onto a
 modelV2 the small model already publishes and can leave and come back.
+
+It swaps in only while nothing is in control, so the driver is told when it is
+ready and re-engages to use it. When it leaves, the small model drives on and
+the driver is told to take control; nothing disengages.
 """
 import openpilot.cereal.messaging as messaging
 from openpilot.cereal import custom
+from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.selfdrived.events import Events, EventName
 from openpilot.sunnypilot import jetlink_adapter
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 
 EventNameSP = custom.OnroadEventSP.EventName
 AcceleratorState = custom.ModelDataV2SP.AcceleratorState
+
+# how long each event is raised for, in selfdrived's ticks. The take-control
+# warning covers about the time the small model takes to refill its history;
+# the no-entry after a swap, about 20 frames of the large model's
+OFFER_TICKS = round(3. / DT_CTRL)
+HANDBACK_TICKS = round(5. / DT_CTRL)
+SWITCHING_TICKS = round(1. / DT_CTRL)
 
 
 class AcceleratorEvents:
@@ -25,44 +37,49 @@ class AcceleratorEvents:
   OPTIONAL_PROCESSES = frozenset({jetlink_adapter.OWNER})
 
   def __init__(self):
-    self.big_model_available = False
+    self.offered = False
     self.big_model_running = False
-    self.link_lost = False
-    self.standstill = False
+    # ticks left of each event
+    self.offer = self.handback = self.switching = 0
 
-  def update(self, sm: messaging.SubMaster, enabled: bool, standstill: bool,
-             events: Events, events_sp: EventsSP) -> None:
+  def update(self, sm: messaging.SubMaster, enabled: bool, mads_active: bool, events: Events, events_sp: EventsSP) -> None:
     status = sm['modelDataV2SP']
+    big = sm['modelV2'].big
+    cc = sm['carControl']
+    in_control = enabled or mads_active
 
-    # stale status does not rearm the chime; only a fresh unavailable state does
+    # stale status neither offers the switch nor rearms the offer
     if all(sm.seen[s] and sm.alive[s] and sm.valid[s] for s in ('modelV2', 'modelDataV2SP')):
-      # connected and waiting for a window to switch; availability, not proof
-      # of inference, which modelV2.big reports
-      available = status.acceleratorState == AcceleratorState.ready and not sm['modelV2'].big
-      # once when it turns up, and again at every stop while it is still
-      # waiting. On a MADS car latActive is true whenever the car is moving, so
-      # the window only opens at a standstill: one three second alert ten
-      # minutes before the driver can act on it is not guidance
-      if available and (not self.big_model_available or (standstill and not self.standstill)):
-        events_sp.add(EventNameSP.bigModelAvailable)
-      self.big_model_available = available
-      self.standstill = standstill
+      if status.acceleratorState != AcceleratorState.ready or big:
+        # ended by the swap as well as by the link going: an offer still on
+        # screen after the switch read as if it had not happened
+        self.offered = False
+        self.offer = 0
+      elif (enabled or cc.latActive or cc.longActive) and not self.offered:
+        # the adapter's swap gate is shut. Open, it swaps in at once and
+        # bigModelReady says so. Once per readiness, not at every stop
+        self.offered = True
+        self.offer = OFFER_TICKS
 
-    # a join holding modelV2 back keeps the driver out, as the native load does; a late join never blocks
-    if status.acceleratorState == AcceleratorState.joining and not sm.alive['modelV2']:
-      events.add(EventName.bigModelLoading)
-
-    # a chestnut dropping modelV2.big already raises the native bigModelFailed
-    running_big = sm.alive['modelV2'] and sm.valid['modelV2'] and sm['modelV2'].big and \
+    # a chestnut dropping modelV2.big raises the native bigModelFailed
+    running_big = sm.alive['modelV2'] and sm.valid['modelV2'] and big and \
       status.acceleratorState != AcceleratorState.none
-    # a fall while engaged is a soft disable, latched until disengage since the state machine
-    # cancels a soft disable the tick its event disappears. bigModelFailed drives the main
-    # state machine, bigModelLinkLost drives MADS and carries the guidance
-    if self.big_model_running and not running_big and enabled:
-      self.link_lost = True
+    if running_big and not self.big_model_running:
+      self.switching = SWITCHING_TICKS
+    elif self.big_model_running and not running_big and in_control:
+      self.handback = HANDBACK_TICKS
     self.big_model_running = running_big
-    if not enabled:
-      self.link_lost = False
-    if self.link_lost:
-      events.add(EventName.bigModelFailed)
+    if not in_control:
+      self.handback = 0
+
+    if self.offer > 0:
+      self.offer -= 1
+      events_sp.add(EventNameSP.bigModelAvailable)
+    if self.handback > 0:
+      self.handback -= 1
       events_sp.add(EventNameSP.bigModelLinkLost)
+    if self.switching > 0:
+      # upstream's no-entry for a big model that is not ready to drive. Native,
+      # since the main state machine reads only native events; MADS reads both
+      self.switching -= 1
+      events.add(EventName.bigModelLoading)
