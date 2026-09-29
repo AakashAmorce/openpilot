@@ -374,12 +374,14 @@ class TestWithoutAUsableJetlink(OpenpilotTestCase):
       'reason': jetlink_adapter.reason(),
       'prepare': jetlink_adapter.prepare(),
       'attach': jetlink_adapter.attach(object(), 1, 1),
-      'shutdown': jetlink_adapter.shutdown('test', timeout=0.1),
+      'request_shutdown': jetlink_adapter.request_shutdown('test'),
+      'shutdown_pending': jetlink_adapter.shutdown_pending(),
       'should_extend_catalog': jetlink_adapter.should_extend_catalog(),
       'extend_catalog': jetlink_adapter.extend_catalog(catalog) is catalog,
     }
 
-  NULL = {'should_run': False, 'status': None, 'reason': None, 'prepare': False, 'attach': None, 'shutdown': None,
+  NULL = {'should_run': False, 'status': None, 'reason': None, 'prepare': False, 'attach': None,
+          'request_shutdown': False, 'shutdown_pending': False,
           'should_extend_catalog': False, 'extend_catalog': True}
 
   def test_without_a_checkout_every_hook_is_the_link_off(self):
@@ -394,7 +396,7 @@ c = {'bundles': []}
 assert not a.should_run(False, None, None)
 assert a.status() is None and a.reason() is None
 assert not a.prepare() and a.attach(object(), 1, 1) is None
-a.shutdown('test', timeout=0.1)
+assert not a.request_shutdown('test') and not a.shutdown_pending()
 assert not a.should_extend_catalog() and a.extend_catalog(c) is c
 '''
     # under this test's prefix, which the child inherits

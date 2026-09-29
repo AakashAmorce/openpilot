@@ -39,6 +39,7 @@ from openpilot.sunnypilot import jetlink_adapter
 OPENPILOT = Path(__file__).resolve().parents[3]
 MODELD = OPENPILOT / 'selfdrive' / 'modeld' / 'modeld.py'
 MODELD_V2 = OPENPILOT / 'sunnypilot' / 'modeld_v2' / 'modeld.py'
+HARDWARED = OPENPILOT / 'system' / 'hardware' / 'hardwared.py'
 
 # the zoompilot parent carries comma's chestnut unmodified, so it is the
 # baseline rather than any older upstream tag
@@ -157,7 +158,7 @@ class FakeParams:
   def __init__(self):
     self.store: dict[str, bool] = {}
 
-  def put_bool(self, key, value):
+  def put_bool(self, key, value, block=False):
     self.store[key] = bool(value)
 
   def get_bool(self, key):
@@ -422,13 +423,14 @@ class Footprint:
 # every file outside the adapter that names it, and what each may use: the
 # whole seam between this fork and jetlink. hardwared never asks for status():
 # a snapshot keeps presence warm, and power-off would wait on a Jetson that
-# had left seconds before
+# had left seconds before. Nor for the blocking shutdown(): deviceState would
+# stop for up to 25 s
 SEAM = {
   'selfdrive/modeld/modeld.py': {'prepare', 'attach'},
   'sunnypilot/modeld_v2/modeld.py': {'prepare', 'attach'},
   'system/manager/process_config.py': {'OWNER', '__name__', 'should_run'},
   'sunnypilot/selfdrive/selfdrived/accelerator_events.py': {'OWNER'},
-  'system/hardware/hardwared.py': {'reason', 'shutdown'},
+  'system/hardware/hardwared.py': {'reason', 'request_shutdown', 'shutdown_pending'},
   'sunnypilot/models/fetcher.py': {'should_extend_catalog', 'extend_catalog'},
   'selfdrive/ui/sunnypilot/ui_state.py': {'status'},
   'selfdrive/ui/sunnypilot/accelerator_link.py': {'KEYS', 'MODES'},
@@ -448,6 +450,99 @@ class TheWholeSeam(OpenpilotTestCase):
                for a in n.names}
       found[rel] = used
     self.assertEqual(found, SEAM)
+
+
+class FakeClock:
+  def __init__(self):
+    self.now = 100.0
+
+  def monotonic(self) -> float:
+    return self.now
+
+
+class FakePowerOff:
+  """The adapter's two power-off hooks, as hardwared sees them."""
+
+  def __init__(self, asks: bool):
+    self.asks = asks
+    self.pending = asks
+    self.requests: list[str] = []
+
+  def request_shutdown(self, reason: str) -> bool:
+    self.requests.append(reason)
+    return self.asks
+
+  def shutdown_pending(self) -> bool:
+    return self.pending
+
+
+class HardwaredPowersOffWithoutStopping(OpenpilotTestCase):
+  """hardwared's shutdown check, lifted out of hardware_thread verbatim and run
+  once per loop as the thread runs it. It asks jetlink once, goes on to
+  publish deviceState every loop, and puts DoShutdown once the request is
+  taken or 25 s have passed. The blocking shutdown() held the whole loop, and
+  deviceState with it, for up to those 25 s."""
+
+  def setUp(self):
+    src = HARDWARED.read_text()
+    fn = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == 'hardware_thread')
+    init = next(n for n in fn.body if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)
+                and n.target.id == 'accelerator_off_ts')
+    loop = next(n for n in fn.body if isinstance(n, ast.While))
+    check = next(n for n in loop.body if isinstance(n, ast.If) and 'should_shutdown' in ast.dump(n.test))
+    publish = next(i for i, n in enumerate(loop.body) if "'deviceState'" in ast.dump(n) and 'send' in ast.dump(n))
+    self.assertLess(loop.body.index(check), publish, "deviceState is no longer published after the shutdown check")
+    self.init = compile(textwrap.dedent(ast.get_source_segment(src, init, padded=True)), str(HARDWARED), 'exec')
+    self.check = compile(textwrap.dedent(ast.get_source_segment(src, check, padded=True)), str(HARDWARED), 'exec')
+
+  def run_loops(self, n: int, asks: bool = True, should_shutdown=True, clock_step: float = 0.5) -> SimpleNamespace:
+    clock = FakeClock()
+    jetlink = FakePowerOff(asks)
+    params = FakeParams()
+    ns = {'power_monitor': SimpleNamespace(should_shutdown=lambda *a: should_shutdown(clock.now) if callable(should_shutdown)
+                                           else should_shutdown),
+          'onroad_conditions': {'ignition': False}, 'in_car': True, 'off_ts': 12.0, 'started_seen': True,
+          'cloudlog': mock.Mock(), 'jetlink_adapter': jetlink, 'time': clock, 'params': params}
+    exec(self.init, ns)
+    self.assertIsNone(ns['accelerator_off_ts'])
+    down_at = []
+    for _ in range(n):
+      t0 = time.monotonic()
+      exec(self.check, ns)
+      self.assertLess(time.monotonic() - t0, 0.1, 'the check held the loop up')
+      if params.get_bool('DoShutdown') and not down_at:
+        down_at.append(clock.now)
+      clock.now += clock_step
+    return SimpleNamespace(jetlink=jetlink, params=params, down_at=down_at[0] if down_at else None, ns=ns, clock=clock)
+
+  def test_nothing_to_ask_goes_down_at_once(self):
+    r = self.run_loops(1, asks=False)
+    self.assertEqual(r.jetlink.requests, ['comma shutting down, offroad since 12.0'])
+    self.assertEqual(r.down_at, 100.0)
+
+  def test_it_asks_once_and_goes_down_when_the_request_is_taken(self):
+    r = self.run_loops(6)
+    self.assertEqual(len(r.jetlink.requests), 1)
+    self.assertIsNone(r.down_at)
+    r.jetlink.pending = False   # the owner's run took it
+    exec(self.check, r.ns)
+    self.assertTrue(r.params.get_bool('DoShutdown'))
+    self.assertEqual(len(r.jetlink.requests), 1)
+
+  def test_nobody_taking_it_costs_25_s_and_no_more(self):
+    r = self.run_loops(60)
+    self.assertEqual(len(r.jetlink.requests), 1)
+    self.assertEqual(r.down_at, 125.0)
+
+  def test_once_asked_it_goes_down_whatever_the_power_monitor_says_next(self):
+    # as the blocking call did: the Jetson may already be off
+    r = self.run_loops(60, should_shutdown=lambda now: now == 100.0)
+    self.assertEqual(r.down_at, 125.0)
+
+  def test_no_shutdown_asks_nothing(self):
+    r = self.run_loops(4, should_shutdown=False)
+    self.assertEqual(r.jetlink.requests, [])
+    self.assertIsNone(r.down_at)
 
 
 class StockModeld(Footprint, OpenpilotTestCase):

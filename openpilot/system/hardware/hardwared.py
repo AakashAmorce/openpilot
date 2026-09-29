@@ -215,6 +215,8 @@ def hardware_thread(end_event, hw_queue) -> None:
   started_ts: float | None = None
   started_seen = False
   startup_blocked_ts: float | None = None
+  # when the accelerator was asked to power off with the comma; see the shutdown check
+  accelerator_off_ts: float | None = None
   thermal_status = ThermalStatus.ok
 
   last_hw_state = HardwareState(
@@ -457,11 +459,14 @@ def hardware_thread(end_event, hw_queue) -> None:
     msg.deviceState.somPowerDrawW = som_power_draw
 
     # Check if we need to shut down
-    if power_monitor.should_shutdown(onroad_conditions["ignition"], in_car, off_ts, started_seen):
-      cloudlog.warning(f"shutting device down, offroad since {off_ts}")
-      # an accelerator on its own supply outlives us; one param read when jetlink is off
-      jetlink_adapter.shutdown(f"comma shutting down, offroad since {off_ts}", timeout=25.0)
-      params.put_bool("DoShutdown", True, block=True)
+    if accelerator_off_ts is not None or power_monitor.should_shutdown(onroad_conditions["ignition"], in_car, off_ts, started_seen):
+      if accelerator_off_ts is None:
+        cloudlog.warning(f"shutting device down, offroad since {off_ts}")
+        # an accelerator on its own supply outlives us: ask it once, and keep publishing while it powers off
+        jetlink_adapter.request_shutdown(f"comma shutting down, offroad since {off_ts}")
+        accelerator_off_ts = time.monotonic()
+      if not jetlink_adapter.shutdown_pending() or time.monotonic() - accelerator_off_ts >= 25.0:
+        params.put_bool("DoShutdown", True, block=True)
 
     msg.deviceState.started = started_ts is not None and not offroad_mode
     msg.deviceState.startedMonoTime = int(1e9*(started_ts or 0))

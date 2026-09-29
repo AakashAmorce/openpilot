@@ -254,8 +254,11 @@ class _Absent:
   def attach(self, small, cam_w: int, cam_h: int):
     return None
 
-  def shutdown(self, reason: str = '', timeout: float = 25.0) -> None:
-    return None
+  def request_shutdown(self, reason: str = '') -> bool:
+    return False
+
+  def shutdown_pending(self) -> bool:
+    return False
 
   def should_extend_catalog(self) -> bool:
     return False
@@ -381,11 +384,19 @@ def attach(small, cam_w: int, cam_h: int):
   return _api().attach(small, cam_w, cam_h)
 
 
-@_guarded(None)
-def shutdown(reason: str = '', timeout: float = 25.0) -> None:
-  """hardwared, before DoShutdown: take the far end down with the comma.
-  Blocks up to `timeout`."""
-  _api().shutdown(reason, timeout)
+@_guarded(False)
+def request_shutdown(reason: str = '') -> bool:
+  """hardwared, once, when the comma is about to power off for good: ask for
+  the far end to go down with it. Returns at once: True when the request now
+  waits for jetlinkd, which shutdown_pending() follows."""
+  return _api().request_shutdown(reason)
+
+
+@_guarded(False)
+def shutdown_pending() -> bool:
+  """hardwared, every loop after request_shutdown(), until it puts DoShutdown:
+  has jetlinkd still to take the request? A stat."""
+  return _api().shutdown_pending()
 
 
 @_guarded(False)
