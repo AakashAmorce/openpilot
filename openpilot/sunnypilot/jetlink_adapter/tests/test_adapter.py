@@ -252,16 +252,30 @@ print(json.dumps(sorted(sys.modules)))
       jetlink_adapter.main()
     run_owner.assert_called_once_with(jetlink_adapter.owner_config())
 
-  def test_it_runs_while_the_link_is_on_and_no_chestnut_is_fitted(self):
+  def test_manager_runs_it_while_the_link_is_on_and_no_chestnut_is_fitted(self):
+    from openpilot.system.manager.process_config import managed_processes
+    owner = managed_processes[jetlink_adapter.OWNER]
+    self.assertEqual(owner.module, jetlink_adapter.__name__)
     params = Params()
     with mock.patch.object(jetlink_adapter, '_bound', None), \
          mock.patch('openpilot.selfdrive.modeld.helpers.chestnut_present', return_value=False):
       for mode in jetlink_adapter.MODES:
         params.put(KEYS.link, jetlink_adapter.MODES.index(mode), block=True)
-        self.assertEqual(jetlink_adapter.should_run(False, params, None), mode != 'off', mode)
+        for started in (False, True):
+          self.assertEqual(owner.should_run(started, params, None), mode != 'off', mode)
     with mock.patch.object(jetlink_adapter, '_bound', None), \
          mock.patch('openpilot.selfdrive.modeld.helpers.chestnut_present', return_value=True):
-      self.assertFalse(jetlink_adapter.should_run(False, params, None))
+      self.assertFalse(owner.should_run(False, params, None))
+
+  def test_the_owners_provisioning_run_starts_on_this_adapter(self):
+    # the argv jetlinkd starts, run for real: with the link off it reads the
+    # setting through this adapter and is done
+    from jetlink.openpilot.owner import worker
+    Params().put(KEYS.link, 0, block=True)
+    env = {**os.environ, 'PYTHONPATH': os.pathsep.join([str(ROOT), *sys.path])}
+    out = subprocess.run(worker(jetlink_adapter.owner_config()), capture_output=True, text=True, env=env, cwd=str(ROOT),
+                         timeout=120)
+    self.assertEqual(out.returncode, 0, out.stderr)
 
 
 class TestWithoutAUsableJetlink(OpenpilotTestCase):

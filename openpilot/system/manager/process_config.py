@@ -9,7 +9,7 @@ from openpilot.common.hardware import PC, COMMA_HARDWARE
 from openpilot.system.manager.process import PythonProcess, NativeProcess, DaemonProcess
 from openpilot.common.hardware.hw import Paths
 
-from openpilot.sunnypilot import accelerators
+from openpilot.sunnypilot import jetlink_adapter
 from openpilot.sunnypilot.mapd.mapd_manager import MAPD_PATH
 
 from openpilot.sunnypilot.models.helpers import get_active_model_runner
@@ -174,11 +174,10 @@ procs = [
 procs += [
   # Models
   PythonProcess("models_manager", "openpilot.sunnypilot.models.manager", only_offroad),
-  # backends declare their offroad daemons; manager owns the onroad gating
   # always_run: jetlinkd holds the USB gadget open for as long as the link is
   # enabled, onroad included. A gadget whose owner exits leaves the bus, and
   # that is the unplug at every ignition edge this arrangement removes
-  *[PythonProcess(d.name, d.module, and_(always_run, d.should_run)) for d in accelerators.daemons()],
+  PythonProcess(jetlink_adapter.OWNER, jetlink_adapter.__name__, and_(always_run, jetlink_adapter.should_run)),
   NativeProcess("modeld_tinygrad", "openpilot/sunnypilot/modeld_v2", ["./modeld"], and_(only_onroad, is_tinygrad_model)),
 
   # Backup
