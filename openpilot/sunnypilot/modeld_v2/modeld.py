@@ -522,8 +522,9 @@ def main(demo=False):
       inputs['lateral_control_params'] = np.array([v_ego, lat_delay], dtype=np.float32)
 
     # a model can change which model drives inside run() (jetlink's joining
-    # model); the stall of that handover is not lag, as for the fallback below
-    was_big = model.chestnut
+    # model counts its handovers); the stall of one is not lag, as for the
+    # fallback below
+    handovers = getattr(model, 'handovers', 0)
     mt1 = time.perf_counter()
     try:
       send_chestnut = (chestnut_state is not None and
@@ -543,7 +544,7 @@ def main(demo=False):
       model_output = None
     mt2 = time.perf_counter()
     model_execution_time = mt2 - mt1
-    if model.chestnut != was_big:
+    if getattr(model, 'handovers', 0) != handovers:
       run_count = 0
 
     if model_output is not None:

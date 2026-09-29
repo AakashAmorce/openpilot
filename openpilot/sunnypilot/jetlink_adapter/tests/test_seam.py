@@ -386,17 +386,18 @@ class Footprint:
   def _frames(self, handover: bool, stall_at: int = 20, gap: int = 3) -> list[float]:
     """The loop's dropped-frame filter and its handover reset, verbatim, over
     40 frames with run() in between. Frame `stall_at` takes `gap` camera
-    frames too long; with `handover` the model also changes which model drives
-    inside that run(), as jetlink's joining model does on a pull's fallback
-    frame or a lag demote. Every frame's frame_drop_ratio (frameDropPerc / 100)."""
+    frames too long; with `handover` that run() is a swap whose first large
+    frame fails and demotes, as jetlink's joining model does: modelV2.big is
+    the same before and after, and only the handover count moves. Every
+    frame's frame_drop_ratio (frameDropPerc / 100)."""
     from openpilot.common.filter_simple import FirstOrderFilter
     loop = _frame_loop(self.body)
     first = _index(loop, lambda s: _assigns(s, 'vipc_dropped_frames'), 'the dropped-frame count')
     ratio = _index(loop, lambda s: _assigns(s, 'frame_drop_ratio'), 'frame_drop_ratio')
-    was = _index(loop, lambda s: _assigns(s, 'was_big'), 'the model read before run()')
+    was = _index(loop, lambda s: _assigns(s, 'handovers'), 'the handover count read before run()')
     run = _index(loop, lambda s: isinstance(s, ast.Try) and 'run' in {n.attr for n in ast.walk(s) if isinstance(n, ast.Attribute)},
                  'the try around model.run')
-    reset = _index(loop, lambda s: isinstance(s, ast.If) and 'was_big' in ast.dump(s.test), 'the handover reset')
+    reset = _index(loop, lambda s: isinstance(s, ast.If) and 'handovers' in ast.dump(s.test), 'the handover reset')
     self.assertLess(ratio, was)
     self.assertEqual(run, was + 2, "more than the timer between reading the model and running it")
     self.assertLess(run, reset)
@@ -406,7 +407,7 @@ class Footprint:
       return lines[loop[a].lineno - 1:loop[b].end_lineno]
     body = src(first, ratio) + src(was, was) + ['    model.run()'] + src(reset, reset)
     frame = compile(textwrap.dedent('\n'.join(body)), str(self.PATH), 'exec')
-    model = SimpleNamespace(chestnut=True)
+    model = SimpleNamespace(chestnut=False, handovers=0)
     scope = {'frame_dropped_filter': FirstOrderFilter(0., 10., 0.05), 'run_count': 0, 'last_vipc_frame_id': 0,
              'model': model, 'max': max, 'min': min}
     ratios, frame_id = [], 0
@@ -414,9 +415,9 @@ class Footprint:
       frame_id += 1
       scope['meta_main'] = SimpleNamespace(frame_id=frame_id)
 
-      def run(flip=handover and i == stall_at):
-        if flip:
-          model.chestnut = not model.chestnut
+      def run(both=handover and i == stall_at):
+        if both:
+          model.handovers += 2   # swapped in and demoted: chestnut stays False
       model.run = run
       exec(frame, scope)
       ratios.append(scope['frame_drop_ratio'])
