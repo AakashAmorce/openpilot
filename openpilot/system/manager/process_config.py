@@ -111,6 +111,16 @@ def or_(*fns):
 def and_(*fns):
   return lambda *args: operator.and_(*(fn(*args) for fn in fns))
 
+class RestartingPythonProcess(PythonProcess):
+  """A PythonProcess that manager starts again after it dies: start() leaves
+  a proc that has exited in place for good. For jetlinkd, which holds the USB
+  gadget for as long as the link is on; jetlink's owner adopts what a dead
+  one left and holds a crash loop back itself."""
+  def start(self) -> None:
+    if self.proc is not None and self.proc.exitcode is not None:
+      self.stop()  # reaps it, logs the exit code and clears proc
+    super().start()
+
 procs = [
   DaemonProcess("manage_athenad", "openpilot.system.athena.manage_athenad", "AthenadPid"),
 
@@ -177,7 +187,7 @@ procs += [
   # always_run: jetlinkd holds the USB gadget open for as long as the link is
   # enabled, onroad included. A gadget whose owner exits leaves the bus, and
   # that is the unplug at every ignition edge this arrangement removes
-  PythonProcess(jetlink_adapter.OWNER, jetlink_adapter.__name__, and_(always_run, jetlink_adapter.should_run)),
+  RestartingPythonProcess(jetlink_adapter.OWNER, jetlink_adapter.__name__, and_(always_run, jetlink_adapter.should_run)),
   NativeProcess("modeld_tinygrad", "openpilot/sunnypilot/modeld_v2", ["./modeld"], and_(only_onroad, is_tinygrad_model)),
 
   # Backup

@@ -279,6 +279,92 @@ print(json.dumps(sorted(sys.modules)))
     self.assertEqual(out.returncode, 0, out.stderr)
 
 
+class FakeProc:
+  """multiprocessing.Process as manager uses it, with no process behind it."""
+
+  def __init__(self, name=None, target=None, args=()):
+    self.name, self.args = name, args
+    self.exitcode = None
+    self.pid = 4242
+    self.started = 0
+
+  def start(self):
+    self.started += 1
+
+  def is_alive(self):
+    return self.exitcode is None
+
+  def join(self, timeout=None):
+    pass
+
+
+class TestManagerStartsADeadOwnerAgain(OpenpilotTestCase):
+  """jetlinkd holds the gadget for as long as the link is on, so manager starts
+  it again when it dies. A PythonProcess leaves one that exited alone for
+  good; jetlink's owner adopts what the dead one left and backs off a crash
+  loop itself, so manager only has to start it, once per loop."""
+
+  def loops(self, proc, *, should_run=True):
+    """manager's loop over this one process, with the Processes it makes."""
+    from openpilot.system.manager import process
+    made = []
+
+    def make(**kwargs):
+      made.append(FakeProc(**kwargs))
+      return made[-1]
+    patches = (mock.patch.object(process, 'Process', side_effect=make), mock.patch.object(proc, 'proc', None),
+               mock.patch.object(proc, 'shutting_down', False),
+               mock.patch.object(proc, 'should_run', lambda started, params, CP: should_run))
+    for patch in patches:
+      patch.start()
+      self.addCleanup(patch.stop)
+    return made, lambda: process.ensure_running([proc], False, params=None, CP=None)
+
+  def test_the_owner_is_started_again_once_a_loop_and_never_twice(self):
+    from openpilot.system.manager.process_config import managed_processes
+    owner = managed_processes[jetlink_adapter.OWNER]
+    made, loop = self.loops(owner)
+    loop()
+    self.assertEqual([p.started for p in made], [1])
+    self.assertEqual(made[0].args, (jetlink_adapter.__name__, jetlink_adapter.OWNER))
+    for _ in range(3):
+      loop()   # alive: never a second one beside it
+    self.assertEqual([p.started for p in made], [1])
+    made[0].exitcode = 1   # it died
+    loop()
+    self.assertEqual([p.started for p in made], [1, 1], 'the dead owner was not started again, or twice')
+    self.assertIs(owner.proc, made[1])
+    loop()
+    self.assertEqual(len(made), 2)
+    made[1].exitcode = -9   # killed, this time
+    loop()
+    loop()
+    self.assertEqual([p.started for p in made], [1, 1, 1])
+
+  def test_a_dead_owner_the_link_no_longer_wants_is_only_reaped(self):
+    from openpilot.system.manager.process_config import managed_processes
+    owner = managed_processes[jetlink_adapter.OWNER]
+    made, loop = self.loops(owner)
+    loop()
+    made[0].exitcode = 1
+    owner.should_run = lambda started, params, CP: False
+    loop()
+    self.assertIsNone(owner.proc)
+    self.assertEqual(len(made), 1)
+
+  def test_a_plain_python_process_stays_dead(self):
+    # why jetlinkd has the subclass: without it, a dead owner is the rest of
+    # the boot without a link
+    from openpilot.system.manager.process import PythonProcess
+    plain = PythonProcess('plain', 'plain.module', lambda started, params, CP: True)
+    made, loop = self.loops(plain)
+    loop()
+    made[0].exitcode = 1
+    for _ in range(3):
+      loop()
+    self.assertEqual(len(made), 1)
+
+
 class TestWithoutAUsableJetlink(OpenpilotTestCase):
   def _hooks(self) -> dict:
     catalog = {'bundles': []}
