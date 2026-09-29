@@ -42,6 +42,9 @@ class ControlsExt(ModelStateBase):
     if CP.steerControlType != structs.CarParams.SteerControlType.angle:
       self._steer_slew_schedule = get_steer_slew_schedule(CP)
     self._lat_active_last = False
+    # CC.latActive as state_control decided it this frame (lane_change_jerk_factor);
+    # the torque tune swap waits for it to be false
+    self._steering = False
     self._applied_torque_prev: float | None = None
 
     cloudlog.info("controlsd_ext is waiting for CarParamsSP")
@@ -71,11 +74,17 @@ class ControlsExt(ModelStateBase):
 
   def select_lateral_control(self, sm: messaging.SubMaster) -> None:
     """Runs at the end of every frame. modelV2.big says which model produced the frame; a
-    change swaps self.LaC to the controller tuned for it, reset. A promotion only happens
-    disengaged, where controlsd resets the controller every frame anyway; a demotion arrives
-    with a soft disable latched until disengagement. The next state_control pushes the live
-    torque params, modelV2 and the lag into the incoming controller before it runs."""
-    if len(self._lacs) == 1:
+    change swaps self.LaC to the controller tuned for it, reset, but never while lateral
+    control is active this frame. The idle controller holds whatever it had when it last
+    steered (its request buffer, previous measurement, integrator): on the 2026-09-29 drives
+    every big-to-small hand-back while steering stepped the commanded torque by 0.09 to 0.19
+    of full scale in one tick. Since a hand-back no longer ends in a soft disable, the small
+    model is carried by the tune that was steering until the first frame lateral is inactive
+    (a disengage, a blinker pause, a stop). A swap to the big model only happens with nothing
+    in control. From the next frame state_control runs the incoming controller, inactive
+    until an engagement, which primes it as for any engagement, and pushes the live torque
+    params, modelV2 and the lag into it."""
+    if len(self._lacs) == 1 or self._steering:
       return
     big = bool(sm['modelV2'].big)
     lac = self._lac_by_size[big]
@@ -135,7 +144,9 @@ class ControlsExt(ModelStateBase):
   def lane_change_jerk_factor(self, sm: messaging.SubMaster, lat_active: bool,
                               new_desired_curvature: float, prev_desired_curvature: float) -> float:
     """Lane-change smoothing's jerk factor for clip_curvature (1.0 outside a smoothed lane
-    change). The lateral maneuver mode's scripted commands pass through the stock clip."""
+    change). The lateral maneuver mode's scripted commands pass through the stock clip.
+    Called once a frame with CC.latActive, which is kept for select_lateral_control."""
+    self._steering = lat_active
     if sm.valid['lateralManeuverPlan']:
       # a lane-change unwind armed before maneuver mode must not resume stale after it
       self.lane_change_smoothing.reset()

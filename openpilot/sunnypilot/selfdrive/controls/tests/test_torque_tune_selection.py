@@ -69,7 +69,7 @@ def ctx(monkeypatch):
     CP = car.CarParams.new_message(steerControlType="torque")
     CP.lateralTuning.init('torque')
     controls = SimpleNamespace(params=params, CP=CP.as_reader(),
-                               CP_SP=custom.CarParamsSP.new_message().as_reader())
+                               CP_SP=custom.CarParamsSP.new_message().as_reader(), _steering=False)
     yield params, controls
 
 
@@ -164,6 +164,37 @@ class TestTorqueTuneSelection:
 
     swap(controls, big=False)
     assert controls.LaC == BY_VERSION[small] and controls.LaC.resets == 1
+
+  def test_a_hand_back_while_steering_keeps_the_tune_that_steers(self, ctx):
+    """2026-09-29: every big-to-small hand-back while steering stepped the commanded torque
+    by 0.09 to 0.19 in one tick, from switching to the idle controller's stale state. The
+    controller that steers carries the small model to the first frame lateral is inactive."""
+    params, controls = ctx
+    params.put("TorqueControlTune", 2.0, block=True)
+    params.put("TorqueControlTuneBig", 1.0, block=True)
+    select(controls)
+    swap(controls, big=True)            # swapped in with nothing in control
+    big = controls.LaC
+    assert big == V1 and big.resets == 1
+    controls._steering = True
+    for _ in range(50):                 # handed back while steering
+      swap(controls, big=False)
+      assert controls.LaC is big and big.resets == 1
+    controls._steering = False          # a disengage, a blinker pause, a stop
+    swap(controls, big=False)
+    assert controls.LaC == V2 and controls.LaC.resets == 1
+    controls._steering = True           # and the next engagement starts on the small tune
+    swap(controls, big=False)
+    assert controls.LaC == V2 and controls.LaC.resets == 1
+
+  def test_switching_while_inactive_is_unchanged(self, ctx):
+    params, controls = ctx
+    params.put("TorqueControlTune", 2.0, block=True)
+    params.put("TorqueControlTuneBig", 1.0, block=True)
+    select(controls)
+    for big, tune in ((True, V1), (False, V2), (True, V1)):
+      swap(controls, big=big)
+      assert controls.LaC == tune
 
   def test_enforce_off_ignores_the_big_tune(self, ctx):
     """The enforce-off v0 forcing applies to both sizes."""
