@@ -18,7 +18,7 @@ import pytest
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque as LatControlTorqueV1
-from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import ControlsExt
+from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import TUNE_SWAP_INACTIVE_FRAMES, ControlsExt
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v2 import LatControlTorque as LatControlTorqueV2
 from openpilot.sunnypilot.selfdrive.controls.tests.test_latcontrol_torque_v2 import FRICTION, make_cs, make_lac, step
 
@@ -39,17 +39,19 @@ def controls():
   small, big = make_lac(LatControlTorqueV2, friction=FRICTION), make_lac(LatControlTorqueV1, friction=FRICTION)
   for _ in range(300):
     step(small, make_cs(v_ego=20.0, lat_accel=-1.5), -1.5 / 20.0 ** 2)
-  return SimpleNamespace(_lacs=(small, big), _lac_by_size={False: small, True: big}, LaC=big, _steering=False)
+  return SimpleNamespace(_lacs=(small, big), _lac_by_size={False: small, True: big}, LaC=big, _inactive_frames=0)
 
 
-def drive(ctl, hand_back: bool, inactive_at: int | None = None, frames: int = 300) -> list[float]:
+def drive(ctl, hand_back: bool, inactive_at: int | None = None, frames: int = 300,
+          inactive: set[int] | None = None) -> list[float]:
   """Commanded torque every frame, as controlsd runs it: state_control's update, then the
-  swap at the end of the frame."""
+  swap at the end of the frame. Lateral is inactive from `inactive_at` on, and on the
+  frames in `inactive`."""
   out = []
   for i in range(frames):
-    active = inactive_at is None or i < inactive_at
+    active = (inactive_at is None or i < inactive_at) and i not in (inactive or ())
     torque, _, _ = ctl.LaC.update(active, make_cs(V_EGO, LAT_ACCEL), *DRIVE_ARGS)
-    ctl._steering = active
+    ControlsExt.note_lat_active(ctl, active)
     out.append(torque)
     ControlsExt.select_lateral_control(ctl, {'modelV2': SimpleNamespace(big=not (hand_back and i >= HAND_BACK))})
   return out
@@ -87,10 +89,21 @@ class TestSwapWhileSteering:
     assert abs(out[HAND_BACK] - out[HAND_BACK - 1]) > 0.05
     assert abs(out[HAND_BACK] - out[HAND_BACK - 1]) > 10 * largest_tick(steady, HAND_BACK - 50, HAND_BACK)
 
-  def test_the_first_inactive_frame_swaps(self, params):
+  def test_a_short_drop_keeps_the_tune_and_the_torque(self, params):
+    # a steer fault flicker, and a 0.3 s gap: neither swaps, so the resume is the same
+    # controller as without the hand-back
+    gaps = {HAND_BACK + 20} | set(range(HAND_BACK + 40, HAND_BACK + 70))
+    steady = drive(controls(), hand_back=False, inactive=gaps)
     ctl = controls()
-    small, big = ctl._lac_by_size[False], ctl._lac_by_size[True]
-    drive(ctl, hand_back=True, inactive_at=HAND_BACK + 40, frames=HAND_BACK + 40)
-    assert ctl.LaC is big, "swapped while steering"
-    drive(ctl, hand_back=True, inactive_at=HAND_BACK + 40, frames=HAND_BACK + 41)
-    assert ctl.LaC is small, "not swapped on the first inactive frame"
+    handed_back = drive(ctl, hand_back=True, inactive=gaps)
+    assert handed_back == pytest.approx(steady, abs=1e-9)
+    assert ctl.LaC is ctl._lac_by_size[True]
+
+  def test_half_a_second_off_swaps(self, params):
+    off = HAND_BACK + 40
+    ctl = controls()
+    drive(ctl, hand_back=True, inactive_at=off, frames=off + TUNE_SWAP_INACTIVE_FRAMES - 1)
+    assert ctl.LaC is ctl._lac_by_size[True], "swapped before lateral had been off for half a second"
+    ctl = controls()
+    drive(ctl, hand_back=True, inactive_at=off, frames=off + TUNE_SWAP_INACTIVE_FRAMES)
+    assert ctl.LaC is ctl._lac_by_size[False], "not swapped after half a second off"

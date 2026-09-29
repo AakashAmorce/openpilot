@@ -14,6 +14,7 @@ from openpilot.cereal import log, custom
 from opendbc.car import structs
 from opendbc.sunnypilot.car.interfaces import get_steer_slew_schedule
 from openpilot.common.params import Params
+from openpilot.common.realtime import DT_CTRL
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD
 from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
@@ -25,6 +26,11 @@ from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v0 import Lat
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v2 import LatControlTorque as LatControlTorqueV2
 from openpilot.sunnypilot.selfdrive.controls.lib.steer_limit import classify
 from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import resolved_tune_versions
+
+# how long lateral control has to be inactive, continuously, before the torque tune follows
+# a model change: a one-frame drop (a steer fault flicker) would otherwise swap and resume
+# steering on a controller no inactive frame had primed
+TUNE_SWAP_INACTIVE_FRAMES = round(0.5 / DT_CTRL)
 
 
 class ControlsExt(ModelStateBase):
@@ -42,9 +48,9 @@ class ControlsExt(ModelStateBase):
     if CP.steerControlType != structs.CarParams.SteerControlType.angle:
       self._steer_slew_schedule = get_steer_slew_schedule(CP)
     self._lat_active_last = False
-    # CC.latActive as state_control decided it this frame (lane_change_jerk_factor);
-    # the torque tune swap waits for it to be false
-    self._steering = False
+    # frames in a row with CC.latActive false, as state_control decided it (note_lat_active);
+    # the torque tune swap waits for TUNE_SWAP_INACTIVE_FRAMES of them
+    self._inactive_frames = 0
     self._applied_torque_prev: float | None = None
 
     cloudlog.info("controlsd_ext is waiting for CarParamsSP")
@@ -79,12 +85,15 @@ class ControlsExt(ModelStateBase):
     steered (its request buffer, previous measurement, integrator): on the 2026-09-29 drives
     every big-to-small hand-back while steering stepped the commanded torque by 0.09 to 0.19
     of full scale in one tick. Since a hand-back no longer ends in a soft disable, the small
-    model is carried by the tune that was steering until the first frame lateral is inactive
-    (a disengage, a blinker pause, a stop). A swap to the big model only happens with nothing
-    in control. From the next frame state_control runs the incoming controller, inactive
-    until an engagement, which primes it as for any engagement, and pushes the live torque
-    params, modelV2 and the lag into it."""
-    if len(self._lacs) == 1 or self._steering:
+    model is carried by the tune that was steering until lateral has been inactive for
+    TUNE_SWAP_INACTIVE_FRAMES in a row (a disengage, a blinker pause, a stop); a shorter drop
+    keeps it. A swap to the big model only happens with nothing in control, and its second of
+    no-entry is longer than the wait. From the next frame state_control runs the incoming
+    controller, inactive until an engagement, which primes it as for any engagement, and
+    pushes the live torque params, modelV2 and the lag into it. An engagement on the very
+    frame after the swap would find it unprimed; priming it here would need the frame's
+    CarState, which state_control has and this does not."""
+    if len(self._lacs) == 1 or self._inactive_frames < TUNE_SWAP_INACTIVE_FRAMES:
       return
     big = bool(sm['modelV2'].big)
     lac = self._lac_by_size[big]
@@ -145,13 +154,16 @@ class ControlsExt(ModelStateBase):
                               new_desired_curvature: float, prev_desired_curvature: float) -> float:
     """Lane-change smoothing's jerk factor for clip_curvature (1.0 outside a smoothed lane
     change). The lateral maneuver mode's scripted commands pass through the stock clip.
-    Called once a frame with CC.latActive, which is kept for select_lateral_control."""
-    self._steering = lat_active
+    Called once a frame with CC.latActive, which select_lateral_control waits on."""
+    self.note_lat_active(lat_active)
     if sm.valid['lateralManeuverPlan']:
       # a lane-change unwind armed before maneuver mode must not resume stale after it
       self.lane_change_smoothing.reset()
       return 1.0
     return self.lane_change_smoothing.update(sm['carState'], sm['modelV2'], lat_active, new_desired_curvature, prev_desired_curvature)
+
+  def note_lat_active(self, lat_active: bool) -> None:
+    self._inactive_frames = 0 if lat_active else self._inactive_frames + 1
 
   @staticmethod
   def get_lead_data(_lead, src: log.RadarState.LeadData) -> None:
