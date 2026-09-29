@@ -478,10 +478,12 @@ class FakePowerOff:
 
 class HardwaredPowersOffWithoutStopping(OpenpilotTestCase):
   """hardwared's shutdown check, lifted out of hardware_thread verbatim and run
-  once per loop as the thread runs it. It asks jetlink once, goes on to
-  publish deviceState every loop, and puts DoShutdown once the request is
-  taken or 25 s have passed. The blocking shutdown() held the whole loop, and
-  deviceState with it, for up to those 25 s."""
+  once per loop as the thread runs it, with the start of a drive before it.
+  It asks jetlink once, goes on to publish deviceState every loop, and puts
+  DoShutdown once the request is taken or 25 s have passed. The blocking
+  shutdown() held the whole loop, and deviceState with it, for up to those
+  25 s, and with it any drive starting; now a startup condition holds a new
+  drive back instead."""
 
   def setUp(self):
     src = HARDWARED.read_text()
@@ -489,31 +491,66 @@ class HardwaredPowersOffWithoutStopping(OpenpilotTestCase):
     init = next(n for n in fn.body if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)
                 and n.target.id == 'accelerator_off_ts')
     loop = next(n for n in fn.body if isinstance(n, ast.While))
-    check = next(n for n in loop.body if isinstance(n, ast.If) and 'should_shutdown' in ast.dump(n.test))
-    publish = next(i for i, n in enumerate(loop.body) if "'deviceState'" in ast.dump(n) and 'send' in ast.dump(n))
-    self.assertLess(loop.body.index(check), publish, "deviceState is no longer published after the shutdown check")
-    self.init = compile(textwrap.dedent(ast.get_source_segment(src, init, padded=True)), str(HARDWARED), 'exec')
-    self.check = compile(textwrap.dedent(ast.get_source_segment(src, check, padded=True)), str(HARDWARED), 'exec')
+    body = loop.body
+    powering_off = next(n for n in body if isinstance(n, ast.Assign) and 'not_powering_off' in ast.dump(n.targets[0]))
+    should = next(i for i, n in enumerate(body) if _assigns(n, 'should_start') and 'all' in ast.dump(n.value))
+    start = next(n for n in body if isinstance(n, ast.If) and isinstance(n.test, ast.Name) and n.test.id == 'should_start')
+    check = next(n for n in body if isinstance(n, ast.If) and 'should_shutdown' in ast.dump(n.test))
+    publish = next(i for i, n in enumerate(body) if "'deviceState'" in ast.dump(n) and 'send' in ast.dump(n))
+    self.assertLess(body.index(powering_off), should, "the startup condition comes after the start it holds back")
+    self.assertLess(body.index(check), publish, "deviceState is no longer published after the shutdown check")
 
-  def run_loops(self, n: int, asks: bool = True, should_shutdown=True, clock_step: float = 0.5) -> SimpleNamespace:
+    def code(*nodes):
+      return compile('\n'.join(textwrap.dedent(ast.get_source_segment(src, n, padded=True)) for n in nodes),
+                     str(HARDWARED), 'exec')
+    self.init = code(init)
+    self.loop = code(powering_off, body[should], body[should + 1], start, check)
+
+  def run_loops(self, n: int, asks: bool = True, should_shutdown=True, clock_step: float = 0.5,
+                ignition=lambda now: False, started_ts=None) -> SimpleNamespace:
     clock = FakeClock()
     jetlink = FakePowerOff(asks)
     params = FakeParams()
+    onroad_conditions = {'ignition': False, 'device_temp_good': True}
     ns = {'power_monitor': SimpleNamespace(should_shutdown=lambda *a: should_shutdown(clock.now) if callable(should_shutdown)
                                            else should_shutdown),
-          'onroad_conditions': {'ignition': False}, 'in_car': True, 'off_ts': 12.0, 'started_seen': True,
-          'cloudlog': mock.Mock(), 'jetlink_adapter': jetlink, 'time': clock, 'params': params}
+          'onroad_conditions': onroad_conditions, 'startup_conditions': {'device_booted': True},
+          'startup_conditions_prev': {}, 'startup_blocked_ts': None, 'started_ts': started_ts, 'in_car': True,
+          'off_ts': 12.0 if started_ts is None else None, 'started_seen': True, 'cloudlog': mock.Mock(),
+          'jetlink_adapter': jetlink, 'time': clock, 'params': params}
     exec(self.init, ns)
     self.assertIsNone(ns['accelerator_off_ts'])
-    down_at = []
+    down_at, started = [], []
     for _ in range(n):
+      onroad_conditions['ignition'] = ignition(clock.now)
       t0 = time.monotonic()
-      exec(self.check, ns)
-      self.assertLess(time.monotonic() - t0, 0.1, 'the check held the loop up')
+      exec(self.loop, ns)
+      self.assertLess(time.monotonic() - t0, 0.1, 'the loop was held up')
       if params.get_bool('DoShutdown') and not down_at:
         down_at.append(clock.now)
+      started.append(ns['started_ts'] is not None)
       clock.now += clock_step
-    return SimpleNamespace(jetlink=jetlink, params=params, down_at=down_at[0] if down_at else None, ns=ns, clock=clock)
+    return SimpleNamespace(jetlink=jetlink, params=params, down_at=down_at[0] if down_at else None, ns=ns, clock=clock,
+                           started=started)
+
+  def test_no_drive_starts_while_it_powers_off(self):
+    # the key turned inside the wait: a drive started now would have the comma
+    # power off under it, possibly engaged
+    r = self.run_loops(60, ignition=lambda now: now >= 105.0)
+    self.assertEqual(r.down_at, 125.0)
+    self.assertFalse(any(r.started), 'a drive started during the power-off')
+    self.assertIs(r.ns['startup_conditions']['not_powering_off'], False)
+    r.ns['cloudlog'].event.assert_any_call('Startup blocked', startup_conditions=mock.ANY, onroad_conditions=mock.ANY,
+                                           error=True)
+
+  def test_nothing_to_power_off_blocks_nothing(self):
+    r = self.run_loops(4, should_shutdown=False, ignition=lambda now: now >= 101.0)
+    self.assertEqual(r.started, [False, False, True, True])
+
+  def test_a_drive_under_way_is_left_as_it_was(self):
+    # ForcePowerDown onroad: the startup conditions only hold back a start
+    r = self.run_loops(4, ignition=lambda now: True, started_ts=50.0)
+    self.assertEqual(r.started, [True] * 4)
 
   def test_nothing_to_ask_goes_down_at_once(self):
     r = self.run_loops(1, asks=False)
@@ -525,7 +562,7 @@ class HardwaredPowersOffWithoutStopping(OpenpilotTestCase):
     self.assertEqual(len(r.jetlink.requests), 1)
     self.assertIsNone(r.down_at)
     r.jetlink.pending = False   # the owner's run took it
-    exec(self.check, r.ns)
+    exec(self.loop, r.ns)
     self.assertTrue(r.params.get_bool('DoShutdown'))
     self.assertEqual(len(r.jetlink.requests), 1)
 
