@@ -25,7 +25,7 @@ from openpilot.common.hardware.usb import CHESTNUT_FW_VERSION, CHESTNUT_USB_PROD
 from openpilot.common.linux import LinuxSystemStats
 from openpilot.system.loggerd.config import get_available_percent
 from openpilot.common.swaglog import cloudlog
-from openpilot.sunnypilot import accelerators
+from openpilot.sunnypilot import jetlink_adapter
 from openpilot.sunnypilot.system.statsd import statlog
 from openpilot.system.hardware.power_monitoring import PowerMonitoring
 from openpilot.sunnypilot.system.hardware.hardwared_ext import HardwaredExt
@@ -317,7 +317,7 @@ def hardware_thread(end_event, hw_queue) -> None:
                            chestnut_state if chestnut_valid else None, set_offroad_alert_if_changed)
 
     # an enabled accelerator that cannot come up is otherwise silently absent
-    accelerator_error = accelerators.unavailable_reason()
+    accelerator_error = jetlink_adapter.reason()
     set_offroad_alert_if_changed("Offroad_AcceleratorUnavailable", accelerator_error is not None,
                                  extra_text=accelerator_error)
 
@@ -460,7 +460,7 @@ def hardware_thread(end_event, hw_queue) -> None:
     if power_monitor.should_shutdown(onroad_conditions["ignition"], in_car, off_ts, started_seen):
       cloudlog.warning(f"shutting device down, offroad since {off_ts}")
       # an accelerator on its own supply outlives us; one param read when jetlink is off
-      accelerators.shutdown(f"comma shutting down, offroad since {off_ts}", timeout=25.0)
+      jetlink_adapter.shutdown(f"comma shutting down, offroad since {off_ts}", timeout=25.0)
       params.put_bool("DoShutdown", True, block=True)
 
     msg.deviceState.started = started_ts is not None and not offroad_mode
