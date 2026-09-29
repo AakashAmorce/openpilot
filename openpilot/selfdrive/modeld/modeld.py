@@ -36,7 +36,7 @@ from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
 from openpilot.selfdrive.modeld.helpers import (chestnut_present, chestnut_compiled, chestnut_ready, modeld_pkl_path, load_oob,
                                                 check_modeld_pkl, check_camera_jit)
 
-from openpilot.sunnypilot import accelerators
+from openpilot.sunnypilot import jetlink_adapter
 from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
 from openpilot.sunnypilot.modeld_v2.modeld_base import ModelStateBase
 from openpilot.sunnypilot.selfdrive.controls.lib.relc import RoadEdgeLaneChangeController
@@ -268,7 +268,7 @@ def main(demo=False):
     params.remove("ChestnutActive")
   # before going realtime: prepare() starts tinygrad's device thread, which would inherit FIFO 54 on core 7
   if not CHESTNUT:
-    accelerators.prepare()
+    jetlink_adapter.prepare()
 
   config_realtime_process(7, 54)
 
@@ -321,9 +321,7 @@ def main(demo=False):
   small_model = ModelState(vipc_client_main.width, vipc_client_main.height, False) if model is None or CHESTNUT else None
   if model is None:
     model = small_model
-  accelerator = accelerators.load(vipc_client_main.width, vipc_client_main.height, small_model)
-  if accelerator:
-    model = accelerator.model
+  model = jetlink_adapter.attach(small_model, vipc_client_main.width, vipc_client_main.height) or model
   params.put_bool("ChestnutLoading", False)
   assert model is not None
   cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
@@ -336,8 +334,6 @@ def main(demo=False):
   publish_state = PublishState()
   params = Params()
   chestnut_state = ChestnutState(pm, model.chestnut) if CHESTNUT else None
-  if accelerator:
-    chestnut_state = accelerator.status
 
   # setup filter to track dropped frames
   frame_dropped_filter = FirstOrderFilter(0., 10., 1. / ModelConstants.MODEL_RUN_FREQ)
@@ -451,9 +447,6 @@ def main(demo=False):
                        run_count % round(ModelConstants.MODEL_RUN_FREQ / SERVICE_LIST['chestnutState'].frequency) == 0)
       model_output = model.run(bufs, transforms, inputs, chestnut_state.send if send_chestnut else None)
     except Exception:
-      # the joining state does its own fallback; the handler below would orphan its threads and link
-      if accelerator:
-        raise
       if not params.get_bool("ChestnutActive"):
         raise
       # fallback to small model
