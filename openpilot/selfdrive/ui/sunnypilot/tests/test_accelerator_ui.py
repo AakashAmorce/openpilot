@@ -318,8 +318,8 @@ class TestTiciModelsPanel(UITest):
         assert "chestnut" not in note
         assert "Cinque Terre will drive when the accelerator is ready." == note
         ui_state.jetlink = snapshot(present=True, ready=True, enabled=True, model='Cinque Terre')
-        note = layout._status_note()
-        assert note.startswith("Cinque Terre will drive.") and "chestnut" not in note
+        # no "until the next drive": the link rejoins all drive
+        assert layout._status_note() == "Cinque Terre will drive."
     finally:
       ui_state.jetlink, ui_state.chestnut_present = saved
 
@@ -331,7 +331,7 @@ class TestTiciModelsPanel(UITest):
       with jetlink(present=True, ready=True, enabled=True, model='Cinque Terre'), \
            mock.patch("openpilot.selfdrive.ui.sunnypilot.layouts.settings.models.big_model_state", return_value='ready'):
         layout = self._layout()
-        assert layout._status_note() == "Cinque Terre is ready. Stop with cruise off, or turn lateral off, to switch."
+        assert layout._status_note() == "Cinque Terre is ready. Disengage fully, then re-engage to switch."
     finally:
       ui_state.jetlink, ui_state.chestnut_present = saved
 

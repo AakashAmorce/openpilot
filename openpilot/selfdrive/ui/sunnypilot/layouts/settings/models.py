@@ -234,9 +234,10 @@ class ModelsLayout(Widget):
       item.set_description("")
 
   def _status_note(self) -> str:
-    """The failover story for the Model Status row. One-way big -> small, and the
-    fallback is runner-matched: a Default big can only fall back to the Default
-    small (stock modeld), a custom big has no automatic fallback yet."""
+    """The failover story for the Model Status row. A chestnut's is one-way big ->
+    small and runner-matched: a Default big can only fall back to the Default
+    small (stock modeld), a custom big has no automatic fallback yet. An
+    accelerator's goes both ways, all drive."""
     view = ui_state.jetlink_view
     accelerator = view is not None
     if not (ui_state.chestnut_present or accelerator):
@@ -264,10 +265,15 @@ class ModelsLayout(Widget):
         return tr("{} drives until the big model is ready.").format(fallback_name)
       return tr("Getting the big model ready.")
     if state == 'ready':
-      # the swap window, not the model, is what is missing now
-      return tr("{} is ready. Stop with cruise off, or turn lateral off, to switch.").format(big_name)
+      # the swap window, not the model, is what is missing now: it opens when
+      # nothing is in control
+      return tr("{} is ready. Disengage fully, then re-engage to switch.").format(big_name)
     if accelerator and not view.ready:
       return tr("{} will drive when the accelerator is ready.").format(big_name)
+    if accelerator:
+      # it rejoins all drive and a drop is announced as it happens, so there is
+      # no "until the next drive" to warn of
+      return tr("{} will drive.").format(big_name)
     if big_is_default:
       return tr("{} will drive. If it fails during a drive, {} takes over until the next drive.").format(big_name, fallback_name)
     return tr("{} will drive when the chestnut is ready.").format(big_name)
