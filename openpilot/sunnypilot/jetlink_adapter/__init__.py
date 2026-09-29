@@ -241,10 +241,10 @@ class _Absent:
   def reason(self) -> str | None:
     if self.why is None:
       return None
+    # the setting as jetlink reads it, a file: hardwared asks twice a second
     try:
-      from openpilot.common.params import Params
-      on = bool(Params().get(KEYS.link))
-    except Exception:
+      on = 0 < int((_params_dir() / KEYS.link).read_bytes()) < len(MODES)
+    except (OSError, ValueError):
       on = False
     return self.why if on else None
 
@@ -312,8 +312,9 @@ def _unusable(why: str, error: Exception | None = None) -> _Absent:
 # manager, hardwared, the model manager and the UI call in here on every
 # device, link on or off, and modeld on every drive: whatever jetlink does
 # wrong turns the link off and is logged, and never takes one of them down.
-# jetlink's own readers never raise; this is the net under that promise
-_failed_hooks: set[str] = set()
+# jetlink's own readers never raise; this is the net under that promise.
+# Hook -> the failure last logged for it, cleared by a call that works
+_failed_hooks: dict[str, str] = {}
 
 
 def _log_failure(what: str, error: Exception | None) -> None:
@@ -329,13 +330,17 @@ def _guarded(default):
     @functools.wraps(hook)
     def call(*args, **kwargs):
       try:
-        return hook(*args, **kwargs)
+        result = hook(*args, **kwargs)
       except Exception as e:
-        # once per hook: the UI would log a failing status five times a second
-        if hook.__name__ not in _failed_hooks:
-          _failed_hooks.add(hook.__name__)
+        # once per distinct error, as jetlink's readers log: the UI would log
+        # a failing status five times a second
+        error = f"{type(e).__name__}: {e}"
+        if _failed_hooks.get(hook.__name__) != error:
+          _failed_hooks[hook.__name__] = error
           _log_failure(f"{hook.__name__}() failed", e)
         return default(*args, **kwargs) if callable(default) else default
+      _failed_hooks.pop(hook.__name__, None)
+      return result
     return call
   return wrap
 

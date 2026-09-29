@@ -325,7 +325,9 @@ assert not a.should_extend_catalog() and a.extend_catalog(c) is c
         patch = mock.patch.dict(sys.modules, {'jetlink.openpilot': None})
       with patch, mock.patch.object(jetlink_adapter, '_bound', None):
         params.put(KEYS.link, 1, block=True)
-        self.assertEqual(self._hooks(), {**self.NULL, 'reason': why})
+        # the setting is read as a file: nothing here builds a Params
+        with mock.patch('openpilot.common.params.Params', side_effect=AssertionError('a Params was built')):
+          self.assertEqual(self._hooks(), {**self.NULL, 'reason': why})
         # nobody who left the link off is told
         params.put(KEYS.link, 0, block=True)
         self.assertIsNone(jetlink_adapter.reason())
@@ -336,5 +338,19 @@ assert not a.should_extend_catalog() and a.extend_catalog(c) is c
         def fail(*args, **kwargs):
           raise RuntimeError(name)
         return fail
-    with mock.patch.object(jetlink_adapter, '_bound', Broken()), mock.patch.object(jetlink_adapter, '_failed_hooks', set()):
+    with mock.patch.object(jetlink_adapter, '_bound', Broken()), mock.patch.object(jetlink_adapter, '_failed_hooks', {}):
       self.assertEqual(self._hooks(), self.NULL)
+
+  def test_a_failure_is_logged_again_once_it_changes_or_has_cleared(self):
+    outcomes = iter([RuntimeError('a'), RuntimeError('a'), RuntimeError('b'), None, RuntimeError('b')])
+
+    class Flaky:
+      def status(self):
+        if (e := next(outcomes)) is not None:
+          raise e
+        return 'a snapshot'
+    with mock.patch.object(jetlink_adapter, '_bound', Flaky()), mock.patch.object(jetlink_adapter, '_failed_hooks', {}), \
+         mock.patch.object(jetlink_adapter, '_log_failure') as log:
+      answers = [jetlink_adapter.status() for _ in range(5)]
+    self.assertEqual(answers, [None, None, None, 'a snapshot', None])
+    self.assertEqual([str(c.args[1]) for c in log.call_args_list], ['a', 'b', 'b'])
