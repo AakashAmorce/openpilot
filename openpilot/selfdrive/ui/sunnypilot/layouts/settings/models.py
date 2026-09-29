@@ -14,7 +14,6 @@ from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.ui_state import device, ui_state
 from openpilot.selfdrive.ui.sunnypilot.accelerator_link import LINK_MODES, LINK_MODE_TITLES, LINK_PARAM, link_mode, \
   link_status, link_toggle_meaningful
-from openpilot.sunnypilot import accelerators
 from openpilot.selfdrive.ui.sunnypilot.model_info import (big_model_state, bundles_for_source, carrying_model, default_model_name,
                                                            model_cache_size_mb, queued_name, refresh_in_progress, refresh_model_list)
 from openpilot.system.ui.lib.multilang import tr
@@ -130,7 +129,7 @@ class ModelsLayout(Widget):
     return f"{what} {status}".strip()
 
   def _refresh_accelerator_items(self):
-    # present() and unavailable_reason() read sysfs, so this rides the half-second tick
+    # the setting is a param read, so this rides the half-second tick
     self.accelerator_link_item.set_visible(link_toggle_meaningful())
     self.accelerator_link_item.action_item.set_selected_button(LINK_MODES.index(link_mode()))
     self.accelerator_link_item.action_item.set_enabled(ui_state.is_offroad())
@@ -238,7 +237,8 @@ class ModelsLayout(Widget):
     """The failover story for the Model Status row. One-way big -> small, and the
     fallback is runner-matched: a Default big can only fall back to the Default
     small (stock modeld), a custom big has no automatic fallback yet."""
-    accelerator = ui_state.accelerator_view is not None
+    view = ui_state.jetlink_view
+    accelerator = view is not None
     if not (ui_state.chestnut_present or accelerator):
       return ""
     fallback_name = default_model_name("qcom")
@@ -247,7 +247,7 @@ class ModelsLayout(Widget):
       # named by the accelerator: the slot's pick, or its default, which can be
       # newer than the chestnut's. The small model the user picked drives in
       # its place, so it reads like a Default big
-      big_name = accelerators.selected_model_name() or tr("The big model")
+      big_name = view.model or tr("The big model")
       big_is_default = True
       if small := get_selected_bundle(ui_state.params, "qcom"):
         fallback_name = small.internalName
@@ -266,7 +266,7 @@ class ModelsLayout(Widget):
     if state == 'ready':
       # the swap window, not the model, is what is missing now
       return tr("{} is ready. Stop with cruise off, or turn lateral off, to switch.").format(big_name)
-    if accelerator and not ui_state.accelerator_view.ready:
+    if accelerator and not view.ready:
       return tr("{} will drive when the accelerator is ready.").format(big_name)
     if big_is_default:
       return tr("{} will drive. If it fails during a drive, {} takes over until the next drive.").format(big_name, fallback_name)

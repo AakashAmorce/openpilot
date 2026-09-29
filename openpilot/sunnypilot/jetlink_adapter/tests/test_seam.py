@@ -409,6 +409,37 @@ class Footprint:
       joining.close()
 
 
+# every file outside the adapter that names it, and what each may use: the
+# whole seam between this fork and jetlink. hardwared never asks for status():
+# a snapshot keeps presence warm, and power-off would wait on a Jetson that
+# had left seconds before
+SEAM = {
+  'selfdrive/modeld/modeld.py': {'prepare', 'attach'},
+  'sunnypilot/modeld_v2/modeld.py': {'prepare', 'attach'},
+  'system/manager/process_config.py': {'OWNER', '__name__', 'should_run'},
+  'sunnypilot/selfdrive/selfdrived/accelerator_events.py': {'OWNER'},
+  'system/hardware/hardwared.py': {'reason', 'shutdown'},
+  'sunnypilot/models/fetcher.py': {'should_extend_catalog', 'extend_catalog'},
+  'selfdrive/ui/sunnypilot/ui_state.py': {'status'},
+  'selfdrive/ui/sunnypilot/accelerator_link.py': {'KEYS', 'MODES'},
+}
+
+
+class TheWholeSeam(OpenpilotTestCase):
+  def test_every_hook_uses_only_its_part_of_the_adapter(self):
+    found = {}
+    for path in sorted(OPENPILOT.rglob('*.py')):
+      rel = path.relative_to(OPENPILOT).as_posix()
+      if rel.startswith('sunnypilot/jetlink_adapter/') or '/tests/' in rel or b'jetlink_adapter' not in path.read_bytes():
+        continue
+      tree = ast.parse(path.read_bytes())
+      used = {attr for _, attr in _calls(tree)}
+      used |= {a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == 'openpilot.sunnypilot.jetlink_adapter'
+               for a in n.names}
+      found[rel] = used
+    self.assertEqual(found, SEAM)
+
+
 class StockModeld(Footprint, OpenpilotTestCase):
   PATH = MODELD
 

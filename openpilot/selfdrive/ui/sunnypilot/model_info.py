@@ -10,7 +10,6 @@ import time
 
 from openpilot.common.hardware.hw import Paths
 from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
-from openpilot.sunnypilot import accelerators
 from openpilot.sunnypilot.models.fetcher import get_cached_bundles
 from openpilot.sunnypilot.models.helpers import get_active_source, get_selected_bundle, resolve_bundle_by_ref
 from openpilot.sunnypilot.models.model_name import DEFAULT_BIG_MODEL, DEFAULT_MODEL
@@ -45,7 +44,7 @@ def default_model(source: str) -> str:
   default is its own."""
   if source != 'chestnut':
     return DEFAULT_MODEL
-  if not ui_state.chestnut_present and (name := accelerators.default_big_model_name()):
+  if not ui_state.chestnut_present and ui_state.jetlink is not None and (name := ui_state.jetlink.default_model):
     return name
   return DEFAULT_BIG_MODEL
 
@@ -65,7 +64,7 @@ def big_model_state() -> str | None:
 def big_model_progress() -> tuple[str, float, str] | None:
   """(stage, 0..1, message) while an accelerator is working, else None. The message
   is carried because a stage like "waiting for the accelerator" has no meaningful fraction"""
-  progress = getattr(ui_state, 'accelerator_progress', None)
+  progress = ui_state.jetlink.progress if ui_state.jetlink is not None else None
   if not progress:
     return None
   stage = str(progress.get('stage', ''))
@@ -80,7 +79,7 @@ def carrying_model() -> tuple[str | None, str | None, str | None]:
   small slot's pick; a custom big has no automatic fallback yet -> (None, None, None)."""
   # only when no board is fitted does the chestnut state describe the jetlink view
   if not ui_state.chestnut_present and ui_state.chestnut_state == ChestnutState.ACTIVE:
-    name = accelerators.active_model_name()
+    name = ui_state.jetlink.active_model if ui_state.jetlink is not None else None
     if name is not None:
       return 'accelerator', name, name
   source = active_source()
