@@ -951,12 +951,20 @@ class TestAcceleratorLinkToggle:
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import AcceleratorLinkToggle
     from openpilot.system.ui.lib.application import MousePos
 
-    params.remove(self.PARAM)
+    params.put(self.PARAM, 2, block=True)
     toggle = AcceleratorLinkToggle()
     with mock.patch('openpilot.selfdrive.ui.sunnypilot.mici.layouts.models.ui_state.is_offroad', return_value=False):
+      # drawn disabled, as the model buttons beside it are onroad: a refused
+      # tap used to animate with nothing changing
+      assert not toggle.enabled
+      render(toggle)
       toggle._handle_mouse_release(MousePos(0, 0))
-    assert params.get(self.PARAM) is None
-    assert toggle._mode == "off", "the pills must not show a mode the param does not have"
+      assert params.get(self.PARAM) == 2
+      assert toggle._mode == "ios", "the pills must not show a mode the param does not have"
+    with mock.patch('openpilot.selfdrive.ui.sunnypilot.mici.layouts.models.ui_state.is_offroad', return_value=True):
+      assert toggle.enabled
+      toggle._handle_mouse_release(MousePos(0, 0))
+      assert params.get(self.PARAM) == 0
 
   def test_layout_hides_the_toggle_until_it_means_something(self, params):
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import ModelsLayoutMici
