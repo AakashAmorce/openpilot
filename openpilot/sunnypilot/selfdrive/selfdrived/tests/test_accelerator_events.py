@@ -11,7 +11,7 @@ EventNameSP = custom.OnroadEventSP.EventName
 
 class TestAcceleratorEvents(OpenpilotTestCase):
   """The adapter alone; the drives through SelfdriveD are traced in
-  accelerators/tests/test_selfdrived_traces.py."""
+  test_selfdrived_traces.py beside this one."""
 
   def setUp(self):
     super().setUp()
@@ -106,6 +106,7 @@ class TestOptionalProcesses(OpenpilotTestCase):
     # manager does not restart a process that died, and selfdrived's
     # processNotRunning is NO_ENTRY: the accelerator's daemon has to be one
     # selfdrived ignores, or losing it costs the drive instead of the big model
-    from openpilot.sunnypilot import accelerators
-    self.assertEqual(AcceleratorEvents.OPTIONAL_PROCESSES, {d.name for d in accelerators.daemons()})
-    self.assertIn('jetlinkd', AcceleratorEvents.OPTIONAL_PROCESSES)
+    from openpilot.sunnypilot import jetlink_adapter
+    from openpilot.system.manager.process_config import managed_processes
+    self.assertEqual(AcceleratorEvents.OPTIONAL_PROCESSES, {jetlink_adapter.OWNER})
+    self.assertIn('jetlinkd', managed_processes)

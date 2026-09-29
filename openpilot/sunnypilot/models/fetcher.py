@@ -202,9 +202,9 @@ class ModelFetcher:
 
       json_data = response.json()
       if source == "chestnut":
-        from openpilot.sunnypilot import accelerators
-        extended = accelerators.extends_catalog()
-        json_data = {**(accelerators.big_catalog(json_data) if extended else json_data), self.EXTENDED_KEY: extended}
+        from openpilot.sunnypilot import jetlink_adapter
+        extended = jetlink_adapter.should_extend_catalog()
+        json_data = {**(jetlink_adapter.extend_catalog(json_data) if extended else json_data), self.EXTENDED_KEY: extended}
       parsed = self.model_parser.parse_models(json_data)
       if parsed:
         self.model_caches[source].set(json_data)
@@ -233,8 +233,8 @@ class ModelFetcher:
     """Was the big-model catalog fetched for other hardware? A chestnut coming or going
     changes whether it is extended, and the cache would otherwise hide that for an hour.
     Once per change: offline, the refetch fails and the cache stands until it expires."""
-    from openpilot.sunnypilot import accelerators
-    extends = accelerators.extends_catalog()
+    from openpilot.sunnypilot import jetlink_adapter
+    extends = jetlink_adapter.should_extend_catalog()
     if bool(cached_data.get(self.EXTENDED_KEY)) == extends or self._refetched_extends == extends:
       return False
     self._refetched_extends = extends

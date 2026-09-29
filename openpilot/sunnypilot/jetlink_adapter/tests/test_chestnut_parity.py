@@ -17,10 +17,10 @@ from unittest import mock
 
 from jetlink.comma import gadget
 
+from openpilot.common.params import Params
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.selfdrive.selfdrived.events import big_model_failed_alert
-from openpilot.sunnypilot import accelerators
-from openpilot.sunnypilot.accelerators.jetlink import backend
+from openpilot.sunnypilot import jetlink_adapter
 from openpilot.sunnypilot.models import helpers
 from openpilot.sunnypilot.models.fetcher import ModelParser
 
@@ -41,35 +41,41 @@ class TestAlert(OpenpilotTestCase):
 
 
 class TestLinkStaysOff(OpenpilotTestCase):
+  """Through the adapter, as manager, hardwared and the UI ask, with the link set
+  to USB and a gadget that cannot come up."""
+
   def setUp(self):
-    backend._chestnut = None
-    self.addCleanup(setattr, backend, '_chestnut', None)
-    for p in (mock.patch.object(gadget, 'raw_param', return_value=b'1'),
-              mock.patch.object(gadget, 'gadget_error', return_value='not set up')):
+    super().setUp()
+    Params().put(jetlink_adapter.KEYS.link, jetlink_adapter.MODES.index('usb'), block=True)
+    for p in (mock.patch.object(gadget, 'gadget_error', return_value='not set up'),
+              mock.patch.object(jetlink_adapter, '_bound', None)):
       p.start()
       self.addCleanup(p.stop)
 
   def fitted(self, chestnut: bool):
-    backend._chestnut = None
+    jetlink_adapter._bound = None   # a process of its own: the bus walk is cached
     return mock.patch('openpilot.selfdrive.modeld.helpers.chestnut_present', return_value=chestnut)
 
-  def test_the_toggle_on_beside_a_chestnut_is_off(self):
+  def test_the_setting_on_beside_a_chestnut_is_off(self):
     with self.fitted(True):
-      self.assertFalse(accelerators.enabled())
-      self.assertFalse(accelerators.ready())
-      self.assertIsNone(accelerators.unavailable_reason())
-      (daemon,) = accelerators.daemons()
-      self.assertFalse(daemon.should_run(False, None, None))
+      self.assertFalse(jetlink_adapter.should_run(False, None, None))
+      status = jetlink_adapter.status()
+      self.assertFalse(status.enabled or status.ready)
+      self.assertIsNone(status.reason)
+      self.assertIsNone(jetlink_adapter.reason())
+      self.assertFalse(jetlink_adapter.prepare())
 
-  def test_without_one_the_toggle_decides(self):
+  def test_without_one_the_setting_decides(self):
     with self.fitted(False):
-      self.assertTrue(accelerators.enabled())
-      self.assertEqual(accelerators.unavailable_reason(), 'not set up')
+      self.assertTrue(jetlink_adapter.should_run(False, None, None))
+      self.assertEqual(jetlink_adapter.reason(), 'not set up')
+      self.assertEqual(jetlink_adapter.status().reason, 'not set up')
 
   def test_the_bus_walk_is_cached(self):
     with self.fitted(True) as probe:
       for _ in range(5):
-        accelerators.enabled()
+        jetlink_adapter.should_run(False, None, None)
+        jetlink_adapter.status()
     self.assertEqual(probe.call_count, 1)
 
 
