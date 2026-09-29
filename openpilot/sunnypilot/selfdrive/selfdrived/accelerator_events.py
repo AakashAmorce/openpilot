@@ -9,8 +9,10 @@ expects a board loaded before the first modelV2; an off-board one joins onto a
 modelV2 the small model already publishes and can leave and come back.
 
 It swaps in only while nothing is in control, so the driver is told when it is
-ready and re-engages to use it. When it leaves, the small model drives on and
-the driver is told to take control; nothing disengages.
+ready and re-engages to use it. For a second after a swap nothing engages while
+the large model builds its history, and the "Big Model Active" chime at the end
+of it says the driver can. When it leaves, the small model drives on and the
+driver is told to take control; nothing disengages.
 """
 import openpilot.cereal.messaging as messaging
 from openpilot.cereal import custom
@@ -24,7 +26,9 @@ AcceleratorState = custom.ModelDataV2SP.AcceleratorState
 
 # how long each event is raised for, in selfdrived's ticks. The take-control
 # warning covers about the time the small model takes to refill its history;
-# the no-entry after a swap, about 20 frames of the large model's
+# the no-entry after a swap, about 20 frames of the large model's. An enable
+# inside that second is not lost: cruise is refused and pressed again after
+# the chime, and MADS goes to paused and resumes by itself (mads/state.py)
 OFFER_TICKS = round(3. / DT_CTRL)
 HANDBACK_TICKS = round(5. / DT_CTRL)
 SWITCHING_TICKS = round(1. / DT_CTRL)
@@ -55,9 +59,10 @@ class AcceleratorEvents:
         # screen after the switch read as if it had not happened
         self.offered = False
         self.offer = 0
-      elif in_control and not self.offered:
+      elif in_control and not self.offered and self.handback == 0:
         # with nothing in control it swaps in at once and bigModelReady says
-        # so. Once per readiness, not at every stop
+        # so. Once per readiness, not at every stop, and after the take-control
+        # warning, which would hide it
         self.offered = True
         self.offer = OFFER_TICKS
 
@@ -65,9 +70,11 @@ class AcceleratorEvents:
     running_big = sm.alive['modelV2'] and sm.valid['modelV2'] and big and \
       status.acceleratorState != AcceleratorState.none
     if running_big and not self.big_model_running:
-      self.switching = SWITCHING_TICKS
-    elif self.big_model_running and not running_big and in_control:
-      self.handback = HANDBACK_TICKS
+      self.switching = SWITCHING_TICKS + 1   # the no-entry, then the chime
+    elif self.big_model_running and not running_big:
+      self.switching = 0
+      if in_control:
+        self.handback = HANDBACK_TICKS
     self.big_model_running = running_big
     if not in_control:
       self.handback = 0
@@ -79,7 +86,13 @@ class AcceleratorEvents:
       self.handback -= 1
       events_sp.add(EventNameSP.bigModelLinkLost)
     if self.switching > 0:
-      # upstream's no-entry for a big model that is not ready to drive. Native,
-      # since the main state machine reads only native events; MADS reads both
       self.switching -= 1
-      events.add(EventName.bigModelLoading)
+      # the native block's chime on the swap waits for the end of the second,
+      # when it means the driver can engage
+      events_sp.remove(EventNameSP.bigModelReady)
+      if self.switching:
+        # upstream's no-entry for a big model that is not ready to drive.
+        # Native, since the main state machine reads only native events
+        events.add(EventName.bigModelLoading)
+      else:
+        events_sp.add(EventNameSP.bigModelReady)

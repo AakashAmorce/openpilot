@@ -2,7 +2,7 @@ from openpilot.cereal import custom, messaging
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager
 from openpilot.selfdrive.selfdrived.events import Events, ET
-from openpilot.sunnypilot.selfdrive.selfdrived.accelerator_events import AcceleratorEvents, OFFER_TICKS
+from openpilot.sunnypilot.selfdrive.selfdrived.accelerator_events import AcceleratorEvents, HANDBACK_TICKS, OFFER_TICKS
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EVENTS_SP, EventsSP
 
 EventName = custom.OnroadEventSP.EventName
@@ -90,7 +90,7 @@ class TestBigModelAvailability(OpenpilotTestCase):
     for frame in range(4 * OFFER_TICKS):
       big = frame >= 50
       self.update(available=not big, big=big, enabled=True)
-      am.add_many(frame, self.events_sp.create_alerts([ET.PERMANENT], []))
+      am.add_many(frame, self.events_sp.create_alerts([ET.PERMANENT], [None, None, self.sm, False, 0, None]))
       am.process_alerts(frame, set())
       shown.append((am.current_alert.alert_text_1, am.current_alert.alert_text_2))
     offer = ("Big Model Ready", "Re-engage to switch")
@@ -99,9 +99,21 @@ class TestBigModelAvailability(OpenpilotTestCase):
 
   def test_it_rearms_after_the_link_goes_and_comes_back(self):
     self.assertTrue(self.update(available=True, enabled=True))
-    self.assertFalse(self.update(big=True, enabled=True))   # swapped at a window, then...
-    self.assertFalse(self.update(enabled=True))             # lost, waiting to reconnect
+    self.assertFalse(self.update(big=True))   # swapped at a window, then...
+    self.assertFalse(self.update())           # lost, waiting to reconnect
     self.assertTrue(self.update(available=True, enabled=True))
+
+  def test_after_a_loss_while_engaged_it_waits_for_the_warning(self):
+    # a join that held rejoins in a second, inside the 5 s take-control
+    # warning, which is the higher priority: an offer under it is never seen
+    self.update(big=True, enabled=True)
+    self.assertFalse(self.update(enabled=True))
+    waited = 0
+    while not self.update(available=True, enabled=True):
+      waited += 1
+      self.assertLess(waited, 2 * HANDBACK_TICKS)
+    self.assertEqual(waited, HANDBACK_TICKS - 1)
+    self.assertEqual(self.offered_for(available=True, enabled=True), OFFER_TICKS - 1)
 
   def test_chestnut_and_old_messages_do_not_announce_availability(self):
     self.assertEqual(custom.ModelDataV2SP.new_message().acceleratorState, 'none')
@@ -134,6 +146,16 @@ class TestBigModelAvailability(OpenpilotTestCase):
     self.assertFalse(self.update(available=True, enabled=True))
     self.assertFalse(self.update(enabled=True))  # an explicit loss rearms it
     self.assertTrue(self.update(available=True, enabled=True))
+
+  def test_the_offer_and_the_chime_after_the_switch_read_differently(self):
+    offer = EVENTS_SP[EventName.bigModelAvailable][ET.PERMANENT]
+    chime = EVENTS_SP[EventName.bigModelReady][ET.PERMANENT]
+    self.sm['modelDataV2SP'].acceleratorState = 'running'
+    self.assertEqual(chime(None, None, self.sm, False, 0, None).alert_text_1, 'Big Model Active')
+    self.assertNotEqual(offer.alert_text_1, 'Big Model Active')
+    # a chestnut's is still "Big Model Ready"
+    self.sm['modelDataV2SP'].acceleratorState = 'none'
+    self.assertEqual(chime(None, None, self.sm, False, 0, None).alert_text_1, 'Big Model Ready')
 
   def test_notification_has_no_control_effect(self):
     alerts = EVENTS_SP[EventName.bigModelAvailable]

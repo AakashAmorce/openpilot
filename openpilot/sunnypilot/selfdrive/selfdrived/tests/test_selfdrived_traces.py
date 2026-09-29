@@ -122,13 +122,14 @@ class JetlinkTrace(TraceTest):
     # and not again, stopped or not
     self.assertEqual(set(map(str, ready[OFFER_TICKS:])), {str(([INIT], []))})
     self.assertEqual(self.step(state=AcceleratorState.ready, standstill=True), ([INIT], []))
-    # the driver turns everything off: it swaps. One chime, and a second in
-    # which nothing engages while the large model builds its history
+    # the driver turns everything off: it swaps. A second in which nothing
+    # engages while the large model builds its history, then one chime, which
+    # now means the driver can engage
     self.engage()
     swap = self.steps(SWITCHING_TICKS + 10, state=AcceleratorState.running, big=True)
-    self.assertEqual(swap[0], ([INIT, 'bigModelLoading'], ['bigModelReady']))
-    self.assertEqual(swap[1:SWITCHING_TICKS], [([INIT, 'bigModelLoading'], [])] * (SWITCHING_TICKS - 1))
-    self.assertEqual(set(map(str, swap[SWITCHING_TICKS:])), {str(([INIT], []))})
+    self.assertEqual(swap[:SWITCHING_TICKS], [([INIT, 'bigModelLoading'], [])] * SWITCHING_TICKS)
+    self.assertEqual(swap[SWITCHING_TICKS], ([INIT], ['bigModelReady']))
+    self.assertEqual(set(map(str, swap[SWITCHING_TICKS + 1:])), {str(([INIT], []))})
     # re-engaged on the large model, the link drops: the warning, and nothing
     # native, so neither state machine is told to disengage
     self.engage(enabled=True, mads=True)

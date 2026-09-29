@@ -163,29 +163,75 @@ class TestSwitching(AcceleratorEventsTest):
   empty history. Upstream's bigModelLoading no-entry, which both state
   machines read."""
 
-  def test_a_second_of_no_entry_after_a_swap(self):
+  def test_a_second_of_no_entry_after_a_swap_then_the_chime(self):
     self.step(state='ready')
     self.assertEqual(self.step(state='running', big=True), {'bigModelLoading'})
     self.assertEqual(1 + self.ticks_with('bigModelLoading', state='running', big=True), SWITCHING_TICKS)
     self.assertEqual(SWITCHING_TICKS, 100)
     self.assertIn(ET.NO_ENTRY, EVENTS[EventName.bigModelLoading])
 
-  def test_it_keeps_the_real_state_machines_out_and_then_lets_them_in(self):
+  def test_the_chime_waits_for_the_end_of_the_second(self):
+    # selfdrived's native block raises it on the swap; it now says "engage now"
+    self.step(state='ready')
+    heard = []
+    for tick in range(SWITCHING_TICKS + 10):
+      self.events.clear()
+      self.events_sp.clear()
+      if tick == 0:
+        self.events_sp.add(EventNameSP.bigModelReady)   # the native block, on modelV2.big's edge
+      self.sm['modelDataV2SP'].acceleratorState = 'running'
+      self.sm['modelV2'].big = True
+      self.accel.update(self.sm, False, self.events, self.events_sp)
+      heard.append(EventNameSP.bigModelReady in self.events_sp.names)
+    self.assertEqual([i for i, h in enumerate(heard) if h], [SWITCHING_TICKS])
+
+  def test_a_fall_inside_the_second_ends_it_without_the_chime(self):
+    self.step(state='ready')
+    for _ in range(10):
+      self.step(state='running', big=True)
+    self.assertEqual(self.step(state='retrying'), set())
+    for _ in range(SWITCHING_TICKS):
+      self.assertEqual(self.step(state='retrying'), set())
+
+  def drive_presses(self, press_at: int, ticks: int = SWITCHING_TICKS + 40):
+    """A swap at tick 0, then one press of cruise and one of MADS at `press_at`,
+    as a car sends them: an edge, never repeated. What paused MADS resumes on,
+    silentLkasEnable, is raised while it is paused, as mads.update_events does
+    with no brake held. Returns (main, MADS) engaged at every tick."""
     main = StateMachine()
     selfdrive = SimpleNamespace(state_machine=main, events=self.events, events_sp=self.events_sp, enabled=False)
     madsm = MadsStateMachine(SimpleNamespace(selfdrive=selfdrive, button_owns_lateral=False))
     self.step(state='ready')
-    for tick in range(SWITCHING_TICKS + 1):
-      self.step(state='running', big=True)
-      # the driver presses to engage cruise and lateral on every tick
-      self.events.add(EventName.buttonEnable)
-      self.events_sp.add(EventNameSP.lkasEnable)
+    engaged = []
+    for tick in range(ticks):
+      self.step(state='running', big=True, enabled=selfdrive.enabled, mads=madsm.state != MadsState.disabled)
+      if tick == press_at:
+        self.events.add(EventName.buttonEnable)
+        self.events_sp.add(EventNameSP.lkasEnable)
+      if madsm.state == MadsState.paused:
+        self.events_sp.add(EventNameSP.silentLkasEnable)
       enabled, _ = main.update(self.events)
       selfdrive.enabled = enabled
-      mads_enabled, _ = madsm.update()
-      if tick < SWITCHING_TICKS:
-        self.assertFalse(enabled or mads_enabled, f"engaged {tick} ticks after the swap")
-    self.assertTrue(enabled and mads_enabled)
+      _, mads_active = madsm.update()
+      engaged.append((enabled, mads_active, madsm.state))
+    return engaged
+
+  def test_one_press_inside_the_second_is_not_lost(self):
+    # 2026-09-29: main went on 0.27 s after a swap. MADS's enable is the main-on
+    # edge; refused, it would have left MADS off with main on
+    engaged = self.drive_presses(press_at=27)
+    self.assertEqual(engaged[27][:2], (False, False))
+    self.assertEqual(engaged[27][2], MadsState.paused)
+    self.assertTrue(all(state == MadsState.paused for _, _, state in engaged[27:SWITCHING_TICKS]))
+    # MADS steers from the end of the second, with no second press; cruise was
+    # refused, as a no-entry does, and waits for the driver's next press
+    self.assertEqual(engaged[SWITCHING_TICKS][:2], (False, True))
+    self.assertEqual(engaged[-1][:2], (False, True))
+
+  def test_one_press_after_the_second_engages_both(self):
+    engaged = self.drive_presses(press_at=SWITCHING_TICKS + 5)
+    self.assertEqual(engaged[SWITCHING_TICKS + 4][:2], (False, False))
+    self.assertEqual(engaged[SWITCHING_TICKS + 5][:2], (True, True))
 
   def test_a_chestnut_never_switches_like_this(self):
     self.step(state='none')
