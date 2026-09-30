@@ -30,12 +30,14 @@ LINK_MODE_LABELS = {"off": "off", "usb": "usb: mac, linux", "ios": "iOS: iPhone,
 
 class AcceleratorLinkToggle(BigMultiToggle):
   """off, usb, ios, a pill each, and the value line says what the mode is for.
-  The pills follow the param, not a tap: taps are refused onroad."""
+  The pills follow the param, not a tap. Locked while onroad and drawn so, like
+  the model buttons beside it: jetlink switches the link only parked."""
 
   def __init__(self):
     super().__init__(tr("accelerator link"), [tr(LINK_MODE_LABELS[m]) for m in LINK_MODES])
     self._mode = link_mode()
     self._show()
+    self.set_enabled(lambda: ui_state.is_offroad())
 
   def _show(self) -> None:
     value = self._options[LINK_MODES.index(self._mode)]
@@ -44,7 +46,7 @@ class AcceleratorLinkToggle(BigMultiToggle):
 
   def _handle_mouse_release(self, mouse_pos) -> None:
     BigButton._handle_mouse_release(self, mouse_pos)
-    if ui_state.is_offroad():
+    if self.enabled:
       self._mode = LINK_MODES[(LINK_MODES.index(self._mode) + 1) % len(LINK_MODES)]
       ui_state.params.put(LINK_PARAM, LINK_MODES.index(self._mode), block=True)
     self._show()

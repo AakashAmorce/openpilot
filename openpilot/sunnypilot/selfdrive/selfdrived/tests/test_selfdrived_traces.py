@@ -8,23 +8,20 @@ Every event a big model raises, in order, for three drives.
 
 Asserted as the whole list at every step, native and sunnypilot together,
 because the failures that reached the car were extra events: a "Big Model
-Ready" chime after a failed load, and a jetlink drive raising the native
-bigModelFailed beside the link-lost alert.
+Ready" chime after a failed load, the native bigModelFailed (upstream's
+"Restart the car to retry") on a jetlink drive, and an offer to switch shown
+again after the switch.
 
 Three traces, all through the real SelfdriveD.update_events with the
 accelerator adapter in place:
 
   (a) a chestnut that loads:   loading, then one chime on the first big frame
   (b) a chestnut that fails:   loading, one failure, and never a chime
-  (c) a jetlink that joins:    loading while modelV2 is held back, one chime
-                               when it promotes, and on a fall while engaged
-                               the native bigModelFailed beside bigModelLinkLost
-                               on every tick until the driver disengages
-
-The pair in (c) is deliberate. The main state machine consumes native events
-only and cancels a soft disable the tick its event goes away, so a one-tick
-sunnypilot event never disabled anything and the car stayed engaged on a 5 m
-plan. bigModelLinkLost is what MADS reads and carries the guidance.
+  (c) a jetlink that joins:    the offer to switch once while engaged, one
+                               chime when it swaps in with nobody in control
+                               and a second of no-entry, and on a fall while
+                               engaged the take-control warning for 5 s and
+                               nothing native: the small model drives on
 
 update_events runs as far as its initialization gate, past the big model
 block and the adapter call and short of everything needing a car.
@@ -35,6 +32,7 @@ from types import SimpleNamespace
 from openpilot.cereal import custom
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.selfdrive.selfdrived.events import EVENT_NAME
+from openpilot.sunnypilot.selfdrive.selfdrived.accelerator_events import HANDBACK_TICKS, OFFER_TICKS, SWITCHING_TICKS
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EVENT_NAME_SP
 from openpilot.sunnypilot.selfdrive.selfdrived.tests.selfdrived_helpers import make_selfdrived
 
@@ -100,43 +98,63 @@ class JetlinkTrace(TraceTest):
   """A Jetson on its own power: it joins onto a modelV2 the small model owns.
 
   Nothing in this trace writes ChestnutLoading or ChestnutActive - the joining
-  state stopped doing that - so the native block sees a device with no board
-  and stays silent for the whole drive. Everything said is said by the
-  adapter, from modelV2.big and modelDataV2SP.acceleratorState.
+  state never does - so the native block sees a device with no board and
+  stays silent for the whole drive. Everything said is said by the adapter,
+  from modelV2.big and modelDataV2SP.acceleratorState.
   """
 
   def setUp(self):
     self.sd = make_selfdrived(chestnut_present=False, enabled=True)
 
-  def test_trace_c_join_promote_and_lose_the_link(self):
-    # Joining before camerad and modeld have a frame out: the same block on
-    # the driver as a chestnut load, and for the same reason.
-    self.assertEqual(self.step(state=AcceleratorState.joining, alive=False), ([INIT, 'bigModelLoading'], []))
-    # modelV2 starts publishing on the small model. The join carries on in the
-    # background and stops blocking the moment there is something to drive on.
+  def engage(self, enabled=False, mads=False):
+    self.sd.enabled, self.sd.mads.enabled = enabled, mads
+
+  def steps(self, n, **kwargs):
+    return [self.step(**kwargs) for _ in range(n)]
+
+  def test_trace_c_join_switch_and_lose_the_link(self):
+    # modelV2 publishes on the small model from the first frame; the join
+    # carries on in the background and blocks nothing
     self.assertEqual(self.step(state=AcceleratorState.joining), ([INIT], []))
-    # The promotion gate: a big model is there, waiting for a disengagement.
-    self.assertEqual(self.step(state=AcceleratorState.ready), ([INIT], ['bigModelAvailable']))
-    self.assertEqual(self.step(state=AcceleratorState.ready), ([INIT], []))
-    # and again at a stop: carState's standstill reaches the adapter
-    self.assertEqual(self.step(state=AcceleratorState.ready, standstill=True), ([INIT], ['bigModelAvailable']))
-    # It swaps. One chime, from modelV2.big and nothing else.
-    self.assertEqual(self.step(state=AcceleratorState.running, big=True), ([INIT], ['bigModelReady']))
-    for _ in range(10):
-      self.assertEqual(self.step(state=AcceleratorState.running, big=True), ([INIT], []))
-    # the link drops while engaged: both events on every tick, both from the
-    # adapter. The native one walks the main state machine through its 3 s
-    # soft disable; a single tick of either would be cancelled the next
-    for _ in range(10):
-      self.assertEqual(self.step(state=AcceleratorState.retrying), ([INIT, 'bigModelFailed'], ['bigModelLinkLost']))
-    # The soft disable lands and the driver is out. Nothing more is said.
-    self.sd.enabled = False
-    for _ in range(10):
-      self.assertEqual(self.step(state=AcceleratorState.retrying), ([INIT], []))
-    # And it comes back, which a chestnut never does.
-    self.assertEqual(self.step(state=AcceleratorState.running, big=True), ([INIT], ['bigModelReady']))
-    self.sd.enabled = True
+    # ready while engaged: the offer, once, for its three seconds
+    ready = self.steps(OFFER_TICKS + 200, state=AcceleratorState.ready)
+    self.assertEqual(ready[:OFFER_TICKS], [([INIT], ['bigModelAvailable'])] * OFFER_TICKS)
+    # and not again, stopped or not
+    self.assertEqual(set(map(str, ready[OFFER_TICKS:])), {str(([INIT], []))})
+    self.assertEqual(self.step(state=AcceleratorState.ready, standstill=True), ([INIT], []))
+    # the driver turns everything off: it swaps. A second in which nothing
+    # engages while the large model builds its history, then one chime, which
+    # now means the driver can engage
+    self.engage()
+    swap = self.steps(SWITCHING_TICKS + 10, state=AcceleratorState.running, big=True)
+    self.assertEqual(swap[:SWITCHING_TICKS], [([INIT, 'bigModelLoading'], [])] * SWITCHING_TICKS)
+    self.assertEqual(swap[SWITCHING_TICKS], ([INIT], ['bigModelReady']))
+    self.assertEqual(set(map(str, swap[SWITCHING_TICKS + 1:])), {str(([INIT], []))})
+    # re-engaged on the large model, the link drops: the warning, and nothing
+    # native, so neither state machine is told to disengage
+    self.engage(enabled=True, mads=True)
     self.assertEqual(self.step(state=AcceleratorState.running, big=True), ([INIT], []))
+    lost = self.steps(HANDBACK_TICKS + 10, state=AcceleratorState.retrying)
+    self.assertEqual(lost[:HANDBACK_TICKS], [([INIT], ['bigModelLinkLost'])] * HANDBACK_TICKS)
+    self.assertEqual(set(map(str, lost[HANDBACK_TICKS:])), {str(([INIT], []))})
+    # it comes back, which a chestnut never does, and waits for the next window
+    self.assertEqual(self.step(state=AcceleratorState.ready), ([INIT], ['bigModelAvailable']))
+
+  def test_mads_on_at_a_stop_keeps_it_waiting(self):
+    # lateral paused at a standstill is still MADS engaged: the offer, and no
+    # swap until the driver turns it off (the adapter's gate reads the same)
+    self.engage(mads=True)
+    self.assertEqual(self.step(state=AcceleratorState.ready, standstill=True), ([INIT], ['bigModelAvailable']))
+
+  def test_a_mads_only_loss_warns(self):
+    self.engage(mads=True)
+    self.steps(SWITCHING_TICKS + 1, state=AcceleratorState.running, big=True)
+    self.assertEqual(self.step(state=AcceleratorState.retrying), ([INIT], ['bigModelLinkLost']))
+
+  def test_a_loss_with_nothing_in_control_says_nothing(self):
+    self.engage()
+    self.steps(SWITCHING_TICKS + 1, state=AcceleratorState.running, big=True)
+    self.assertEqual(self.steps(10, state=AcceleratorState.retrying), [([INIT], [])] * 10)
 
   def test_nothing_is_said_on_a_device_with_no_accelerator_at_all(self):
     for _ in range(10):

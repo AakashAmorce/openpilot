@@ -5,9 +5,9 @@ This file is part of zoompilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 
 A chestnut on this branch behaves as it does on sunnypilot, except where
-zoompilot does it better: the link stays off beside it, its failure says to
-restart as upstream's does, and a pick whose files are missing is kept while
-the Default big model drives.
+zoompilot does it better: the link stays off beside it, its failure is
+upstream's own event and text, and a pick whose files are missing is kept
+while the Default big model drives.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from jetlink.comma import gadget
 
 from openpilot.common.params import Params
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.selfdrive.selfdrived.events import big_model_failed_alert
+from openpilot.selfdrive.selfdrived.events import EVENTS, ET, EventName
 from openpilot.sunnypilot import jetlink_adapter
 from openpilot.sunnypilot.models import helpers
 from openpilot.sunnypilot.models.fetcher import ModelParser
@@ -27,17 +27,12 @@ from openpilot.sunnypilot.models.fetcher import ModelParser
 REF = 'b' * 40
 
 
-def failed_text(chestnut: bool) -> str:
-  sm = {'deviceState': SimpleNamespace(chestnutPresent=chestnut)}
-  return big_model_failed_alert(None, None, sm, True, 0, None).alert_text_2
-
-
 class TestAlert(OpenpilotTestCase):
   def test_a_chestnut_is_told_to_restart_as_upstream_says(self):
-    self.assertEqual(failed_text(True), "Restart the car to retry,\nsmall model is still available")
-
-  def test_an_accelerator_is_not(self):
-    self.assertEqual(failed_text(False), "Small model is still available")
+    # only a chestnut raises it; an accelerator's loss is bigModelLinkLost,
+    # a warning with the small model driving on (accelerator_events)
+    alert = EVENTS[EventName.bigModelFailed][ET.PERMANENT]
+    self.assertEqual(alert.alert_text_2, "Restart the car to retry,\nsmall model is still available")
 
 
 class TestLinkStaysOff(OpenpilotTestCase):
