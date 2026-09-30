@@ -159,7 +159,13 @@ class IntelligentCruiseButtonManagement:
   def update_calculations(self, CS: car.CarState, LP_SP: custom.LongitudinalPlanSP) -> None:
     speed_conv = CV.MS_TO_KPH if self.is_metric else CV.MS_TO_MPH
 
-    self.limiter_active = LP_SP.longitudinalPlanSource != LongitudinalPlanSource.cruise
+    limiter_active = LP_SP.longitudinalPlanSource != LongitudinalPlanSource.cruise
+    if limiter_active and not self.limiter_active:
+      # a limiter that comes on after a driver SET+ is new information, not what the driver
+      # overrode: route 260 t=1059, cruise set to 40 then a 34 mph curve, the car accelerated
+      # into it for 5 s while the grace parked the down moves
+      self.down_grace_timer = 0
+    self.limiter_active = limiter_active
 
     v_target_ms = LP_SP.vTarget
     if self.CP.openpilotLongitudinalControl and LP_SP.longitudinalPlanSource in OP_LONG_PLANNER_SOURCES:

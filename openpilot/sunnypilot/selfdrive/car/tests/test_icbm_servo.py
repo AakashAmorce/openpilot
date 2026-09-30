@@ -261,6 +261,19 @@ class TestRestoreResponsiveness:
     assert any(s in (SendButtonState.decrease, SendButtonState.decreaseHold) for s in resumed), \
       "servo never resumed after the grace window"
 
+  def test_limiter_onset_after_the_press_is_not_parked(self):
+    """SET+ on plain cruise, then a curve limiter comes on: the servo follows it at once
+    (route 260 t=1059: the car accelerated into a 34 mph curve for the whole grace window)."""
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(40, 40, n=60, icbm=icbm, source='cruise', v_ego_mph=35.)
+    press = [ButtonEvent(type=ButtonType.accelCruise, pressed=True)]
+    release = [ButtonEvent(type=ButtonType.accelCruise, pressed=False)]
+    self.run_frames(40, 40, n=5, icbm=icbm, source='cruise', v_ego_mph=35., button_events=press)
+    self.run_frames(40, 40, n=1, icbm=icbm, source='cruise', v_ego_mph=35., button_events=release)
+    sends = self.run_frames(28, 40, n=100, icbm=icbm, v_ego_mph=36., a_target=-0.6)
+    assert any(s in (SendButtonState.decrease, SendButtonState.decreaseHold) for s in sends), \
+      "servo parked a fresh curve limiter behind the driver's earlier SET+"
+
   def test_driver_down_press_ends_grace(self):
     """A SET- press is aligned intent and cancels the SET+ grace immediately."""
     icbm = self.make_icbm(brand="mazda")

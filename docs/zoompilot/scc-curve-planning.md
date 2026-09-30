@@ -78,11 +78,15 @@ car brakes, not how hard: an over-read at range is walked back by the same solve
 second later, and on a straight road it multiplies a kappa of zero.
 
 The near field (the near window below) is measured, not predicted, and keeps raw
-geometry. `_near_floor` stops the correction outvoting it: going under the near
-requirement is allowed only when the raw path genuinely reports something tighter
-further out (`_NEAR_FLOOR_FRAC = 0.98` against curvature noise). Without it a
-constant-radius curve inflates its own far half while the car is inside it and the car
-settles below the speed the road requires for the length of the curve.
+geometry for what it decides (escalation, the hold, the UI). It no longer floors the
+target: a `_near_floor` that refused to command below the raw near requirement was
+what released the planner on route 260 (big model): the bend held its 30 mph target from
+140 m down to 50 m, then the raw read inside the 4 s window (0.68-0.77 of the true
+curvature at 40-60 m, the corpus lower quartile) floored the target at 34-36 mph and the
+car entered at 2.5 m/s^2. Without the floor the corpus route sim takes hot road curves
+from 64 to 59 of 138 on the small model (old servo 61) and 4 to 3 of 11 on the big one,
+for 4 more small-model curves slightly under speed; the constant-radius over-slowing it
+guarded against did not show.
 
 ### The fitted band
 
@@ -175,7 +179,7 @@ to the budget (`publish_ramp`).
 
 ## Planning margin
 
-`_PLAN_MARGIN = 0.95`: plan to 95% of the 2.0 m/s^2 ceiling so actuation lag lands the
+`_PLAN_MARGIN = 0.95`: plan to 95% of the 1.8 m/s^2 ceiling so actuation lag lands the
 apex on it instead of over it. Swept against the corpus: at 1.0 the sim leaves 13% of
 fair apexes above 2.2 m/s^2; at 0.95 that drops to 5% for 1.4% of speed given up.
 
@@ -188,8 +192,7 @@ state machine (`entering`, `turning`, `leaving`) is display-only.
 
 Near convergence a bumper-distance constraint makes `required_decel` scream through its
 distance floor (`D_FLOOR = 0.5 m`), so the published request is capped at the unit-gain
-pull to the lowest profile speed ahead, and at the pull to the near floor so the two
-channels agree.
+pull to the lowest profile speed ahead, the same bound the v target uses.
 
 ### Commit hold below 50 mph
 
@@ -203,9 +206,7 @@ So on stock ACC below `_HOLD_V_MAX` (22.4 m/s, 50 mph) a bend that has bound (`a
 30% of the budget or more) for `_HOLD_SEEN_T = 2.0 s` is latched with its profile speed and
 remaining distance, and held until the near window reaches it; a deeper bend replaces it. The
 held bend keeps the solver active, caps `vAheadMin`, and asks for the budget at most, like any
-prediction. It also counts as raw path for `_near_floor`, since the raw path reported it
-before the read dropped it: comparing only the live raw path let any curved near path void
-the hold. The latch clears when the near window reaches the bend, on release, at 50 mph, and
+prediction. The latch clears when the near window reaches the bend, on release, at 50 mph, and
 never runs on openpilot long.
 
 A phantom binds for a frame or two, a real bend for seconds before the read drops it. Latch
@@ -352,12 +353,11 @@ for every brand with a measured plant (`icbm.md`).
 | name | value | measurement | route |
 |---|---|---|---|
 | `TUNED_BRANDS` | `('mazda',)` | brands with a measured stock ACC response | n/a |
-| `_A_LAT_REG_MAX` | 2.0 m/s^2 | lateral acceleration ceiling | n/a |
+| `_A_LAT_REG_MAX` | 1.8 m/s^2 | lateral ceiling; 2.0 until 09-30, when route 260's entries felt late and hot (apexes 2.1-2.4); at 1.8 the sim enters them at 1.5-2.2, 1-2 mph slower, about a second earlier | route 260 |
 | `_PLAN_MARGIN` | 0.95 | 13% -> 5% of fair apexes above 2.2 for 1.4% speed | corpus sim |
 | `COMMIT_FRAC` | 0.7 | swept with the margin | corpus sim |
 | `_RELEASE_FRAC` | 0.3 | hysteresis against gate chatter | n/a |
 | `_NEAR_T` / `_NEAR_T_BIG` | 3.0 s / 4.0 s | small read holds to 3 s, a 4 s window takes past-budget phantoms 0.3 -> 1.2/h above 50 mph; big's 3-4 s band reads and flags like small's 2-3 s | 74 h corpus: small 27 h, big 6.4 h |
-| `_NEAR_FLOOR_FRAC` | 0.98 | curvature noise band | n/a |
 | `_KAPPA_BIAS_D` / `_GAIN` | 0..110 m -> 1.0..1.5 | ratio 1.00 / 0.79 / 0.30 at 30 / 80 / 130 m, cap where replay stops buying apexes | route 135, 26 apexes |
 | `_KAPPA_BIAS_V_BP` | 22.4 to 26.8 m/s | fitted on a 30 to 50 mph road | route 135 |
 | `_ESCALATION_V_BP` | 22.4 to 26.8 m/s set speed | near-field ceiling fades to the budget; at 60+ escalation bought 1 hot curve in 13 for p10 -0.99 vs -0.73 | route sim |
@@ -399,8 +399,16 @@ for every brand with a measured plant (`icbm.md`).
   the planner had already released, so there was nothing to floor.
 - A 1.5 s hold latch. 8 of 228 straights lost over 5 mph, against 3 at 2.0 s and the old
   servo's 5.
-- Checking the near floor against the live raw path alone. Any curved near path voided the
-  commit hold.
+- The near floor itself. It voided the commit hold on any curved near path, and on the
+  big model it released a correctly seen bend at 45 m (above).
+- A big-model gain fitted by seconds ahead (1.0 to 1.40 at 5 s, faded out over 40-50 mph).
+  The fit is sound on the corpus but on route 260 it entered the curves 1-2 mph hotter than
+  the shared distance table, because the fade removed most of the correction at 40-45 mph;
+  the by-range tables are in the session's bigbias_report.txt.
+- Commit fraction 0.6 and 0.5: one curve 1 mph better, the rest identical. The bend is seen
+  with the required decel already past the gate, so the gate is not what is late.
+- Latching the hold at the raw apex distance, or ending it at 2 s instead of the near window:
+  nothing on the corpus or on route 260.
 - A vision veto in place of the map confirmation time. It would drop every phantom seen,
   but on real curves at 40+ mph vision agreed with the map a median 3.7 s (up to 12.2 s)
   after the target appeared.

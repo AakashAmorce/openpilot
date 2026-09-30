@@ -25,8 +25,8 @@ from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.zoompilot.
 
 V_EGO = 20.
 SETPOINT = 20.
-CURVE_KAPPA = 0.02  # r = 50 m -> allowed 10 m/s at the 2.0 ceiling
-CURVE_V = 10.
+CURVE_KAPPA = 0.02  # r = 50 m -> allowed sqrt(1.8 / 0.02) = 9.5 m/s at the 1.8 ceiling, 9.25 planned (0.95 margin)
+CURVE_V = 9.5
 
 
 def make_cp(op_long: bool = True) -> structs.CarParams:
@@ -36,7 +36,7 @@ def make_cp(op_long: bool = True) -> structs.CarParams:
 
 # What the model does to curvature with range, measured over 26 apexes on route 135 (see
 # vision_controller._KAPPA_BIAS_GAIN). A test road rendered without it is a perfect sensor,
-# which the correction is deliberately a no-op against.
+# which the correction over-reads: past 30 m it plans the road up to 1.5x tighter than it is.
 ATTENUATION_D = [0., 30., 50., 70., 90., 110., 130., 200.]
 ATTENUATION = [1.0, 0.94, 0.88, 0.79, 0.66, 0.55, 0.30, 0.30]
 

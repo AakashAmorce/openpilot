@@ -104,11 +104,12 @@ class TestBrakeAtBudget(VisionCase):
 class TestArriveAtAllowedSpeed(VisionCase):
 
   def test_holds_allowed_speed_inside_the_curve(self):
-    # approach a touch fast, curve at the bumper
-    self.run_road(12., curve_at(0.), cur_curvature=CURVE_KAPPA)
+    # approach a touch fast, curve at the bumper, read as the model reports it: on a perfect
+    # sensor the gain reads the curve's own far half 1.44x tighter at 95 m and plans 7.7 m/s
+    self.run_road(12., curve_at(0.), cur_curvature=CURVE_KAPPA, attenuate=True)
     assert self.scc_v.is_active
     # settled at the allowed speed: hold it, do not re-accelerate toward the setpoint
-    self.run_road(CURVE_V, curve_at(0.), cur_curvature=CURVE_KAPPA, n=2)
+    self.run_road(CURVE_V, curve_at(0.), cur_curvature=CURVE_KAPPA, n=2, attenuate=True)
     assert self.scc_v.state == VisionState.turning
     assert abs(self.scc_v.output_v_target - CURVE_V) < 1.0
 
@@ -120,7 +121,7 @@ class TestArriveAtAllowedSpeed(VisionCase):
     assert self.scc_v.output_v_target == V_CRUISE_UNSET
 
   def test_hairpin_floors_at_min_v(self):
-    # kappa 0.12 allows 4.1 m/s, below the 20 km/h operating floor
+    # kappa 0.12 allows 3.9 m/s at the 1.8 ceiling, below the 20 km/h operating floor
     self.run_road(6., curve_at(0., kappa=0.12), cur_curvature=0.12)
     assert self.scc_v.is_active
     assert self.scc_v.output_v_target == MIN_V
@@ -133,7 +134,7 @@ class TestFarFieldCurvatureBias(VisionCase):
     # planned speed back toward the truth instead of planning for the corner it was told
     road = curve_at(110., kappa=0.012)
     self.run_road(V_EGO, road, attenuate=True)
-    truth = (2.0 * 0.95 / 0.012) ** 0.5
+    truth = (1.8 * 0.95 / 0.012) ** 0.5
     with patch_gain([1.0] * len(vision_controller._KAPPA_BIAS_GAIN)):
       raw = SmartCruiseControlVision(make_cp())
       self.run_road(V_EGO, road, scc=raw, attenuate=True)
@@ -154,24 +155,8 @@ class TestFarFieldCurvatureBias(VisionCase):
     assert not raw.is_active
     assert self.scc_v.a_required > raw.a_required
 
-  def test_near_field_is_never_outvoted(self):
-    # a constant-radius curve the car is already in: the far half of the SAME curve is
-    # attenuated, so correcting it would settle the car below the speed the road requires.
-    # The near floor holds it at the true allowed speed.
-    self.run_road(12., curve_at(0.), cur_curvature=CURVE_KAPPA, attenuate=True)
-    self.run_road(CURVE_V, curve_at(0.), cur_curvature=CURVE_KAPPA, n=2, attenuate=True)
-    # the near field plans at the margin, and that is exactly where it settles
-    near_allowed = (2.0 * 0.95 / CURVE_KAPPA) ** 0.5
-    assert abs(self.scc_v.output_v_target - near_allowed) < 0.05
-    # uncorrected the far half of the same curve reads gentler, so nothing drags it under
-    with patch_gain([1.0] * len(vision_controller._KAPPA_BIAS_GAIN)):
-      raw = SmartCruiseControlVision(make_cp())
-      self.run_road(CURVE_V, curve_at(0.), cur_curvature=CURVE_KAPPA, n=3, scc=raw, attenuate=True)
-    assert self.scc_v.output_v_target >= raw.output_v_target - 0.05
-
-  def test_near_floor_does_not_block_braking_for_a_tighter_corner(self):
-    # the floor only applies once the near field is what binds; a gentle bend under the
-    # nose must not stop the car braking for a hairpin beyond it
+  def test_gentle_near_bend_does_not_block_braking_for_a_tighter_corner(self):
+    # a gentle bend under the nose must not stop the car braking for a hairpin beyond it
     def road(s):
       return 0.008 if s < 90. else 0.06
     self.run_road(V_EGO, road, n=5)
@@ -184,13 +169,15 @@ class TestFarFieldCurvatureBias(VisionCase):
     assert self.scc_v.a_required == 0.
     assert self.scc_v.output_v_target == V_CRUISE_UNSET
 
-  @pytest.mark.parametrize("kappa, d0", [(1. / 645., 60.), (1. / 500., 60.)], ids=["r645", "r500"])
+  @pytest.mark.parametrize("kappa, d0", [(1. / 645., 60.), (1. / 556., 60.)], ids=["r645", "r556"])
   @pytest.mark.parametrize("op_long", [True, False], ids=["op_long", "stock"])
   def test_highway_bend_the_raw_path_allows_never_commits(self, kappa, d0, op_long):
     # 70 mph, perfect geometry, inside the near window: an r=645 m bend 60 m out sits at
-    # 1.49 m/s2 at the set speed, under the ceiling, and an r=500 m bend 60 m out is
-    # take-able at 30.8 m/s. Multiplied by the far-field gain both read as corners; above
-    # the fitted speed band the gain is gone, so neither may commit, on either path.
+    # 1.49 m/s2 at the set speed, under the 1.71 planned, and an r=556 m bend 60 m out is
+    # take-able at sqrt(1.71 * 556) = 30.8 m/s (the r=500 m case at the old 1.9 planned;
+    # r=500 m is 1.92 m/s2 at 31 m/s, over the 1.8 ceiling, a real corner now). Multiplied
+    # by the far-field gain both read as corners; above the fitted speed band the gain is
+    # gone, so neither may commit, on either path.
     v = 31.
     scc = SmartCruiseControlVision(make_cp(op_long=op_long))
     self.run_road(v, curve_at(d0, kappa), n=40, setpoint=v, scc=scc)
@@ -219,16 +206,19 @@ class TestFarFieldCurvatureBias(VisionCase):
     assert self.scc_v.v_dip_ahead < raw.v_dip_ahead - 1.
 
   def test_real_curve_commits_exactly_as_before_the_fade(self):
-    # The fitted speed band retains the calibrated correction.
+    # The fitted speed band retains the calibrated correction. Both paths bind at the 95.2 m
+    # sample: 0.02 * 0.631 attenuation * 1.441 gain = 0.01819, allowed sqrt(1.71 / 0.01819) = 9.695
     v = 15.6
     road = curve_at(90., kappa=CURVE_KAPPA)
     self.run_road(v, road, setpoint=v, attenuate=True)
     assert self.scc_v.is_active
-    assert self.scc_v.a_required == pytest.approx(0.861, abs=2e-3)
-    assert self.scc_v.output_v_target == pytest.approx(14.739, abs=2e-3)
+    # lead 15.6 * 0.36 + 15.6 * 1.2 / (2 * 1.051 jerk) = 14.52 m: (15.6^2 - 9.695^2) / (2 * 80.69)
+    assert self.scc_v.a_required == pytest.approx(0.926, abs=2e-3)
+    assert self.scc_v.output_v_target == pytest.approx(14.674, abs=2e-3)  # 15.6 - 0.926
 
     stock = self.stock()
     self.run_road(v, road, setpoint=v, scc=stock, attenuate=True)
     assert stock.is_active
-    assert stock.a_required == pytest.approx(1.435, abs=2e-3)  # lead walks only the tracking gap
-    assert stock.output_v_target == pytest.approx(10.219, abs=2e-3)
+    # lead walks only the tracking gap: 15.6 * (1.0 + 8 mph / 4 mph/s) = 46.8 m, over 48.41 m
+    assert stock.a_required == pytest.approx(1.543, abs=2e-3)
+    assert stock.output_v_target == pytest.approx(9.695, abs=2e-3)  # sent to the dip

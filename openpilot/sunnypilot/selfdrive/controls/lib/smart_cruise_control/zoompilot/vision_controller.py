@@ -29,7 +29,7 @@ VisionState = custom.LongitudinalPlanSP.SmartCruiseControl.VisionState
 ACTIVE_STATES = (VisionState.entering, VisionState.turning, VisionState.leaving)
 ENABLED_STATES = (VisionState.enabled, VisionState.overriding, *ACTIVE_STATES)
 
-_A_LAT_REG_MAX = 2.  # m/s2; curves are taken at or below this lateral acceleration
+_A_LAT_REG_MAX = 1.8  # m/s2; curves are taken at or below this lateral acceleration (2.0 to 09-30: entries felt late)
 # Reserve margin for actuation delay at the apex.
 _PLAN_MARGIN = 0.95
 
@@ -41,6 +41,10 @@ _KAPPA_BIAS_GAIN = [1.0, 1.06, 1.14, 1.22, 1.42, 1.5]
 # Fade the correction above its 30-50 mph fit range.
 _KAPPA_BIAS_V_BP = [22.4, 26.8]  # m/s; full correction to 50 mph, none from 60 mph
 _KAPPA_BIAS_V_FADE = [1.0, 0.0]
+# The big model (modelV2.big) under-reads less at range (corpus, 25-50 mph, bends it sees: 0.79 at
+# 50-70 m, 0.62 at 90-110 m against the small model's 0.70 and 0.48) and the same table lands its
+# corrected read at 0.9-1.1 to 90 m; a table fitted by seconds ahead with a 40-50 mph fade was
+# tried on route 260 and entered its curves 1-2 mph hotter, so both models share this one.
 
 # Below the bias band the far read also flickers: a bend seen at 150 m can vanish from the
 # path at 100 m and come back at 50 m, and the planner released 100 m short of the apex (the
@@ -56,9 +60,6 @@ _HOLD_SEEN_T = 2.0  # s
 # the budget is the braking that was reported as too hard, for one hot curve in 13 (route
 # sim). Keyed on the set speed so the ceiling does not creep back up as the car slows.
 _ESCALATION_V_BP = _KAPPA_BIAS_V_BP
-
-# Require a materially tighter far path before allowing it below the near-field floor.
-_NEAR_FLOOR_FRAC = 0.98
 
 # Use hysteresis below the commit threshold.
 _RELEASE_FRAC = 0.3
@@ -109,7 +110,6 @@ class SmartCruiseControlVision:
     self.v_profile_now = float('inf')
     self.v_dip_ahead = float('inf')
     self.v_near_min = float('inf')
-    self.v_raw_min = float('inf')
     self.v_dip_held = float('inf')  # committed bend below the bias band: its speed
     self.d_held = 0.  # and its remaining distance
     self.seen_frames = 0  # consecutive frames a bend has bound
@@ -147,7 +147,6 @@ class SmartCruiseControlVision:
     near = dist <= near_d  # dist[0] is 0, so never empty
     v_raw = allowed_speed(kappa, _A_LAT_REG_MAX * _PLAN_MARGIN)
     self.v_near_min = float(np.min(v_raw[near]))
-    self.v_raw_min = float(np.min(v_raw))
     # Publish near-path lateral acceleration for UI state.
     self.max_pred_lat_acc = float(np.max(kappa[near]) * self.v_ego ** 2)
 
@@ -262,22 +261,6 @@ class SmartCruiseControlVision:
     return self.is_active and self.solver_active
 
   @property
-  def _near_floor(self) -> float:
-    """Speed the road the car can already resolve requires, m/s; -inf when it does not bind.
-
-    The correction is a claim about what the model cannot resolve yet, so it must not be the
-    sole reason to command below what it can: going under the near requirement is allowed
-    only when the raw path genuinely reports something tighter further out. Without this a
-    constant-radius curve inflates its own far half and the car settles below the speed the
-    road requires for the length of the curve.
-    """
-    # a held bend was reported by the raw path before it dropped out
-    raw_min = min(self.v_raw_min, self.v_dip_held)
-    if np.isfinite(self.v_near_min) and raw_min >= self.v_near_min * _NEAR_FLOOR_FRAC:
-      return self.v_near_min
-    return -float('inf')
-
-  @property
   def v_ahead_min(self) -> float:
     """Lowest planned speed on the horizon for the ICBM restore gate, m/s.
 
@@ -298,8 +281,6 @@ class SmartCruiseControlVision:
     a_need = self.a_needed
     if np.isfinite(self.v_dip_ahead):
       a_need = min(a_need, max(self.v_ego - self.v_dip_ahead, 0.))
-    # Keep acceleration output consistent with the target-speed floor.
-    a_need = min(a_need, max(self.v_ego - self._near_floor, 0.))
     # Measured geometry may use the ECU's range past the budget; jerk-limit the published command.
     self.a_out = publish_ramp(-a_need, self.a_out, self.limits, self.v_ego, a_floor=A_PUB_MIN)
     return self.a_out
@@ -319,7 +300,7 @@ class SmartCruiseControlVision:
       else:
         # Pre-position the discrete stock-ACC setpoint at the horizon minimum.
         v = min(v, self.v_dip_ahead)
-    return max(v, self._near_floor, MIN_V)
+    return max(v, MIN_V)
 
   def update(self, sm: messaging.SubMaster, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float,
              v_cruise_setpoint: float) -> None:

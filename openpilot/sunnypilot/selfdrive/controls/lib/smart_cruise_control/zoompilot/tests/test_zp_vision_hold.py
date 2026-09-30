@@ -120,10 +120,9 @@ class TestCommitHold(VisionCase):
     assert scc.v_dip_held < v_first - 2.
     assert x0 + BEND_S <= x - V * DT_MDL + scc.d_held <= x0 + BEND_S + BEND_L
 
-  # the near floor compares the raw path with the near field; a held bend counts as raw path
-  # or any near curvature above KAPPA_MIN would floor the v target at v_near_min once it drops out
   def test_hold_survives_a_slightly_curved_path(self):
-    # a real model path is never exactly straight: r=10 km under the dropped bend
+    # a real model path is never exactly straight: r=10 km under the dropped bend reads a
+    # finite allowed speed (131 m/s), which must neither end the hold nor displace the held dip
     bg = 1e-4
     scc = self.stock()
     x = self.drive(scc, bend(background=bg), 40)
@@ -138,7 +137,7 @@ class TestEscalationCeiling(VisionCase):
   """Only a measured near bend may ask past the budget, and only cruising at or below 50 mph."""
 
   def run_setpoint(self, setpoint):
-    # a measured r=167 m bend 40 m out at 45 mph: late, it needs about three times the budget
+    # a measured r=167 m bend 40 m out at 45 mph: late, it needs about four times the budget
     scc = SmartCruiseControlVision(make_cp(op_long=False))
     self.run_road(20., curve_at(40., 0.006), n=40, setpoint=setpoint, scc=scc)
     return scc
