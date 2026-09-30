@@ -30,12 +30,14 @@ same frame as the button events and the setpoint writer. It reuses the upstream
 - `disabled -> ...`: after engagement (or a cluster change) a 0.5 s guard runs; then a
   cluster already at the limit activates silently, a known limit prompts, no limit
   goes `inactive`.
-- `inactive`: a limit change re-prompts and clears `_driver_dismissed`; dialing the
-  cluster onto the target latches `active` silently, but only once no press is held
-  (latching mid-hold would cap a driver dialing past the limit) and only if the driver
-  has not dismissed since the last limit change.
-- `preActive`: resolved by a press (below), by dialing onto the target, or by the 5 s
-  timeout (`inactive`).
+- `inactive`: a limit change re-prompts and clears `_driver_dismissed`; the driver
+  dialing the cluster onto the target latches `active` silently, but only once no press
+  is held (latching mid-hold would cap a driver dialing past the limit), only within
+  `DRIVER_DIAL_PERIOD` of a wheel press edge (a dash the ICBM servo walks onto the limit
+  is not a dial), and only if the driver has not dismissed since the last limit change.
+- `preActive`: resolved by a press (below) or by the 5 s timeout (`inactive`). A prompt
+  is not opened when the dash already shows the limit (`_enter_prompt` activates). The
+  dash reaching the limit resolves nothing here: on ICBM cars the servo moves it.
 - `active`: a limit change prompts when `confirm_needed_for_change` says so (below the
   confirm speed threshold every change prompts; at or above it a new target above the
   threshold auto-applies and only announces).
@@ -53,9 +55,13 @@ A pending confirm prompt freezes speed at three altitudes, each with its own job
 1. The session cap. Prompting out of an active session keeps that session's last cap
    so the plan `min()` cannot release the dash toward the baseline while the driver is
    deciding. Prompting from idle publishes no cap at all.
-2. The ICBM servo parks (`prompt_frozen`) with its restore patience held at zero, so a
-   decline or timeout still waits out a full quiet window.
-3. Card vetoes button emission with same-frame state (`gate_send_button`), because the
+2. The ICBM servo caps the dash where it was when the prompt opened (`prompt_ceiling`)
+   with its restore patience held at zero, so a restore cannot raise it past the limit
+   and a decline or timeout still waits out a full quiet window. Down moves go through: a
+   curve is not waiting for the driver's answer (route 269 the old full freeze parked a
+   -1.2 m/s^2 vision request 4 s before the apex; route 26b, a whole approach), and a dash
+   the servo moves confirms nothing, since only a press resolves a prompt.
+3. Card vetoes up-move emission with same-frame state (`gate_send_button`), because the
    servo's view of the session is one message hop stale and a frame could otherwise
    escape at prompt onset.
 

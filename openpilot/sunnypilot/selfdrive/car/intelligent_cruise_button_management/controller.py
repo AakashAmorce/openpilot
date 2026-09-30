@@ -57,11 +57,10 @@ DECEL_OVERSHOOT_PARAMS = {
 # Apply quickly and release slowly across the ECU's discrete deceleration stages.
 DECEL_OVERSHOOT_RISE = 10.  # mph/s
 DECEL_OVERSHOOT_RELEASE = 3.  # mph/s
-DECEL_OVERSHOOT_SOURCES = (LongitudinalPlanSource.sccVision, LongitudinalPlanSource.sccMap,
-                           LongitudinalPlanSource.speedLimitAssist)
 # Under openpilot longitudinal the planner executes these targets directly; the servo only
 # keeps the dash on the speed limit session (Mazda alpha long).
 OP_LONG_PLANNER_SOURCES = (LongitudinalPlanSource.sccVision, LongitudinalPlanSource.sccMap)
+DECEL_OVERSHOOT_SOURCES = (*OP_LONG_PLANNER_SOURCES, LongitudinalPlanSource.speedLimitAssist)
 
 # A 10 Hz hold stream registers as paced one-unit presses. Use taps for the final steps to
 # avoid overshoot from in-flight stream frames.
@@ -99,13 +98,17 @@ class IntelligentCruiseButtonManagement:
     self.dip_ahead = False
     self.down_grace_timer = 0
     self.up_grace_timer = 0
+    self.press_target = 0  # plan target at the driver's SET+: the grace parks down moves to it, not to a lower one
 
     self.is_ready = False
     self.is_ready_prev = False
     self.is_metric = False
-    # A pending SLA confirmation freezes both the target and the servo. card also vetoes
-    # emission from its same-frame session state because this view is two message hops old.
-    self.prompt_frozen = False
+    # A pending SLA confirmation caps the dash where it was when the prompt opened, so a
+    # restore cannot raise it past the limit and be adopted as a confirm; down moves (a curve)
+    # go through. card also vetoes up moves from its same-frame session state, since this view
+    # is a message hop old.
+    self.prompting = False
+    self.prompt_ceiling: int | None = None
     self.overshoot_mph = 0.0
     self.overshoot_params = DECEL_OVERSHOOT_PARAMS.get(CP.brand)  # brands with a measured plant
     self.limiter_active = False
@@ -140,8 +143,7 @@ class IntelligentCruiseButtonManagement:
     # Do not accumulate a gap while button emission is blocked.
     # the gap trick drives a stock ACC's own deceleration; openpilot longitudinal brakes itself
     if (not self.CP.openpilotLongitudinalControl
-        and self.is_ready and not self.prompt_frozen
-        and self.down_grace_timer <= 0
+        and self.is_ready and not self.down_parked
         and LP_SP.longitudinalPlanSource in DECEL_OVERSHOOT_SOURCES
         and a_request > p['min_decel'] and CS.vEgo > LP_SP.vTarget):
       gaps = [np.interp(a_request, p['decel_bp'], row) for row in p['gap_v']]
@@ -159,13 +161,7 @@ class IntelligentCruiseButtonManagement:
   def update_calculations(self, CS: car.CarState, LP_SP: custom.LongitudinalPlanSP) -> None:
     speed_conv = CV.MS_TO_KPH if self.is_metric else CV.MS_TO_MPH
 
-    limiter_active = LP_SP.longitudinalPlanSource != LongitudinalPlanSource.cruise
-    if limiter_active and not self.limiter_active:
-      # a limiter that comes on after a driver SET+ is new information, not what the driver
-      # overrode: route 260 t=1059, cruise set to 40 then a 34 mph curve, the car accelerated
-      # into it for 5 s while the grace parked the down moves
-      self.down_grace_timer = 0
-    self.limiter_active = limiter_active
+    self.limiter_active = LP_SP.longitudinalPlanSource != LongitudinalPlanSource.cruise
 
     v_target_ms = LP_SP.vTarget
     if self.CP.openpilotLongitudinalControl and LP_SP.longitudinalPlanSource in OP_LONG_PLANNER_SOURCES:
@@ -191,6 +187,10 @@ class IntelligentCruiseButtonManagement:
     self.v_target_raw = round(LP_SP.vTarget * speed_conv)
     self.v_cruise_min = get_minimum_set_speed(self.is_metric)
     self.v_cruise_cluster = round(CS.cruiseState.speedCluster * speed_conv)
+    if not self.prompting:
+      self.prompt_ceiling = None
+    elif self.prompt_ceiling is None:
+      self.prompt_ceiling = self.v_cruise_cluster
 
     # Track driver setpoints exactly and apply a jitter band to generated targets.
     self.react_deadband = REACT_DEADBAND if self.limiter_active or self.overshoot_mph > 0 else 1
@@ -205,12 +205,14 @@ class IntelligentCruiseButtonManagement:
       if v_ahead - self.v_cruise_cluster >= self.react_deadband:
         self.v_target = min(self.v_target, v_ahead)
         self.dip_ahead = False
+    if self.prompt_ceiling is not None:
+      self.v_target = min(self.v_target, self.prompt_ceiling)
 
   def update_restore_quiet_timer(self) -> None:
     # Measure stable restore demand against the unmodified target. Confirmation prompts
     # reset the window so restoration still requires a full quiet period afterward.
     up_error = self.v_target_raw - self.v_cruise_cluster
-    if self.prompt_frozen:
+    if self.prompting:
       self.restore_quiet_timer = 0
     elif up_error >= self.react_deadband and self.v_target_raw == self.v_target_raw_prev:
       self.restore_quiet_timer += 1
@@ -243,10 +245,6 @@ class IntelligentCruiseButtonManagement:
     self.pre_active_timer = max(0, self.pre_active_timer - 1)
     self.update_restore_quiet_timer()
 
-    # Confirmation prompts park any active movement.
-    if self.prompt_frozen and self.state in (State.preActive, State.increasing, State.decreasing):
-      self.state = State.holding
-
     if self.state != State.inactive:
       if not self.is_ready:
         self.state = State.inactive
@@ -264,7 +262,7 @@ class IntelligentCruiseButtonManagement:
 
         # Live limiters may decrease immediately. Residual overshoot after returning to cruise
         # may only release, while ordinary setpoint corrections remain unconditional.
-        down_allowed = (self.limiter_active or self.overshoot_mph <= 0) and self.down_grace_timer <= 0
+        down_allowed = (self.limiter_active or self.overshoot_mph <= 0) and not self.down_parked
 
         if self.state == State.preActive:
           if self.pre_active_timer <= 0:
@@ -278,7 +276,7 @@ class IntelligentCruiseButtonManagement:
             else:
               self.state = State.holding
 
-        elif self.state == State.holding and not self.prompt_frozen:
+        elif self.state == State.holding:
           down_pending = self.v_cruise_cluster - self.v_target >= self.react_deadband and down_allowed
           up_pending = self.v_target - self.v_cruise_cluster >= self.react_deadband
           if down_pending or (up_pending and up_allowed):
@@ -308,6 +306,12 @@ class IntelligentCruiseButtonManagement:
 
     return send_button
 
+  @property
+  def down_parked(self) -> bool:
+    """A driver SET+ parks down moves to the target it overrode for the grace window; a lower
+    target that appears afterwards (a curve) is new information and goes through."""
+    return self.down_grace_timer > 0 and self.v_target_raw >= self.press_target - self.react_deadband
+
   def update_readiness(self, CS: car.CarState, CC: car.CarControl) -> None:
     update_manual_button_timers(CS, self.cruise_button_timers)
 
@@ -317,6 +321,7 @@ class IntelligentCruiseButtonManagement:
     # buttonEvents contains only physical wheel presses, not synthesized frames.
     if self.cruise_button_timers[ButtonType.accelCruise] > 0:
       self.down_grace_timer = DRIVER_PRESS_GRACE_FRAMES
+      self.press_target = self.v_target_raw
       self.up_grace_timer = 0
     elif self.cruise_button_timers[ButtonType.decelCruise] > 0:
       self.up_grace_timer = DRIVER_PRESS_GRACE_FRAMES
@@ -333,7 +338,7 @@ class IntelligentCruiseButtonManagement:
 
 
     self.is_metric = is_metric
-    self.prompt_frozen = LP_SP.speedLimit.assist.state == SessionState.preActive
+    self.prompting = LP_SP.speedLimit.assist.state == SessionState.preActive
 
     self.update_calculations(CS, LP_SP)
     self.update_readiness(CS, CC)

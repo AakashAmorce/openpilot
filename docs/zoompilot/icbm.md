@@ -34,11 +34,11 @@ not just inside the deadband.
 A limiter's decel is urgent, so down moves skip the quiet window while the limiter is
 live. Two guards: a residual overshoot gap left after the source flips back to cruise
 must not start a fresh descent (the lever is not a destination), and a genuine driver
-SET+ parks all down moves for `DRIVER_PRESS_GRACE_T`, except for a limiter that comes on
-after the press: that is new information, not what the driver overrode (route 260 t=1059:
-cruise set to 40, a 34 mph curve 1.5 s later, and the car accelerated into it for the whole
-window). Without overshoot in play a down move is a plain setpoint correction and stays
-unconditional.
+SET+ parks down moves to the plan target it overrode (`press_target`) for
+`DRIVER_PRESS_GRACE_T`; a lower target that appears afterwards is new information and goes
+through (route 260 t=1059: cruise set to 40, a 34 mph curve 1.5 s later, and the car
+accelerated into it for the whole window). Without overshoot in play a down move is a plain
+setpoint correction and stays unconditional.
 
 ### Up moves (restore)
 
@@ -219,8 +219,13 @@ The churn suppression is all bought in the first second: regret 67.7% with no wa
 ## Interaction with the cruise arbiter
 
 The servo reads the SLA session state one message hop late. A pending confirm prompt
-(`session_state == preActive`) parks any move and holds the quiet timer at zero; card
-additionally vetoes emission with same-frame state (`cruise-arbiter.md`).
+(`session_state == preActive`) caps the target at the dash value when it opened
+(`prompt_ceiling`) and holds the quiet timer at zero, so a restore cannot raise the dash
+past the limit and be adopted as a confirm; card additionally vetoes up moves with
+same-frame state (`cruise-arbiter.md`). Down moves go through: a curve is not waiting for
+the driver's answer (route 269 the old full freeze parked a -1.2 m/s^2 vision request 4 s
+before the apex and let the gap bleed off; route 26b, a whole approach), and only a press
+resolves a prompt, never the dash the servo moves.
 
 ## Tools
 
@@ -243,7 +248,7 @@ checked-out stack, so a baseline is the same command with `PYTHONPATH=<worktree>
 | `REACT_TIMER` | 0.3 s | glitch filter, upstream | n/a |
 | `REACT_DEADBAND` | 2 units (limiter) / 1 (cruise) | limiter jitter 1 to 2 units/frame | ICBM corpus |
 | `RESTORE_QUIET_TIME` | 1.0 s | regret 67.7% -> 27.0%; 3.0 s reaches 26.2% at twice the speed cost | 11 routes, 57k frames |
-| `DRIVER_PRESS_GRACE_T` | 3.0 s | +5 reverted within 1.4 s; cleared by a limiter onset after the press | route 126 t=341, route 260 t=1059 |
+| `DRIVER_PRESS_GRACE_T` | 3.0 s | +5 reverted within 1.4 s; parks only moves to the target the press overrode | route 126 t=341, route 260 t=1059 |
 | `FAST_MODE_MIN` | 3 units | stream in-flight overshoot below this | route 126 |
 | `FAST_STALL_T` | 1.5 s | dash never moved under the stream | n/a |
 | `decel_bp` / `gap_v` (mazda) | [0.15..1.05] m/s^2 -> [2.5..20.25] mph at 45, [2.5..17.25] at 65; budget 0.75 at 10 / 7.75 | plant inverse: coast below 2.5 mph, -0.57 at 4-6, -0.82 at 10 (45 mph); unmeasured past 14 | 115,878 samples, 50 routes |

@@ -8,8 +8,7 @@ from enum import IntEnum
 
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.cruise_sub_layouts.speed_limit_settings import SpeedLimitSettingsLayout
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import icbm_applicable
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode as SpeedLimitMode
+from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import icbm_applicable, icbm_moves_speed_limits
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.sunnypilot.lib.styles import style
 from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp, option_item_sp, simple_button_item_sp
@@ -145,8 +144,7 @@ class CruiseLayout(Widget):
           self.icbm_toggle.set_description(new_desc)
           self.icbm_toggle.show_description(True)
 
-      # under alpha long ICBM, not the planner's prompt, moves the set speed to the limit (assist only)
-      icbm_sla = has_long and has_icbm and ui_state.speed_limit_mode == SpeedLimitMode.assist
+      icbm_sla = icbm_moves_speed_limits(has_long, has_icbm, ui_state.speed_limit_mode)
       self.sla_settings_button.set_right_value(tr("icbm") if icbm_sla else "", style.GREEN)
 
       if has_long or has_icbm:

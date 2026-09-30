@@ -14,7 +14,7 @@ import pyray as rl
 
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigMultiParamToggle, BigMultiToggle, BigParamControl
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.system.ui.lib.application import FontWeight, TextAlignmentVertical, gui_app
+from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets.scroller import NavScroller
@@ -181,35 +181,13 @@ class BigParamControlSP(BigParamControl):
 
   The stored value remains unchanged and becomes visible again when the dependency is met.
   The callable dependency lets parent-toggle changes take effect in the same frame.
-
-  An optional grey badge under the title says why the toggle is unavailable. It stays readable
-  while the toggle is disabled, and the title keeps its size, so only titles of two lines or
-  fewer leave room for it.
   """
 
   def __init__(self, text: str, param: str, depends_on: Callable[[], bool] | None = None, **kwargs):
-    # BigButton.__init__ calls _update_label_layout before it returns.
-    self._badge: str | None = None
     super().__init__(text, param, **kwargs)
     self._depends_on = depends_on
     if depends_on is not None:
       self.set_enabled(depends_on)
-
-  def set_badge(self, label: str | None):
-    if label == self._badge:
-      return
-    self._badge = label
-    self._update_label_layout()
-
-  def _update_label_layout(self):
-    super()._update_label_layout()
-    if self._badge:
-      self._label.set_alignment_vertical(TextAlignmentVertical.TOP)
-
-  def _draw_content(self, btn_y: float):
-    super()._draw_content(btn_y)
-    if self._badge:
-      draw_badge_pills(badge_area(self, btn_y), [self._badge], grey=True, dim=False)
 
   def refresh(self):
     if self._depends_on is not None and not self._depends_on():

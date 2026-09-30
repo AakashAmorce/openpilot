@@ -261,9 +261,10 @@ class TestRestoreResponsiveness:
     assert any(s in (SendButtonState.decrease, SendButtonState.decreaseHold) for s in resumed), \
       "servo never resumed after the grace window"
 
-  def test_limiter_onset_after_the_press_is_not_parked(self):
-    """SET+ on plain cruise, then a curve limiter comes on: the servo follows it at once
-    (route 260 t=1059: the car accelerated into a 34 mph curve for the whole grace window)."""
+  def test_a_lower_target_after_the_press_is_not_parked(self):
+    """The grace parks down moves to the target the driver overrode, not to a lower one that
+    appears afterwards (route 260 t=1059: cruise set to 40, then a 34 mph curve 1.5 s later,
+    and the car accelerated into it for the whole window)."""
     icbm = self.make_icbm(brand="mazda")
     self.run_frames(40, 40, n=60, icbm=icbm, source='cruise', v_ego_mph=35.)
     press = [ButtonEvent(type=ButtonType.accelCruise, pressed=True)]
