@@ -4,12 +4,13 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of zoompilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 
-ui_state's accelerator view beside upstream's chestnut state, and the tici
-models panel's link toggle and status line.
+ui_state's jetlink view beside upstream's chestnut state, and the tici
+models panel's link toggle and status line. jetlink is one mock: the adapter's
+status(), which the params pass reads.
 """
 import os
 import unittest
-from contextlib import ExitStack
+from contextlib import contextmanager
 from unittest import mock
 
 os.environ["BIG"] = "0"
@@ -48,13 +49,25 @@ class UITest(OpenpilotTestCase):
     ui_state.update_params()
 
 
-def accelerator(present=False, ready=False, progress=None, enabled=False, selected=None, installed=False):
-  stack = ExitStack()
-  for name, value in (("present", present), ("ready", ready), ("progress", progress),
-                      ("enabled", enabled), ("selected_model_name", selected),
-                      ("unavailable_reason", None), ("installed", installed)):
-    stack.enter_context(mock.patch(f"openpilot.sunnypilot.accelerators.{name}", return_value=value))
-  return stack
+def snapshot(**fields):
+  """jetlink's Status, nothing to show unless a field says so."""
+  from jetlink.openpilot import Status
+  base = {'enabled': False, 'mode': 'off', 'transport': 'USB', 'present': False, 'port': None, 'ready': False,
+          'reason': None, 'progress': None, 'model': None, 'default_model': None}
+  if fields.get('enabled'):
+    base['mode'] = 'usb'
+  return Status(**{**base, **fields})
+
+
+@contextmanager
+def jetlink(installed=True, **fields):
+  """The adapter's status() while the block runs, and a params pass over it.
+  Not installed is None: no jetlink on this device."""
+  from openpilot.selfdrive.ui.ui_state import ui_state
+  status = snapshot(**fields) if installed else None
+  with mock.patch("openpilot.sunnypilot.jetlink_adapter.status", return_value=status) as reads:
+    ui_state.update_params()
+    yield reads
 
 
 class FakeSM:
@@ -74,11 +87,11 @@ class FakeSM:
     return type("M", (), {"big": self.big})()
 
 
-class TestUIStateAcceleratorView(UITest):
+class TestUIStateJetlinkView(UITest):
   @staticmethod
   def _with(sm, started=False):
     from openpilot.selfdrive.ui.ui_state import ui_state
-    saved = ui_state.sm, ui_state.started, ui_state.started_frame, ui_state.accelerator_view, ui_state.chestnut_present
+    saved = ui_state.sm, ui_state.started, ui_state.started_frame, ui_state.jetlink, ui_state.chestnut_present
     ui_state.sm, ui_state.started, ui_state.started_frame = sm, started, 0
     ui_state.chestnut_present = sm.board
     return saved
@@ -86,34 +99,33 @@ class TestUIStateAcceleratorView(UITest):
   @staticmethod
   def _restore(saved):
     from openpilot.selfdrive.ui.ui_state import ui_state
-    ui_state.sm, ui_state.started, ui_state.started_frame, ui_state.accelerator_view, ui_state.chestnut_present = saved
+    ui_state.sm, ui_state.started, ui_state.started_frame, ui_state.jetlink, ui_state.chestnut_present = saved
 
-  def test_a_fitted_chestnut_never_asks_the_accelerator(self):
+  def test_a_fitted_chestnut_never_asks_jetlink(self):
     """A board present is upstream's path byte for byte: no view, and nothing in the
-    state update consults sunnypilot/accelerators."""
+    state update consults jetlink."""
     from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
     saved = self._with(FakeSM(board=True))
     try:
-      with accelerator(present=True, ready=True, enabled=True):
+      with mock.patch("openpilot.sunnypilot.jetlink_adapter.status", side_effect=AssertionError("consulted")):
         ui_state.update_params()
-      assert ui_state.accelerator_view is None
-      ui_state.chestnut_compiled = True
-      with mock.patch("openpilot.sunnypilot.accelerators.present", side_effect=AssertionError("consulted")), \
-           mock.patch("openpilot.sunnypilot.accelerators.ready", side_effect=AssertionError("consulted")):
+        assert ui_state.jetlink is None and ui_state.jetlink_view is None
+        ui_state.chestnut_compiled = True
         ui_state._update_chestnut_state()
       assert ui_state.chestnut_state == ChestnutState.READY
     finally:
       self._restore(saved)
 
-  def test_no_board_and_nothing_of_ours_is_no_view(self):
+  def test_no_board_and_nothing_to_show_is_no_view(self):
     from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
     saved = self._with(FakeSM(board=False))
     try:
-      with accelerator():
-        ui_state.update_params()
-      assert ui_state.accelerator_view is None
-      ui_state._update_chestnut_state()
-      assert ui_state.chestnut_state == ChestnutState.DISCONNECTED
+      # no jetlink here, and jetlink with the link off and nothing attached
+      for installed in (False, True):
+        with jetlink(installed=installed):
+          assert ui_state.jetlink_view is None
+          ui_state._update_chestnut_state()
+        assert ui_state.chestnut_state == ChestnutState.DISCONNECTED
     finally:
       self._restore(saved)
 
@@ -121,12 +133,23 @@ class TestUIStateAcceleratorView(UITest):
     from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
     saved = self._with(FakeSM(board=False))
     try:
-      with accelerator(present=True, ready=True, enabled=True):
-        ui_state.update_params()
-      view = ui_state.accelerator_view
-      assert view is not None and view.present and view.ready
-      ui_state._update_chestnut_state()
+      with jetlink(present=True, ready=True, enabled=True):
+        view = ui_state.jetlink_view
+        assert view is not None and view.present and view.ready
+        ui_state._update_chestnut_state()
       assert ui_state.chestnut_state == ChestnutState.READY
+    finally:
+      self._restore(saved)
+
+  def test_progress_alone_builds_the_view(self):
+    # a provisioning run still reporting after the link was turned off
+    from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
+    saved = self._with(FakeSM(board=False))
+    try:
+      with jetlink(present=True, progress={'stage': 'upload', 'frac': 0.5, 'msg': ''}):
+        assert ui_state.jetlink_view is not None
+        ui_state._update_chestnut_state()
+      assert ui_state.chestnut_state == ChestnutState.LOADING
     finally:
       self._restore(saved)
 
@@ -146,8 +169,8 @@ class TestUIStateAcceleratorView(UITest):
       for enabled in (True, False):
         ui_state.chestnut_compiled = False
         ui_state.params = fake
-        with accelerator(present=True, enabled=enabled):
-          ui_state.update_params()
+        with jetlink(present=True, enabled=enabled):
+          pass
         assert ui_state.model_runner_tinygrad
         assert ui_state.chestnut_compiled is True
     finally:
@@ -156,19 +179,20 @@ class TestUIStateAcceleratorView(UITest):
       self._restore(saved)
 
   def test_onroad_disconnected_then_active(self):
+    from openpilot.selfdrive.ui.sunnypilot.ui_state import UIStateSP
     from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
     saved = self._with(FakeSM(board=False, alive=True, recv=1, state='retrying'), started=True)
     try:
-      with accelerator(present=False, ready=True, enabled=True):
-        ui_state.update_params()
-      assert ui_state.accelerator_view is not None
-      ui_state._update_chestnut_state()
+      UIStateSP.update(ui_state)
+      with jetlink(present=False, ready=True, enabled=True):
+        assert ui_state.jetlink_view is not None
+        ui_state._update_chestnut_state()
       assert ui_state.chestnut_state == ChestnutState.DISCONNECTED
 
       ui_state.sm = FakeSM(board=False, big=True, alive=True, recv=1, state='running')
-      with accelerator(present=True, ready=True, enabled=True):
-        ui_state.update_params()
-      ui_state._update_chestnut_state()
+      UIStateSP.update(ui_state)
+      with jetlink(present=True, ready=True, enabled=True):
+        ui_state._update_chestnut_state()
       assert ui_state.chestnut_state == ChestnutState.ACTIVE
     finally:
       self._restore(saved)
@@ -181,26 +205,25 @@ class TestUIStateAcceleratorView(UITest):
     from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
     saved = self._with(FakeSM(board=False, alive=True, recv=1, state='ready'), started=True)
     try:
-      # the status name is cached where sm is read, and update_params only copies
-      # it into the view; without this the view carries the previous 'none' and
-      # the state falls through to FAILED
+      # the state name is cached where sm is read; without this the icon reads
+      # the previous 'none' and falls through to FAILED
       UIStateSP.update(ui_state)
-      with accelerator(present=True, ready=True, enabled=True):
-        ui_state.update_params()
-      ui_state._update_chestnut_state()
+      with jetlink(present=True, ready=True, enabled=True):
+        ui_state._update_chestnut_state()
       assert ui_state.chestnut_state == ChestnutState.WAITING
     finally:
       self._restore(saved)
 
-  def test_the_status_name_is_read_where_sm_updates(self):
+  def test_the_state_name_is_read_where_sm_updates(self):
     from openpilot.selfdrive.ui.sunnypilot.ui_state import UIStateSP
-    from openpilot.selfdrive.ui.ui_state import ui_state
-    saved = self._with(FakeSM(board=False, state='joining'))
+    from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
+    saved = self._with(FakeSM(board=False, alive=True, recv=1, state='joining'), started=True)
     try:
       UIStateSP.update(ui_state)
-      with accelerator(present=True):
-        ui_state.update_params()
-      assert ui_state.accelerator_view.state == 'joining'
+      assert ui_state._accelerator_state_name == 'joining'
+      with jetlink(present=True, ready=True, enabled=True):
+        ui_state._update_chestnut_state()
+      assert ui_state.chestnut_state == ChestnutState.LOADING
     finally:
       self._restore(saved)
 
@@ -215,62 +238,58 @@ class TestTiciModelsPanel(UITest):
     return ModelsLayout()
 
   def test_hidden_on_a_plain_device(self):
-    with accelerator():
+    with jetlink(installed=False):
       layout = self._layout()
     assert not layout.accelerator_link_item.is_visible
 
   def test_shown_with_an_accelerator(self):
-    with accelerator(present=True, selected='Cinque Terre'):
+    with jetlink(present=True, model='Cinque Terre'):
       layout = self._layout()
     assert layout.accelerator_link_item.is_visible
 
-  def test_shown_wherever_the_package_is_installed(self):
-    # with the link off there is no gadget for a Jetson to enumerate, so present()
-    # alone would hide the toggle that turns the link on
+  def test_shown_wherever_jetlink_is_installed(self):
+    # with the link off there is no gadget for a Jetson to enumerate, so
+    # presence alone would hide the toggle that turns the link on
     self.params.remove("JetlinkLink")
-    with accelerator(installed=True):
+    with jetlink():
+      layout = self._layout()
+    assert layout.accelerator_link_item.is_visible
+
+  def test_shown_while_the_link_is_on_even_without_a_usable_jetlink(self):
+    # the offroad alert says why it cannot run; the toggle is how to turn it off
+    self.params.put("JetlinkLink", 1, block=True)
+    with jetlink(installed=False):
       layout = self._layout()
     assert layout.accelerator_link_item.is_visible
 
   def test_the_toggle_says_what_is_on_the_port(self):
-    link = "openpilot.selfdrive.ui.sunnypilot.accelerator_link"
-    with accelerator(installed=True), mock.patch(f"{link}.read", return_value="0"):
+    with jetlink(port='empty'):
       layout = self._layout()
       assert layout.accelerator_link_item.description.endswith("Nothing on the USB port.")
-      with mock.patch(f"{link}.read", return_value="2"):
-        layout._refresh_accelerator_items()
+    with jetlink(port='host'):
+      layout._refresh_accelerator_items()
       assert layout.accelerator_link_item.description.endswith("A device is on the USB port.")
-    with accelerator(installed=True, present=True), mock.patch(f"{link}.read", return_value="0"):
+    with jetlink(present=True, port='host'):
       layout._refresh_accelerator_items()
       assert layout.accelerator_link_item.description.endswith("Accelerator connected: USB.")
     # a kernel without the CC pin in sysfs claims nothing rather than an empty port
-    with accelerator(installed=True), mock.patch(f"{link}.read", return_value=None):
+    with jetlink(port=None):
       layout._refresh_accelerator_items()
       assert layout.accelerator_link_item.description.endswith("iOS for an iPhone.")
 
   def test_the_status_names_the_transport(self):
-    # the setting names the host: USB for a Jetson, a Linux PC or a Mac, iOS for a phone
-    # dialed in over the gadget's network interface
-    import tempfile
-    from pathlib import Path
+    # the setting names the host: USB for a Jetson, a Linux PC or a Mac, iOS for
+    # a phone dialed in over the gadget's network interface. jetlink says which
     from openpilot.selfdrive.ui.sunnypilot.accelerator_link import link_status
-    gadget = "jetlink.comma.gadget"
-    record = Path(tempfile.mkdtemp()) / "link"
-    with accelerator(installed=True, present=True), mock.patch(f"{gadget}.LINK", record), \
-         mock.patch(f"{gadget}.ios", return_value=False):
-      assert link_status() == "Accelerator connected: USB."
-      # the owner's record of what it built, and on the cable which phone dialed in
-      record.write_text("cable 192.168.60.3")
+    with jetlink(present=True, transport='iOS over USB (192.168.60.3)'):
       assert link_status() == "Accelerator connected: iOS over USB (192.168.60.3)."
-      record.write_text("usb")
-      assert link_status() == "Accelerator connected: USB."
-    # a status that cannot be read is USB, never a crash on the panel's tick
-    with accelerator(installed=True, present=True), mock.patch(f"{gadget}.link_kind", side_effect=OSError):
-      assert link_status() == "Accelerator connected: USB."
+    with jetlink(installed=False):
+      assert link_status() == ""
 
   def test_the_buttons_are_bound_to_the_one_param(self):
     # the small model is the model manager's: the link does not decide which modeld runs
-    with accelerator(present=True), mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=True):
+    from openpilot.selfdrive.ui.sunnypilot.accelerator_link import link_mode
+    with jetlink(present=True), mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=True):
       layout = self._layout()
       action = layout.accelerator_link_item.action_item
       assert action.param_key == "JetlinkLink"
@@ -278,55 +297,50 @@ class TestTiciModelsPanel(UITest):
         self.params.put("JetlinkLink", index, block=True)
         layout._refresh_accelerator_items()
         assert action.get_selected_button() == index
-        from openpilot.sunnypilot import accelerators
-        assert accelerators.link_mode() == mode
+        assert link_mode() == mode
 
   def test_the_modes_are_inert_onroad(self):
     self.params.remove("JetlinkLink")
-    with accelerator(present=True), mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=False):
+    with jetlink(present=True), mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=False):
       layout = self._layout()
       layout._refresh_accelerator_items()
       assert not layout.accelerator_link_item.action_item.enabled
 
   def test_status_note_names_the_accelerator_not_the_chestnut(self):
-    from openpilot.selfdrive.ui.sunnypilot.ui_state import AcceleratorView
     ui_state = ui_state_module().ui_state
-    saved = ui_state.accelerator_view, ui_state.chestnut_present
+    saved = ui_state.jetlink, ui_state.chestnut_present
     try:
       ui_state.chestnut_present = False
-      with accelerator(present=True, selected='Cinque Terre'), \
+      with jetlink(present=True, model='Cinque Terre'), \
            mock.patch("openpilot.selfdrive.ui.sunnypilot.layouts.settings.models.big_model_state", return_value=None):
         layout = self._layout()
-        ui_state.accelerator_view = AcceleratorView(True, False, None, 'none')
         note = layout._status_note()
         assert "chestnut" not in note
         assert "Cinque Terre will drive when the accelerator is ready." == note
-        ui_state.accelerator_view = AcceleratorView(True, True, None, 'none')
+        ui_state.jetlink = snapshot(present=True, ready=True, enabled=True, model='Cinque Terre')
         note = layout._status_note()
         assert note.startswith("Cinque Terre will drive.") and "chestnut" not in note
     finally:
-      ui_state.accelerator_view, ui_state.chestnut_present = saved
+      ui_state.jetlink, ui_state.chestnut_present = saved
 
   def test_the_note_says_what_the_switch_is_waiting_for(self):
-    from openpilot.selfdrive.ui.sunnypilot.ui_state import AcceleratorView
     ui_state = ui_state_module().ui_state
-    saved = ui_state.accelerator_view, ui_state.chestnut_present
+    saved = ui_state.jetlink, ui_state.chestnut_present
     try:
       ui_state.chestnut_present = False
-      with accelerator(present=True, ready=True, selected='Cinque Terre'), \
+      with jetlink(present=True, ready=True, enabled=True, model='Cinque Terre'), \
            mock.patch("openpilot.selfdrive.ui.sunnypilot.layouts.settings.models.big_model_state", return_value='ready'):
         layout = self._layout()
-        ui_state.accelerator_view = AcceleratorView(True, True, None, 'ready')
         assert layout._status_note() == "Cinque Terre is ready. Stop with cruise off, or turn lateral off, to switch."
     finally:
-      ui_state.accelerator_view, ui_state.chestnut_present = saved
+      ui_state.jetlink, ui_state.chestnut_present = saved
 
   def test_a_chestnut_hides_the_link_toggle(self):
     from openpilot.selfdrive.ui.sunnypilot.accelerator_link import link_toggle_meaningful
     ui_state = ui_state_module().ui_state
     saved = ui_state.chestnut_present
     try:
-      with accelerator(present=True, selected='Cinque Terre'):
+      with jetlink(present=True, model='Cinque Terre'):
         ui_state.chestnut_present = False
         assert link_toggle_meaningful()
         ui_state.chestnut_present = True
@@ -336,7 +350,7 @@ class TestTiciModelsPanel(UITest):
 
   def test_panel_renders(self):
     import pyray as rl
-    with accelerator(present=True, selected='Cinque Terre'):
+    with jetlink(present=True, model='Cinque Terre'):
       layout = self._layout()
       layout.render(rl.Rectangle(0, 0, 800, 600))
 
@@ -350,8 +364,7 @@ class TestTiciModelsPanel(UITest):
     self.params.remove("ModelManager_ActiveBundleChestnut")
     try:
       for board, expected in ((True, f"{DEFAULT_BIG_MODEL} (Default)"), (False, "Cinque Terre V3 Model (Default)")):
-        with accelerator(present=True), \
-             mock.patch("openpilot.sunnypilot.accelerators.default_big_model_name", return_value="Cinque Terre V3 Model"):
+        with jetlink(present=True, default_model="Cinque Terre V3 Model"):
           ui_state.chestnut_present = board
           layout = self._layout()
           layout.render(rl.Rectangle(0, 0, 800, 600))
@@ -366,7 +379,7 @@ class TestTiciModelsPanel(UITest):
     from openpilot.selfdrive.ui.sunnypilot.model_info import MODEL_SYNC_KEYS
     for key in MODEL_SYNC_KEYS:
       self.params.put(key, 1, block=True)
-    with accelerator(present=True, selected='Cinque Terre'), \
+    with jetlink(present=True, model='Cinque Terre'), \
          mock.patch.object(ui_state_module().ui_state, "is_offroad", return_value=True):
       layout = self._layout()
       button = layout.refresh_item.action_item

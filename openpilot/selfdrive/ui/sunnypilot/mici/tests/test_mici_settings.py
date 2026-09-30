@@ -44,6 +44,14 @@ def params(gui):
   return p
 
 
+def jetlink_status(**fields):
+  """jetlink's snapshot as the UI's params pass takes it, nothing to show unless a field says so."""
+  from jetlink.openpilot import Status
+  base = {'enabled': False, 'mode': 'off', 'transport': 'USB', 'present': False, 'port': None, 'ready': False,
+          'reason': None, 'progress': None, 'model': None, 'default_model': None}
+  return Status(**{**base, **fields})
+
+
 def render(widget):
   """Drive one frame through Widget.render, which calls _update_state."""
   import pyray as rl
@@ -664,12 +672,13 @@ class TestAcceleratorProgressRenders:
 
   def _info(self, stage, frac):
     from openpilot.selfdrive.ui.ui_state import ui_state
-    ui_state.accelerator_progress = {'stage': stage, 'frac': frac, 'msg': ''}
+    saved = ui_state.jetlink
+    ui_state.jetlink = jetlink_status(present=True, progress={'stage': stage, 'frac': frac, 'msg': ''})
     try:
       from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import _model_info
       return _model_info()
     finally:
-      ui_state.accelerator_progress = None
+      ui_state.jetlink = saved
 
   @pytest.mark.parametrize("stage", STAGES)
   def test_every_stage_gives_a_line(self, params, stage):
@@ -684,12 +693,13 @@ class TestAcceleratorProgressRenders:
     # a join has nothing to measure, and "getting ready" alone does not separate an
     # unplugged Jetson from one six seconds from ready
     from openpilot.selfdrive.ui.ui_state import ui_state
-    ui_state.accelerator_progress = {'stage': 'connect', 'frac': 0.0, 'msg': 'waiting for the accelerator'}
+    saved = ui_state.jetlink
+    ui_state.jetlink = jetlink_status(present=True, progress={'stage': 'connect', 'frac': 0.0, 'msg': 'waiting for the accelerator'})
     try:
       from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import _model_info
       _, _, info = _model_info()
     finally:
-      ui_state.accelerator_progress = None
+      ui_state.jetlink = saved
     assert 'waiting for the accelerator' in info
     assert '%' not in info
 
@@ -703,15 +713,20 @@ class TestAcceleratorProgressRenders:
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts import models as models_layout
     ready = self._info('ready', 1.0)
     from openpilot.selfdrive.ui.ui_state import ui_state
-    ui_state.accelerator_progress = None
-    assert ready == models_layout._model_info()
+    saved = ui_state.jetlink
+    ui_state.jetlink = jetlink_status(present=True)
+    try:
+      assert ready == models_layout._model_info()
+    finally:
+      ui_state.jetlink = saved
 
   @pytest.mark.parametrize("stage", STAGES)
   def test_the_panel_draws_with_progress_set(self, params, stage):
     from openpilot.selfdrive.ui.ui_state import ui_state
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import ModelsLayoutMici
 
-    ui_state.accelerator_progress = {'stage': stage, 'frac': 0.5, 'msg': ''}
+    saved = ui_state.jetlink
+    ui_state.jetlink = jetlink_status(present=True, progress={'stage': stage, 'frac': 0.5, 'msg': ''})
     try:
       layout = ModelsLayoutMici()
       render(layout)
@@ -720,12 +735,13 @@ class TestAcceleratorProgressRenders:
         render(item)
       render(layout.current_model_info)
     finally:
-      ui_state.accelerator_progress = None
+      ui_state.jetlink = saved
 
 
 class TestAcceleratorIconState:
-  """chestnut_state for an off-board accelerator comes from the view and the progress
-  param, not a USB id the comma never enumerates. a fitted chestnut keeps upstream's path"""
+  """chestnut_state for an off-board accelerator comes from jetlink's snapshot and
+  modeld's acceleratorState, not a USB id the comma never enumerates. a fitted
+  chestnut keeps upstream's path"""
 
   class FakeSM:
     def __init__(self, big=False, alive=False, recv=0):
@@ -741,19 +757,19 @@ class TestAcceleratorIconState:
 
   @staticmethod
   def _view(present=True, ready=False, progress=None, state='none'):
-    from openpilot.selfdrive.ui.sunnypilot.ui_state import AcceleratorView
-    return AcceleratorView(present, ready, progress, state)
+    """The link on, and modeld's acceleratorState by name."""
+    return jetlink_status(enabled=True, mode='usb', present=present, ready=ready, progress=progress), state
 
   def _state(self, view, sm=None, started=False):
     from openpilot.selfdrive.ui.ui_state import ui_state
-    saved = ui_state.sm, ui_state.started, ui_state.started_frame, ui_state.accelerator_view
+    saved = ui_state.sm, ui_state.started, ui_state.started_frame, ui_state.jetlink, ui_state._accelerator_state_name
     ui_state.sm, ui_state.started, ui_state.started_frame = sm or self.FakeSM(), started, 0
-    ui_state.accelerator_view = view
+    ui_state.jetlink, ui_state._accelerator_state_name = view
     try:
       ui_state._update_chestnut_state()
       return ui_state.chestnut_state
     finally:
-      ui_state.sm, ui_state.started, ui_state.started_frame, ui_state.accelerator_view = saved
+      ui_state.sm, ui_state.started, ui_state.started_frame, ui_state.jetlink, ui_state._accelerator_state_name = saved
 
   def test_offroad_states(self, params):
     from openpilot.selfdrive.ui.ui_state import ChestnutState
@@ -794,35 +810,35 @@ class TestAcceleratorIconState:
     stack = ExitStack()
     stack.enter_context(mock.patch.object(module, 'read_int', return_value=1))
     stack.enter_context(mock.patch.object(module, 'get_usb_state', return_value=[]))
-    stack.enter_context(mock.patch("openpilot.sunnypilot.accelerators.present", return_value=present))
+    stack.enter_context(mock.patch("openpilot.sunnypilot.jetlink_adapter.status", return_value=jetlink_status(present=present)))
     return stack
 
   def test_a_present_accelerator_is_not_an_unknown_usb_device(self, params):
     import time
     from openpilot.selfdrive.ui.ui_state import ui_state
-    saved = ui_state.usb_connected, ui_state.usb_connected_ts, ui_state.usb_unknown, ui_state.accelerator_view
+    saved = ui_state.usb_connected, ui_state.usb_connected_ts, ui_state.usb_unknown, ui_state.jetlink
     try:
       ui_state.usb_connected, ui_state.usb_connected_ts, ui_state.usb_unknown = True, time.monotonic() - 11.0, False
       with self._usb(present=True):
         ui_state.update_params()  # builds the view
         ui_state.usb_connected_ts = time.monotonic() - 11.0
         ui_state.update_params()  # decides
-      assert ui_state.accelerator_view is not None
+      assert ui_state.jetlink_view is not None
       assert ui_state.usb_unknown is False
       with self._usb(present=False):
         ui_state.update_params()
         ui_state.usb_connected_ts = time.monotonic() - 11.0
         ui_state.update_params()
-      assert ui_state.accelerator_view is None
+      assert ui_state.jetlink_view is None
       assert ui_state.usb_unknown is True
     finally:
-      ui_state.usb_connected, ui_state.usb_connected_ts, ui_state.usb_unknown, ui_state.accelerator_view = saved
+      ui_state.usb_connected, ui_state.usb_connected_ts, ui_state.usb_unknown, ui_state.jetlink = saved
 
   def test_an_accelerator_recognised_after_the_grace_period_clears_unknown(self, params):
     """the Jetson configures the gadget ~25 s after the UI starts, after the one-shot
     usb_unknown decision; presence arriving later must still clear it"""
     from openpilot.selfdrive.ui.ui_state import ui_state
-    saved = ui_state.usb_connected, ui_state.usb_connected_ts, ui_state.usb_unknown, ui_state.accelerator_view
+    saved = ui_state.usb_connected, ui_state.usb_connected_ts, ui_state.usb_unknown, ui_state.jetlink
     try:
       ui_state.usb_connected, ui_state.usb_connected_ts, ui_state.usb_unknown = True, None, True
       with self._usb(present=False):
@@ -832,7 +848,7 @@ class TestAcceleratorIconState:
         ui_state.update_params()
         assert ui_state.usb_unknown is False
     finally:
-      ui_state.usb_connected, ui_state.usb_connected_ts, ui_state.usb_unknown, ui_state.accelerator_view = saved
+      ui_state.usb_connected, ui_state.usb_connected_ts, ui_state.usb_unknown, ui_state.jetlink = saved
 
 
 class TestAcceleratorLinkToggle:
@@ -841,16 +857,13 @@ class TestAcceleratorLinkToggle:
   PARAM = "JetlinkLink"
 
   @staticmethod
-  def _accelerators(present=False, ready=False, reason=None, installed=False):
-    from contextlib import ExitStack
+  def _accelerators(installed=False, **fields):
+    """ui_state's jetlink snapshot for the block: None, no jetlink here, unless
+    it is installed or a field says there is something to show."""
     from unittest import mock
-
-    stack = ExitStack()
-    stack.enter_context(mock.patch("openpilot.sunnypilot.accelerators.installed", return_value=installed))
-    stack.enter_context(mock.patch("openpilot.sunnypilot.accelerators.present", return_value=present))
-    stack.enter_context(mock.patch("openpilot.sunnypilot.accelerators.ready", return_value=ready))
-    stack.enter_context(mock.patch("openpilot.sunnypilot.accelerators.unavailable_reason", return_value=reason))
-    return stack
+    from openpilot.selfdrive.ui.ui_state import ui_state
+    status = jetlink_status(**fields) if installed or any(fields.values()) else None
+    return mock.patch.object(ui_state, "jetlink", status)
 
   def _meaningful(self, **accelerators) -> bool:
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import link_toggle_meaningful
@@ -1005,7 +1018,7 @@ class TestDefaultBigModelMici:
     pushed = []
     monkeypatch.setattr(gui_app, "push_widget", lambda w: pushed.append(w))
     monkeypatch.setattr(ui_state, "chestnut_present", board)
-    with mock.patch("openpilot.sunnypilot.accelerators.default_big_model_name", return_value="Cinque Terre V3 Model"):
+    with mock.patch.object(ui_state, "jetlink", jetlink_status(present=True, default_model="Cinque Terre V3 Model")):
       layout = ModelsLayoutMici()
       render(layout)
       layout._show_folders()

@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import contextmanager
 from typing import Any
 from unittest import mock
 
@@ -31,9 +32,9 @@ from openpilot.sunnypilot.models.helpers import (ACTIVE_BUNDLE_KEYS, get_active_
 from openpilot.sunnypilot.models.manager import ModelManagerSP
 
 # the model manager's catalog as fetched, never the one an installed jetlink extends
-# with newer catalogs (accelerators.big_catalog): that depends on the checkout and
+# with newer catalogs (jetlink_adapter.extend_catalog): that depends on the checkout and
 # reaches the network
-_catalog_as_fetched = mock.patch("openpilot.sunnypilot.accelerators.jetlink.backend.extends_catalog", return_value=False)
+_catalog_as_fetched = mock.patch("openpilot.sunnypilot.jetlink_adapter.should_extend_catalog", return_value=False)
 
 
 def setUpModule():
@@ -794,17 +795,19 @@ class TestBigModelSlotWithoutChestnut(ManagerDownloadTestBase):
 
 
 
+@contextmanager
 def _jetlink_params(values: dict):
-  """The jetlink param store as the models package would read it: through
-  helpers, and the link setting off its file as jetlink.comma reads it."""
-  from contextlib import ExitStack
-  from jetlink.comma import gadget
-  from openpilot.sunnypilot.accelerators.jetlink import helpers as jetlink_helpers
-  stack = ExitStack()
-  stack.enter_context(mock.patch.object(jetlink_helpers, "_get", side_effect=lambda key, default=None: values.get(key, default)))
-  stack.enter_context(mock.patch.object(gadget, "raw_param", side_effect=lambda key: None if values.get(key) is None
-                                        else str(values[key]).encode()))
-  return stack
+  """jetlink's params as the panels write them, in this test's own store:
+  jetlink reads them there, through the adapter and off their files."""
+  from openpilot.common.params import Params
+  params = Params()
+  for key, value in values.items():
+    params.put(key, value, block=True)
+  try:
+    yield
+  finally:
+    for key in values:
+      params.remove(key)
 
 
 class TestActiveBundleSelection(OpenpilotTestCase):

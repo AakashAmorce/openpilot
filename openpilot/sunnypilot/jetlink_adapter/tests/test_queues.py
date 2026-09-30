@@ -46,9 +46,11 @@ SMALL_SHAPES = {
 
 
 def make_spec(shapes, frame_skip=4) -> ModelSpec:
+  # the hidden state is the features queue's row, as the model returns it
+  feat = math.prod(shapes['features_buffer'][2:])
   return ModelSpec(sha256='0' * 64, nbytes=0, frame_skip=frame_skip,
-                   input_shapes=shapes, output_shapes={'outputs': (1, 18452)},
-                   output_slices={'hidden_state': slice(2066, 18450)}, checkpoint=None)
+                   input_shapes=shapes, output_shapes={'outputs': (1, 2066 + feat + 2)},
+                   output_slices={'hidden_state': slice(2066, 2066 + feat)}, checkpoint=None)
 
 
 class TinygradReference:
@@ -96,17 +98,18 @@ class TestPolicyQueues(OpenpilotTestCase):
         ref = TinygradReference(spec)
         rng = np.random.default_rng(0)
 
+        # modeld's prev_feat: zero at the start, then each frame's hidden state.
+        # jetlink keeps it on the Jetson and feeds it back there.
+        prev_feat = np.zeros(spec.prev_feat_shape, np.float32)
         # Long enough for every ring (the longest is desire_q at frame_skip*33=132)
         # to wrap more than once.
         for i in range(300):
           warped = rng.integers(0, 256, spec.warped_shape, dtype=np.uint8)
           desire = (rng.random(spec.packed_shapes['desire']) > 0.8).astype(np.float32)
-          prev_feat = rng.standard_normal(spec.packed_shapes['prev_feat']).astype(np.float32)
           packed = np.concatenate([
             desire.ravel(),
             rng.standard_normal(2).astype(np.float32),
             rng.standard_normal(2).astype(np.float32),
-            prev_feat.ravel(),
           ])
 
           got = ours.step(warped, packed)
@@ -116,6 +119,11 @@ class TestPolicyQueues(OpenpilotTestCase):
           self.assertTrue(np.array_equal(got['big_img'].reshape(want_big.shape), want_big), f'{name} big_img @{i}')
           self.assertTrue(np.array_equal(got['desire_pulse'].reshape(want_des.shape), want_des), f'{name} desire @{i}')
           self.assertTrue(np.array_equal(got['features_buffer'].reshape(want_feat.shape), want_feat), f'{name} feat @{i}')
+
+          # what the model returned this frame: its hidden state is next frame's prev_feat
+          output = rng.standard_normal(spec.output_nelem).astype(np.float32)
+          ours.after_run({'outputs': output}, {})
+          prev_feat = output[spec.output_slices['hidden_state']].reshape(spec.prev_feat_shape)
 
   def test_reset_returns_to_initial_state(self):
     spec = make_spec(BIG_SHAPES)

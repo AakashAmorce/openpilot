@@ -11,7 +11,7 @@ modelV2 the small model already publishes and can leave and come back.
 import openpilot.cereal.messaging as messaging
 from openpilot.cereal import custom
 from openpilot.selfdrive.selfdrived.events import Events, EventName
-from openpilot.sunnypilot import accelerators
+from openpilot.sunnypilot import jetlink_adapter
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 
 EventNameSP = custom.OnroadEventSP.EventName
@@ -22,7 +22,7 @@ class AcceleratorEvents:
   # An accelerator is optional: its daemon exiting costs the big model, never
   # engagement. manager does not restart a process that died, so without this
   # a dead link owner was processNotRunning, NO_ENTRY until a reboot
-  OPTIONAL_PROCESSES = frozenset(d.name for d in accelerators.daemons())
+  OPTIONAL_PROCESSES = frozenset({jetlink_adapter.OWNER})
 
   def __init__(self):
     self.big_model_available = False
