@@ -73,8 +73,8 @@ class TestCruiseArbiterNonPcm:
                [car_struct.CarState.ButtonEvent(type=button_type, pressed=False)])
 
   def go_pre_active(self, cluster_mph, limit_mph):
-    self.arb.state = SpeedLimitAssistState.preActive
-    self.arb.pre_active_timer = int(ARBITER_PROMPT_PERIOD / DT_CTRL)
+    self.frame(cluster_mph, limit_mph)
+    self.arb._enter_prompt()
     self.frame(cluster_mph, limit_mph)
     assert self.arb.state == SpeedLimitAssistState.preActive
 
@@ -161,11 +161,36 @@ class TestCruiseArbiterNonPcm:
     self.frame(60, 35)  # new limit posted -> new session
     assert self.arb.state == SpeedLimitAssistState.preActive
 
-  def test_dial_to_target_confirms(self):
-    """Reaching the limit by hand is a confirmation (upstream semantics)."""
+  def test_only_a_press_resolves_a_prompt(self):
+    """A dash the ICBM servo walks through the limit for a curve confirms nothing (route
+    269: a prompt opened 4 s before an apex and the servo keeps braking through it); the
+    driver's press toward the limit still does."""
     self.go_pre_active(cluster_mph=50, limit_mph=45)
-    self.frame(45, 45)
+    for cluster in (48, 46, 45, 44):
+      self.frame(cluster, 45)
+      assert self.arb.state == SpeedLimitAssistState.preActive, cluster
+    self.press(ButtonType.accelCruise, 44, 45)
     assert self.arb.state == SpeedLimitAssistState.active
+
+  def test_prompt_is_skipped_when_the_dash_already_shows_the_limit(self):
+    self.frame(45, 50)
+    self.arb._enter_prompt()
+    assert self.arb.state == SpeedLimitAssistState.preActive
+    self.frame(45, 45)
+    self.arb._enter_prompt()
+    assert self.arb.state == SpeedLimitAssistState.active
+
+  def test_prompt_gate_blocks_up_moves_only(self):
+    """Card's same-frame veto stops a restore raising the dash past the limit during the
+    prompt; a down move (a curve) goes through (route 26b t=480: a whole approach was frozen)."""
+    from opendbc.car import structs
+    Send = structs.IntelligentCruiseButtonManagement.SendButtonState
+    self.go_pre_active(cluster_mph=50, limit_mph=45)
+    for send, expect in ((Send.increaseHold, Send.none), (Send.increase, Send.none), (Send.decreaseHold, Send.decreaseHold)):
+      cc_sp = structs.CarControlSP()
+      cc_sp.intelligentCruiseButtonManagement.sendButton = send
+      self.arb.gate_send_button(cc_sp)
+      assert cc_sp.intelligentCruiseButtonManagement.sendButton == expect, str(send)
 
   def test_settled_dismissal_does_not_reactivate(self):
     """After a settled-press dismissal the cluster still equals the limit until the ECU's

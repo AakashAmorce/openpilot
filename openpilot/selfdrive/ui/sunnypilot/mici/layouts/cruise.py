@@ -16,7 +16,7 @@ from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
-from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import icbm_applicable
+from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import icbm_applicable, icbm_moves_speed_limits
 
 SL_MODE_LABELS = [tr("off"), tr("info"), tr("warn"), tr("assist")]
 SL_SOURCE_LABELS = [tr("car"), tr("map"), tr("car-first"), tr("map-first"), tr("combined")]
@@ -147,8 +147,7 @@ class CruiseLayoutMici(NavScroller):
       sl_source = SL_SOURCE_LABELS[min(sl_source_idx, len(SL_SOURCE_LABELS) - 1)]
       sl_offset_val = ui_state.params.get("SpeedLimitValueOffset", return_default=True) or 0
       unit = "%" if offset_type == 2 else (speed_unit() if offset_type == 1 else "")
-      # under alpha long ICBM, not the planner's prompt, moves the set speed to the limit (assist only)
-      icbm = has_long and has_icbm and sl_mode_idx == SL_MODE_ASSIST
+      icbm = icbm_moves_speed_limits(has_long, has_icbm, sl_mode_idx)
       badges = [(sl_mode, "on"), (tr("icbm"), "on" if icbm else "off"), (sl_source, "on")]
       if unit:
         sign = "+" if sl_offset_val > 0 else ""

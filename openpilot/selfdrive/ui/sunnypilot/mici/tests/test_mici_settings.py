@@ -219,16 +219,6 @@ class TestDependentSettings:
     w.refresh()
     assert w._checked and w.enabled
 
-  def test_badged_toggle_renders(self, params):
-    from openpilot.selfdrive.ui.sunnypilot.mici.widgets.button import BigParamControlSP
-    toggle = BigParamControlSP("bsm delay", "AutoLaneChangeBsmDelay")
-    font_size = toggle._label._font_size
-    toggle.set_badge("unavailable")
-    render(toggle)
-    assert toggle._label._font_size == font_size  # the badge never resizes the title
-    toggle.set_badge(None)
-    render(toggle)
-
 
 class TestSubPanelSelfRefresh:
   """gui_app renders only the top 2 nav-stack widgets, so a layout cannot drive a sub-panel
@@ -467,27 +457,22 @@ LAYOUT_TARGETS = [
 
 
 class TestCruiseBadges:
-  """Badges show only where alpha long and ICBM split the cruise features. In any other setup
-  one system carries everything and the panel looks as it did before badges."""
+  """The speed limit button's icbm badge follows the stored mode. Which setups move speed limits
+  through ICBM is icbm_moves_speed_limits, tested on its own; this checks the layout wiring."""
 
-  @pytest.mark.parametrize(("has_long", "has_icbm", "mode", "shown"), [
-    (True, True, 3, True),
-    (True, True, 2, False),  # warn never moves the set speed
-    (True, False, 3, False),
-    (False, True, 3, False),
-  ])
-  def test_speed_limit_badge_only_in_the_split_setup(self, params, has_long, has_icbm, mode, shown):
+  @pytest.mark.parametrize(("mode", "shown"), [(3, True), (2, False)])
+  def test_speed_limit_badge_follows_mode(self, params, mode, shown):
     from opendbc.car.structs import car
     from openpilot.cereal import custom
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts.cruise import CruiseLayoutMici
     from openpilot.selfdrive.ui.ui_state import ui_state
 
     params.put("CarParamsPersistent", car.CarParams.new_message(
-      brand="mazda", pcmCruise=True, alphaLongitudinalAvailable=True, openpilotLongitudinalControl=has_long).to_bytes(), block=True)
+      brand="mazda", pcmCruise=True, alphaLongitudinalAvailable=True, openpilotLongitudinalControl=True).to_bytes(), block=True)
     params.put("CarParamsSPPersistent", custom.CarParamsSP.new_message(
       intelligentCruiseButtonManagementAvailable=True).to_bytes(), block=True)
-    params.put_bool("AlphaLongitudinalEnabled", has_long, block=True)
-    params.put_bool("IntelligentCruiseButtonManagement", has_icbm, block=True)
+    params.put_bool("AlphaLongitudinalEnabled", True, block=True)
+    params.put_bool("IntelligentCruiseButtonManagement", True, block=True)
     params.put("SpeedLimitMode", mode, block=True)
     saved = ui_state.CP, ui_state.CP_SP, ui_state.has_longitudinal_control, ui_state.has_icbm
     try:

@@ -113,38 +113,30 @@ class TestDecelOvershootIsALever:
   def run_frames(self, *args, icbm, **kwargs):
     return run_frames(icbm, *args, **kwargs)
 
-  def test_no_wind_up_behind_a_confirm_prompt(self):
-    """Layer 2: a limiter asking for decel while a prompt is open must not accumulate a
-    gap the servo is forbidden to emit."""
+  def test_a_prompt_caps_the_dash_where_it_opened(self):
+    """A confirm prompt must not let the servo raise the dash past the limit and be adopted as
+    a confirm: a restore that falls due while the prompt is open waits, and the quiet window
+    restarts when it closes."""
+    icbm = self.make_icbm()
+    self.run_frames(30, 30, n=60, icbm=icbm, v_ego_mph=30.)
+    sends = self.run_frames(40, 30, n=500, icbm=icbm, source='cruise', v_ego_mph=30.,
+                            session_state=SessionState.preActive)
+    up = (SendButtonState.increase, SendButtonState.increaseHold)
+    assert all(s not in up for s in sends), "restore raised the dash during the prompt"
+    sends = self.run_frames(40, 30, n=400, icbm=icbm, source='cruise', v_ego_mph=30.)
+    assert any(s in up for s in sends), "restore never resumed after the prompt"
+
+  def test_a_limiter_descends_through_a_prompt(self):
+    """A prompt is the driver's decision about the limit, not about the road: route 269 t=185
+    the old freeze parked a -1.2 m/s2 vision request 4 s before the apex and let the gap bleed
+    off; route 26b t=480 it froze a whole approach."""
     icbm = self.make_icbm()
     self.run_frames(40, 40, n=60, icbm=icbm)
-
-    sends = self.run_frames(40, 40, n=500, icbm=icbm, source='speedLimitAssist', v_ego_mph=41.3,
-                            a_target=-0.5, session_state=SessionState.preActive)
-    assert icbm.overshoot_mph == 0., f"banked behind the freeze: {icbm.overshoot_mph}"
-    assert all(s == SendButtonState.none for s in sends)
-
-    # prompt times out with the limiter gone: nothing is owed, so nothing moves
-    sends = self.run_frames(40, 40, n=200, icbm=icbm, source='cruise', v_ego_mph=41.3)
-    assert all(s == SendButtonState.none for s in sends), "stale gap dumped at the timeout"
-    assert icbm.state == State.holding
-
-  def test_freeze_does_not_blunt_a_real_limiter(self):
-    """Layer 2 must cost nothing: if the limiter is still asking for decel when the prompt
-    clears, the gap rebuilds at DECEL_OVERSHOOT_RISE and the descent still happens."""
-    icbm = self.make_icbm()
-    self.run_frames(40, 40, n=60, icbm=icbm)
-    # a lower limit (35) behind the prompt; the dash still shows the old 40
-    self.run_frames(35, 40, n=500, icbm=icbm, source='speedLimitAssist', v_ego_mph=41.3,
-                    a_target=-0.5, session_state=SessionState.preActive)
-    assert icbm.overshoot_mph == 0.
-
-    sends = self.run_frames(35, 40, n=100, icbm=icbm, source='speedLimitAssist', v_ego_mph=41.3,
-                            a_target=-0.5)
-    assert icbm.overshoot_mph > 2., f"gap did not rebuild: {icbm.overshoot_mph}"
-    # tap or hold is the profile's call from the remaining distance; either is a descent
+    sends = self.run_frames(28, 40, n=100, icbm=icbm, source='sccVision', v_ego_mph=38.,
+                            a_target=-1.2, session_state=SessionState.preActive)
+    assert icbm.overshoot_mph > 5., f"gap parked behind the prompt: {icbm.overshoot_mph}"
     down = (SendButtonState.decrease, SendButtonState.decreaseHold)
-    assert any(s in down for s in sends), "real limiter decel was blunted"
+    assert any(s in down for s in sends), "curve decrease parked behind the prompt"
 
   def test_residual_gap_after_source_flip_starts_no_descent(self):
     """Layer 3: the lever outlives its limiter by design (slow release), but a residual

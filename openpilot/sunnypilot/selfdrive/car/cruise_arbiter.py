@@ -32,6 +32,7 @@ CruiseIntent = custom.CarStateZP.CruiseSession.CruiseIntent
 # Timers use 100 Hz control frames.
 DISABLED_GUARD_PERIOD = 0.5   # s after engagement before the session may form
 PRE_ACTIVE_GUARD_PERIOD = 5.  # s a confirm prompt stays open
+DRIVER_DIAL_PERIOD = 1.  # s after a wheel press edge in which a cluster match counts as the driver's dial
 # Resolve a held prompt before cruise.py emits its first long-press repeat tick.
 LONG_PRESS_FRAMES = 50 - 1
 
@@ -82,6 +83,7 @@ class CruiseArbiter:
     self._driver_dismissed = False
     self._cluster_conv = 0
     self._cluster_conv_prev = 0
+    self._driver_dial_timer = 0  # frames since a wheel press edge: a cluster match is the driver's
 
     # Key by raw integers because capnp enums do not hash-match cruise.py's integers.
     self._press: dict[int, _Press] = {}
@@ -137,6 +139,9 @@ class CruiseArbiter:
       self.announce_counter += 1
 
   def _enter_prompt(self):
+    if self._target_conv() == self._cluster_conv:
+      self._activate(from_prompt=False)  # the dash already shows the limit: nothing to confirm
+      return
     # Preserve an active session's cap while prompting. From idle, leave the cap unset to
     # avoid round-trip error that would incorrectly classify cruise as a limiter.
     was_session = self.state in ACTIVE_STATES or self.v_cap < V_CRUISE_UNSET
@@ -163,6 +168,7 @@ class CruiseArbiter:
       if b.type not in PLUS_BUTTONS and b.type not in MINUS_BUTTONS:
         continue
       btn = b.type.raw
+      self._driver_dial_timer = int(DRIVER_DIAL_PERIOD / DT_CTRL)
 
       if b.pressed:
         if self.state_prev_frame in ACTIVE_STATES:
@@ -254,6 +260,7 @@ class CruiseArbiter:
 
     self.long_engaged_timer = max(0, self.long_engaged_timer - 1)
     self.pre_active_timer = max(0, self.pre_active_timer - 1)
+    self._driver_dial_timer = max(0, self._driver_dial_timer - 1)
 
     if self.state != SessionState.disabled:
       if not long_enabled or not self.enabled:
@@ -268,9 +275,9 @@ class CruiseArbiter:
           self.announce_counter += 1
 
       elif self.state == SessionState.preActive:
-        if self._target_conv() == self._cluster_conv:
-          self._activate(from_prompt=True)  # dialing to the target confirms it
-        elif self.pre_active_timer <= 0:
+        # a press resolves the prompt (above); the ICBM servo may walk the dash through the
+        # limit for a curve meanwhile, which confirms nothing
+        if self.pre_active_timer <= 0:
           self._set_state(SessionState.inactive)
 
       elif self.state == SessionState.inactive:
@@ -278,8 +285,9 @@ class CruiseArbiter:
           self._driver_dismissed = False
           self._enter_prompt()
         elif not self._driver_dismissed and self._has_limit and self._target_conv() == self._cluster_conv \
-             and not self._press:
-          # Wait for release so a driver can continue through the target.
+             and not self._press and self._driver_dial_timer > 0:
+          # The driver dialed onto the limit: wait for release so they can continue through
+          # it. A dash the servo walked onto it is not a dial.
           self._activate(from_prompt=False)
 
     else:
@@ -314,6 +322,10 @@ class CruiseArbiter:
     session.announceCounter = self.announce_counter
 
   def gate_send_button(self, CC_SP) -> None:
-    """Block synthesized buttons at prompt onset before CI.apply."""
-    if self.applicable and self.prompting:
-      CC_SP.intelligentCruiseButtonManagement.sendButton = structs.IntelligentCruiseButtonManagement.SendButtonState.none
+    """Block synthesized up moves at prompt onset before CI.apply: the servo's view of the
+    session is a hop stale, and a dash raised past the limit would be adopted on an upward
+    confirm. Down moves (a curve) go through; nothing confirms on a dash the servo moved."""
+    Send = structs.IntelligentCruiseButtonManagement.SendButtonState
+    icbm = CC_SP.intelligentCruiseButtonManagement
+    if self.applicable and self.prompting and icbm.sendButton in (Send.increase, Send.increaseHold):
+      icbm.sendButton = Send.none

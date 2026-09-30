@@ -29,7 +29,7 @@ VisionState = custom.LongitudinalPlanSP.SmartCruiseControl.VisionState
 ACTIVE_STATES = (VisionState.entering, VisionState.turning, VisionState.leaving)
 ENABLED_STATES = (VisionState.enabled, VisionState.overriding, *ACTIVE_STATES)
 
-_A_LAT_REG_MAX = 1.8  # m/s2; curves are taken at or below this lateral acceleration (2.0 to 09-30: entries felt late)
+_A_LAT_REG_MAX = 1.8  # m/s2; curves are taken at or below this lateral acceleration
 # Reserve margin for actuation delay at the apex.
 _PLAN_MARGIN = 0.95
 
@@ -41,10 +41,8 @@ _KAPPA_BIAS_GAIN = [1.0, 1.06, 1.14, 1.22, 1.42, 1.5]
 # Fade the correction above its 30-50 mph fit range.
 _KAPPA_BIAS_V_BP = [22.4, 26.8]  # m/s; full correction to 50 mph, none from 60 mph
 _KAPPA_BIAS_V_FADE = [1.0, 0.0]
-# The big model (modelV2.big) under-reads less at range (corpus, 25-50 mph, bends it sees: 0.79 at
-# 50-70 m, 0.62 at 90-110 m against the small model's 0.70 and 0.48) and the same table lands its
-# corrected read at 0.9-1.1 to 90 m; a table fitted by seconds ahead with a 40-50 mph fade was
-# tried on route 260 and entered its curves 1-2 mph hotter, so both models share this one.
+# Both models share the table: the big one under-reads less at range, and its own fit by
+# seconds ahead entered curves hotter (doc).
 
 # Below the bias band the far read also flickers: a bend seen at 150 m can vanish from the
 # path at 100 m and come back at 50 m, and the planner released 100 m short of the apex (the
@@ -64,9 +62,9 @@ _ESCALATION_V_BP = _KAPPA_BIAS_V_BP
 # Use hysteresis below the commit threshold.
 _RELEASE_FRAC = 0.3
 
-# The near field is measured rather than predicted: it holds the planner through a curve, floors
-# the far correction, and is the only part of the path allowed to ask past the budget, so what
-# bounds it is the model flagging a bend that is not there. The small model's read holds to 3 s
+# The near field is measured rather than predicted: it holds the planner through a curve and is
+# the only part of the path allowed to ask past the budget, so what bounds it is the model
+# flagging a bend that is not there. The small model's read holds to 3 s
 # and a 4 s window quadruples its past-budget phantoms above 50 mph; the big model (modelV2.big)
 # reads and flags at 3-4 s as the small one does at 2-3 s (model_reach.py; numbers in the doc).
 _NEAR_T = 3.0  # s
@@ -142,11 +140,10 @@ class SmartCruiseControlVision:
     dist[1:] = np.cumsum(np.hypot(np.diff(x), np.diff(y)))
 
     lim = self.limits
-    # Preserve raw near-field geometry as the floor for corrected predictions.
+    # The raw near field says whether the car is in a curve.
     near_d = max(self.v_ego, MIN_V) * (_NEAR_T_BIG if model.big else _NEAR_T)
     near = dist <= near_d  # dist[0] is 0, so never empty
-    v_raw = allowed_speed(kappa, _A_LAT_REG_MAX * _PLAN_MARGIN)
-    self.v_near_min = float(np.min(v_raw[near]))
+    self.v_near_min = float(np.min(allowed_speed(kappa[near], _A_LAT_REG_MAX * _PLAN_MARGIN)))
     # Publish near-path lateral acceleration for UI state.
     self.max_pred_lat_acc = float(np.max(kappa[near]) * self.v_ego ** 2)
 
