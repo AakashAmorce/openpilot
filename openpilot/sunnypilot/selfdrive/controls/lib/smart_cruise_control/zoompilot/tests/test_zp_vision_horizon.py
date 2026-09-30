@@ -13,64 +13,54 @@ import pytest
 import openpilot.cereal.messaging as messaging
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
-from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control import MIN_V
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.limits import A_PUB_MIN, PUB_JERK, get_planning_limits, publish_ramp
-from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.vision_controller import SmartCruiseControlVision
-from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.tests.vision_harness import (
-  SETPOINT, V_EGO, VisionCase, curve_at, make_cp, model_for_road, patch_horizon)
+from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.zoompilot.vision_controller import SmartCruiseControlVision
+from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.zoompilot.tests.vision_harness import (
+  SETPOINT, V_EGO, VisionCase, curve_at, make_cp, model_for_road)
 
 OP_LONG_IDS = ["op_long", "stock"]
+
+
+def hallucination(s):
+  # the replayed failure: at 68 mph the model reported an r=330 m bend between 120 and 200 m
+  # on a road that never bent (steering curvature stayed under 1/1900 for 20 s)
+  return 0.003 if 120. <= s <= 200. else 0.
 
 
 class TestHighwayHorizon(VisionCase):
 
   @pytest.mark.parametrize("op_long", [True, False], ids=OP_LONG_IDS)
-  def test_highway_plans_on_the_near_window_only(self, op_long):
-    # 70 mph: a real r=350 m bend (25.8 m/s allowed) is not in the plan while it sits beyond
-    # the 3 s window, on either path, and commits once it is inside
+  def test_whole_path_where_a_misread_is_cheap(self, op_long):
+    # the tracking servo and openpilot long plan the whole model path at any speed: the same
+    # 70 mph bend 250 m out is already in the plan
     v, kappa = 31., 1. / 350.
-    scc = SmartCruiseControlVision(make_cp(op_long=op_long))
-    self.run_road(v, curve_at(150., kappa), n=5, setpoint=v, scc=scc)
-    assert not scc.is_active, op_long
-    assert scc.a_required == 0.
-    assert scc.v_ahead_min == 255.  # the ICBM lookahead follows the same horizon
-    self.run_road(v, curve_at(80., kappa), n=5, setpoint=v, scc=scc)
-    assert scc.is_active, op_long
-    assert scc.output_v_target < v - 0.5
-    assert scc.output_a_target < 0.
+    scc = SmartCruiseControlVision(make_cp(op_long=True)) if op_long else self.stock()
+    self.run_road(v, curve_at(250., kappa), n=5, setpoint=v, scc=scc)
+    assert scc.a_required > 0.
+    assert scc.v_ahead_min < v
 
-  @pytest.mark.parametrize("op_long", [True, False], ids=OP_LONG_IDS)
-  def test_highway_far_field_read_on_a_straight_road_never_commits(self, op_long):
-    # the replayed failure: at 68 mph the model reported an r=330 m bend between 120 and
-    # 200 m on a road that never bent (steering curvature stayed under 1/1900 for 20 s).
-    # Both paths braked for it; with the horizon on the near window neither plans on it
-    def hallucination(s):
-      return 0.003 if 120. <= s <= 200. else 0.
-    v = 30.
-    scc = SmartCruiseControlVision(make_cp(op_long=op_long))
-    self.run_road(v, hallucination, n=10, setpoint=v + 3., scc=scc)
-    assert not scc.is_active, op_long
-    assert scc.a_required == 0.
-    assert scc.output_v_target == V_CRUISE_UNSET
-    # the same read commits as soon as the horizon is let back out
-    with patch_horizon([1e4, 1e4]):
-      pre = SmartCruiseControlVision(make_cp(op_long=op_long))
-      self.run_road(v, hallucination, n=10, setpoint=v + 3., scc=pre)
-    assert pre.is_active, op_long
+  def test_far_misread_never_asks_past_the_budget(self):
+    # the tracking servo plans on the misread, but a predicted constraint asks for the budget
+    # at most: the servo holds a budget-sized gap for as long as the read lasts
+    stock = self.stock()
+    for _ in range(40):
+      self.run_road(30., hallucination, n=1, setpoint=33., scc=stock)
+      assert stock.output_a_target >= -stock.limits.a_budget - 1e-6
+    assert stock.is_active
+    assert stock.a_needed <= stock.limits.a_budget
 
-  def test_horizon_is_whole_inside_the_band_and_fades_across_it(self):
-    # 50 mph: the far corner is planned on, exactly as before (the fitted gain owns it)
-    def far_bend(s):
-      return 0.003 if 120. <= s <= 200. else 0.
-    self.run_road(22.4, far_bend, setpoint=22.4)
-    assert self.scc_v.a_required > 0.
-    # 55 mph: the horizon is halfway in (150 m); a bend at 130 m is planned, one past 150 m not
-    v = 24.6
-    self.run_road(v, lambda s: 0.003 if 130. <= s <= 140. else 0., setpoint=v)
-    assert self.scc_v.a_required > 0.
-    self.run_road(v, lambda s: 0.003 if 170. <= s <= 200. else 0., setpoint=v)
-    assert self.scc_v.a_required == 0.
+  @pytest.mark.parametrize("big, window", [(False, 3.), (True, 4.)], ids=["small", "big"])
+  def test_near_window_follows_the_model(self, big, window):
+    # cruising at 50 mph a late bend just inside the running model's measured window may
+    # escalate; just past it, predicted, it may not; from a 60 mph set speed neither may
+    v = 22.4
+    for setpoint, d, escalates in ((22.4, v * window - 10., True), (22.4, v * window + 10., False),
+                                   (26.8, v * window - 10., False)):
+      stock = self.stock()
+      self.run_road(v, curve_at(d, 0.006), n=40, setpoint=setpoint, scc=stock, big=big)
+      assert (stock.a_needed > stock.limits.a_budget) == escalates, (big, setpoint, d)
+      assert stock.a_needed >= stock.limits.a_budget  # the bend binds either way
 
   def test_op_long_published_decel_is_clipped_to_the_budget(self):
     # the plan aTarget seeds mpc.set_cur_state and stage 0 is pinned to the seed, so a
@@ -126,10 +116,13 @@ class TestPublishRamp:
     assert lim.a_pub_min == -lim.a_budget
     assert publish_ramp(-2.0, -1.18, lim, V_EGO) == pytest.approx(-lim.a_budget)
 
-  def test_stock_clips_at_the_lever_depth(self):
+  def test_stock_clips_at_the_budget_unless_measured(self):
+    # a predicted constraint (map, speed limit) asks for the budget at most; measured geometry
+    # passes its own floor and may use the ECU's range
     lim = get_planning_limits(make_cp(op_long=False))
-    assert lim.a_pub_min == A_PUB_MIN
-    assert publish_ramp(-3.0, -1.95, lim, V_EGO) == pytest.approx(A_PUB_MIN)
+    assert lim.a_pub_min == -lim.a_budget
+    assert publish_ramp(-3.0, -0.7, lim, V_EGO) == pytest.approx(-lim.a_budget)
+    assert publish_ramp(-3.0, -1.95, lim, V_EGO, a_floor=A_PUB_MIN) == pytest.approx(A_PUB_MIN)
 
   def test_step_is_jerk_limited_both_ways(self):
     lim = get_planning_limits(make_cp(op_long=True))

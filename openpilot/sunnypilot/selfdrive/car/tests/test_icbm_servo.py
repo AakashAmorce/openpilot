@@ -180,15 +180,15 @@ class TestRestoreResponsiveness:
     """After a limiter release with a built-up overshoot gap, the restore must start about
     a quiet-window after the flip, not after the residual finishes bleeding off."""
     icbm = self.make_icbm(brand="mazda")
-    self.run_frames(40, 40, n=60, icbm=icbm, v_ego_mph=40., overshoot=True)
+    self.run_frames(40, 40, n=60, icbm=icbm, v_ego_mph=40.)
     # curve: deep decel demand builds the full gap and walks the dash down
-    self.run_frames(30, 31, n=100, icbm=icbm, v_ego_mph=39., a_target=-1.2, overshoot=True)
+    self.run_frames(30, 31, n=100, icbm=icbm, v_ego_mph=39., a_target=-1.2)
     assert icbm.overshoot_mph > 5.
 
     # road straightens: source back to cruise, target back at the driver's 40
     first_up = None
     for i in range(400):
-      sends = self.run_frames(40, 31, n=1, icbm=icbm, source='cruise', v_ego_mph=33., overshoot=True)
+      sends = self.run_frames(40, 31, n=1, icbm=icbm, source='cruise', v_ego_mph=33.)
       if sends[0] == SendButtonState.increase or sends[0] == SendButtonState.increaseHold:
         first_up = i * DT_CTRL
         break
@@ -203,6 +203,19 @@ class TestRestoreResponsiveness:
     sends = self.run_frames(40, 30, n=300, icbm=icbm, source='cruise', v_ahead_min_mph=25.)
     assert all(s == SendButtonState.none for s in sends)
     assert icbm.state == State.holding
+
+  def test_lookahead_dip_caps_restore_at_its_level(self):
+    """Route 128 t=9880: the curve released with the dash at 20, a 41 mph dip on the horizon
+    froze it there for 6.8 s and the car braked on to 19.7. A dip above the dash is a ceiling
+    for the restore, not a stop."""
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(50, 50, n=60, icbm=icbm)
+    dash = 20
+    for _ in range(600):
+      sends = self.run_frames(50, dash, n=1, icbm=icbm, source='cruise', v_ahead_min_mph=41.)
+      if sends[0] in (SendButtonState.increase, SendButtonState.increaseHold):
+        dash += 1
+    assert 39 <= dash <= 41, dash
 
   def test_lookahead_clear_skips_quiet_window(self):
     """With the horizon clear the profile is the churn oracle; stillness is redundant and
@@ -301,5 +314,5 @@ class TestOpenpilotLongitudinal:
   def test_no_decel_overshoot(self):
     icbm = make_icbm(brand='mazda', op_long=True)
     run_frames(icbm, 45, 45, n=60, v_cruise_mph=45)
-    run_frames(icbm, 35, 45, n=100, source='speedLimitAssist', v_cruise_mph=35, v_ego_mph=45, a_target=-0.5, overshoot=True)
+    run_frames(icbm, 35, 45, n=100, source='speedLimitAssist', v_cruise_mph=35, v_ego_mph=45, a_target=-0.5)
     assert icbm.overshoot_mph == 0.

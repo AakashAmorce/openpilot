@@ -286,7 +286,6 @@ class UIStateSP:
       self.params.remove("CustomAccIncrementsEnabled")
       self.params.remove("SmartCruiseControlVision")
       self.params.remove("SmartCruiseControlMap")
-      self.params.remove("SmartCruiseDecelOvershoot")
 
 
 def set_always_offroad(params: Params, enable: bool) -> None:

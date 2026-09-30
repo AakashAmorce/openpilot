@@ -20,8 +20,8 @@ from openpilot.cereal import log
 from openpilot.common.params import Params
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from opendbc.car import structs
-from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control import vision_controller
-from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.vision_controller import SmartCruiseControlVision
+from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.zoompilot import vision_controller
+from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.zoompilot.vision_controller import SmartCruiseControlVision
 
 V_EGO = 20.
 SETPOINT = 20.
@@ -41,14 +41,15 @@ ATTENUATION_D = [0., 30., 50., 70., 90., 110., 130., 200.]
 ATTENUATION = [1.0, 0.94, 0.88, 0.79, 0.66, 0.55, 0.30, 0.30]
 
 
-def model_for_road(v: float, kappa_fn, v_model: float | None = None, attenuate: bool = False):
+def model_for_road(v: float, kappa_fn, v_model: float | None = None, attenuate: bool = False, big: bool = False):
   """Render kappa(s) into model arrays as the model would report driving it at speed v.
 
   v_model lets the model's own velocity plan differ from v (a planned slowdown); the yaw
   rate follows the planned velocity, exactly as the model reports it.
 
   attenuate applies the measured range under-read, so the road reaches the controller the
-  way the real model would report it rather than as perfect geometry.
+  way the real model would report it rather than as perfect geometry. big marks the frame as
+  the big model's (modelV2.big), which selects its planning horizon.
   """
   t = np.array(ModelConstants.T_IDXS)
   s = v * t
@@ -70,6 +71,7 @@ def model_for_road(v: float, kappa_fn, v_model: float | None = None, attenuate: 
   orientation_rate = log.XYZTData.new_message()
   orientation_rate.z = [float(kappa_fn(si) * vm) for si in s]
   model.modelV2.orientationRate = orientation_rate
+  model.modelV2.big = big
   return model
 
 
@@ -88,17 +90,6 @@ def patch_gain(gain):
     vision_controller._KAPPA_BIAS_GAIN = saved
 
 
-@contextlib.contextmanager
-def patch_horizon(horizon_d):
-  """Run with a different planning horizon, to show what cutting it buys."""
-  saved = vision_controller._PLAN_HORIZON_D
-  vision_controller._PLAN_HORIZON_D = horizon_d
-  try:
-    yield
-  finally:
-    vision_controller._PLAN_HORIZON_D = saved
-
-
 class VisionCase:
   """Base for the controller tests: a fresh enabled controller per test and road runners.
 
@@ -112,18 +103,22 @@ class VisionCase:
     self.params.put_bool("SmartCruiseControlVision", True, block=True)
     self.scc_v = SmartCruiseControlVision(make_cp())
 
+  @staticmethod
+  def stock() -> SmartCruiseControlVision:
+    return SmartCruiseControlVision(make_cp(op_long=False))
+
   def make_sm(self, v: float, kappa_fn, cur_curvature: float = 0., v_model: float | None = None,
-              attenuate: bool = False) -> Any:
+              attenuate: bool = False, big: bool = False) -> Any:
     controls_state = messaging.new_message('controlsState')
     controls_state.controlsState.curvature = float(cur_curvature)
-    return {'modelV2': model_for_road(v, kappa_fn, v_model, attenuate).modelV2,
+    return {'modelV2': model_for_road(v, kappa_fn, v_model, attenuate, big).modelV2,
             'controlsState': controls_state.controlsState}
 
   def run_road(self, v: float, kappa_fn, n: int = 3, cur_curvature: float = 0.,
                v_model: float | None = None, setpoint: float = SETPOINT,
-               enabled: bool = True, override: bool = False, scc=None, attenuate: bool = False):
+               enabled: bool = True, override: bool = False, scc=None, attenuate: bool = False, big: bool = False):
     scc = scc or self.scc_v
-    sm = self.make_sm(v, kappa_fn, cur_curvature, v_model, attenuate)
+    sm = self.make_sm(v, kappa_fn, cur_curvature, v_model, attenuate, big)
     for _ in range(n):
       scc.update(sm, enabled, override, v, 0., setpoint)
     return scc

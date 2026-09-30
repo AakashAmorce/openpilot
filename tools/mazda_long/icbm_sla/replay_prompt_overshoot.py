@@ -37,7 +37,6 @@ Run from repo root (venv active):
 """
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -63,10 +62,6 @@ def replay(path):
   arb = make_arbiter()
   CP = car.CarParams(pcmCruise=True, brand="mazda")
   servo = IntelligentCruiseButtonManagement(CP, custom.CarParamsSP(pcmCruiseSpeed=False))
-  # the overshoot toggle is a param the servo re-reads; force it on without touching this
-  # machine's params
-  servo.params = SimpleNamespace(get_bool=lambda key: key == "SmartCruiseDecelOvershoot")
-  servo.decel_overshoot_enabled = True
 
   enabled = False
   resolver = None
