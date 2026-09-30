@@ -7,7 +7,7 @@ See the LICENSE.md file in the root directory for more details.
 
 import numpy as np
 
-from opendbc.sunnypilot.car.interfaces import get_tune_scale_schedule
+from opendbc.sunnypilot.car.interfaces import get_tune_scale
 from openpilot.common.params import Params
 
 
@@ -27,32 +27,12 @@ class LatControlTorqueExtOverride:
     self._speed_dep_speed_bp = []
     self._speed_dep_lat_accel_factor_bp = []
     self._speed_dep_friction_bp = []
-    # Per-count tables for platforms with a speed-dependent STEER_MAX: the schedule is
-    # (speed_bp, steer_max_v) from the car's speed-dep config, LAF divided and friction
-    # multiplied by it at each bin center. None/empty on flat cars.
-    self._speed_dep_steer_max_schedule = None
-    self._speed_dep_laf_per_count_bp = []
-    self._speed_dep_friction_per_count_bp = []
     self._speed_dep_car_cfg = None
     self._last_vego = 0.0
 
-    # A flat tune (the CP tune, torqued's global fit, the manual override) is fitted on the
-    # platform's tune scale; where STEER_MAX moves with speed it is rescaled per frame so the
-    # counts per m/s^2 match a build running that scale. None on a flat-scale platform.
-    self._tune_scale_schedule = get_tune_scale_schedule(CP)
-    # the host's last flat values (CP tune, update_torque_parameters) and what this wrote over
-    # them, so a new host write is told apart from our own rescaled one. Seeded with the CP tune
-    # so the manual override switched off mid-drive falls back to it, not to its own values.
-    self._flat_base = None
-    if CP.lateralTuning.which() == 'torque':
-      tune = CP.lateralTuning.torque
-      self._flat_base = (float(np.float32(tune.latAccelFactor)), float(np.float32(tune.friction)))
-    self._flat_written = None
-
-  def _tune_scale_at(self, v_ego: float) -> float:
-    if self._tune_scale_schedule is None:
-      return 1.0
-    return float(np.interp(v_ego, self._tune_scale_schedule[0], self._tune_scale_schedule[1]))
+    # The manual override is typed on the scale upstream's tunes use (TUNE_STEER_MAX), which is
+    # 1.5x off the Mazda EPS envelope's STEER_MAX; 1.0 everywhere else.
+    self._tune_scale = get_tune_scale(CP)
 
   @staticmethod
   def _write_torque_params(torque_params, lat_accel_factor: float, friction: float) -> bool:
@@ -79,35 +59,13 @@ class LatControlTorqueExtOverride:
           self._override_friction = float(self.params.get("TorqueParamsOverrideFriction", return_default=True))
 
       if self.torque_override_enabled:
-        scale = self._tune_scale_at(self._last_vego)
-        changed = self._write_torque_params(torque_params, self._override_lat_accel_factor * scale, self._override_friction / scale)
-        self._flat_written = (torque_params.latAccelFactor, torque_params.friction)
-        return changed
+        return self._write_torque_params(torque_params, self._override_lat_accel_factor * self._tune_scale,
+                                         self._override_friction / self._tune_scale)
 
-    # Speed-dep latAccelFactor and friction, interpolated by speed each frame. On a platform
-    # with a speed-dependent STEER_MAX the bins are normalized units learned under one scale
-    # each, so both interp in CAN-count space and rescale at the current speed: the scale's
-    # step lands where the carcontroller applies it instead of being smeared across the bin
-    # span. Friction is inverted (counts = friction * STEER_MAX). See docs/zoompilot/lateral-tune.md.
+    # Speed-dep latAccelFactor and friction, interpolated by speed each frame.
     if self._speed_dep_active and self._speed_dep_speed_bp:
-      if self._speed_dep_steer_max_schedule and self._speed_dep_laf_per_count_bp:
-        sm_bp, sm_v = self._speed_dep_steer_max_schedule
-        steer_max = float(np.interp(self._last_vego, sm_bp, sm_v))
-        new_lat_accel_factor = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_laf_per_count_bp)) * steer_max
-        new_fric = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_friction_per_count_bp)) / steer_max
-      else:
-        new_lat_accel_factor = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_lat_accel_factor_bp))
-        new_fric = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_friction_bp))
+      new_lat_accel_factor = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_lat_accel_factor_bp))
+      new_fric = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_friction_bp))
       changed = self._write_torque_params(torque_params, new_lat_accel_factor, new_fric)
-
-    elif self._tune_scale_schedule is not None:
-      # Flat tune on a speed-dependent STEER_MAX: without this the same latAccelFactor asks for
-      # 1.5x the counts below the CX-5's 32 mph step as above it. Friction is inverted, as above.
-      current = (torque_params.latAccelFactor, torque_params.friction)
-      if self._flat_base is None or current != self._flat_written:
-        self._flat_base = current
-      scale = self._tune_scale_at(self._last_vego)
-      changed = self._write_torque_params(torque_params, self._flat_base[0] * scale, self._flat_base[1] / scale)
-      self._flat_written = (torque_params.latAccelFactor, torque_params.friction)
 
     return changed

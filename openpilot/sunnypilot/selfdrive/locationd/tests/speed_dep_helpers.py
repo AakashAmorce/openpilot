@@ -50,9 +50,10 @@ class FakeParams:
   def __init__(self, store=None, speed_dep_on=True):
     self.store = dict(store or {})
     self.speed_dep_on = speed_dep_on
+    self.bools = set()  # further toggles a test turns on
 
   def get_bool(self, key):
-    return self.speed_dep_on if key in SPEED_DEP_TOGGLES else False
+    return self.speed_dep_on if key in SPEED_DEP_TOGGLES else key in self.bools
 
   def get(self, key, **kwargs):
     return self.store.get(key)

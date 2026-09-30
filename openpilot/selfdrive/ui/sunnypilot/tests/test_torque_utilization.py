@@ -32,20 +32,20 @@ def _utilization(monkeypatch, CP, torque, v_ego):
 
 
 class TestTorqueUtilization:
-  # route 21d103861daeed11/000003db--f4124f0aa8/8, t=10.39: 620 counts on the 800 scale at 19.7
-  # m/s, pinned there 0.7 s before steerSaturated; the upstream bar read 0.775
-  @pytest.mark.parametrize("v_ego, torque", [(19.69, 620 / 800), (13.9, 676 / 1200), (10.3, 1048 / 1200)])
+  # route 21d103861daeed11/000003db--f4124f0aa8/8, t=10.39: 620 counts at 19.7 m/s, pinned there
+  # 0.7 s before steerSaturated; the upstream bar read 0.775 of that build's 800 scale
+  @pytest.mark.parametrize("v_ego, torque", [(19.69, 620 / 1200), (13.9, 676 / 1200), (10.3, 1048 / 1200)])
   def test_rail_is_full_scale(self, monkeypatch, v_ego, torque):
     assert _utilization(monkeypatch, MAZDA, torque, v_ego) == pytest.approx(1.0, abs=1e-3)
 
   def test_below_rail_is_proportional(self, monkeypatch):
-    assert _utilization(monkeypatch, MAZDA, -310 / 800, 20.0) == pytest.approx(-0.5, abs=1e-3)
+    assert _utilization(monkeypatch, MAZDA, -310 / 1200, 20.0) == pytest.approx(-0.5, abs=1e-3)
 
   def test_no_ceiling_is_applied_torque(self, monkeypatch):
     assert _utilization(monkeypatch, structs.CarParams(brand='toyota'), 0.6, 20.0) == 0.6
 
   def test_torque_bar_reads_it(self, monkeypatch):
-    _utilization(monkeypatch, MAZDA, 620 / 800, 19.69)
+    _utilization(monkeypatch, MAZDA, 620 / 1200, 19.69)
     bar = TorqueBar()
     for _ in range(200):
       bar._update_state()

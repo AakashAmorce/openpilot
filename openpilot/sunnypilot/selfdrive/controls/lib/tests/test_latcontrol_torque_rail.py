@@ -20,7 +20,7 @@ import pytest
 
 from opendbc.car.mazda.values import MazdaFlags
 from opendbc.car.structs import car
-from opendbc.sunnypilot.car.interfaces import get_steer_rail_schedule, get_tune_scale_schedule
+from opendbc.sunnypilot.car.interfaces import get_steer_rail_schedule
 from openpilot.cereal import custom
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
@@ -104,14 +104,12 @@ class TestRailFromPlatform:
       for _ in range(2):
         step(lac, make_cs(v_ego), 0.0)
       expected = float(np.interp(v_ego, bp, rail))
-      # the flat CP tune rides the carcontroller's scale: 1.5x below the 1200 -> 800 step
-      laf = LAF * float(np.interp(v_ego, *get_tune_scale_schedule(make_cp(mazda=True))))
       assert lac.steer_max == pytest.approx(expected)
-      assert lac.pid.pos_limit == pytest.approx(expected * laf)
-      assert lac.pid.neg_limit == pytest.approx(-expected * laf)
-    assert lac.steer_max == pytest.approx(620.0 / 800.0)  # the 20 m/s rail
+      assert lac.pid.pos_limit == pytest.approx(expected * LAF)
+      assert lac.pid.neg_limit == pytest.approx(-expected * LAF)
+    assert lac.steer_max == pytest.approx(620.0 / 1200.0)  # the 20 m/s rail
 
-  def test_update_limits_reruns_across_the_cliff_and_not_at_steady_speed(self, params):
+  def test_update_limits_reruns_as_the_rail_moves_and_not_at_steady_speed(self, params):
     lac = make_lac(mazda=True)
     for _ in range(3):
       step(lac, make_cs(20.0), 0.0)  # settle: rail read at 0, then at 20 m/s
@@ -124,10 +122,10 @@ class TestRailFromPlatform:
     step(lac, make_cs(14.2), 0.0)  # now the 14.2 rail (648/1200)
     assert len(calls) == 1
     assert lac.steer_max == pytest.approx(648.0 / 1200.0)
-    step(lac, make_cs(14.5), 0.0)
-    step(lac, make_cs(14.5), 0.0)
+    step(lac, make_cs(10.3), 0.0)
+    step(lac, make_cs(10.3), 0.0)
     assert len(calls) == 2
-    assert lac.steer_max == pytest.approx(620.0 / 800.0)
+    assert lac.steer_max == pytest.approx(1048.0 / 1200.0)
 
   def test_platform_without_a_schedule_keeps_full_scale(self, params):
     lac = make_lac(mazda=False)

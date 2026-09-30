@@ -6,16 +6,16 @@ See the LICENSE.md file in the root directory for more details.
 
 The per-frame speed-dependent torque interpolation in LatControlTorqueExtOverride: the
 latAccelFactor and friction the controller reads, toggle-off behavior, manual override
-priority and change detection. Tested on the override directly (the class that owns the
-interpolation) rather than LatControlTorqueExt, which inherits from NNLC and needs model
-files to init. Per-count interpolation across a STEER_MAX cliff is in
-test_speed_dep_per_count.py, the torqued message handling in test_speed_dep_ext_update.py.
+priority, its tune scale and change detection. Tested on the override directly (the class
+that owns the interpolation) rather than LatControlTorqueExt, which inherits from NNLC and
+needs model files to init. The torqued message handling is in test_speed_dep_ext_update.py.
 """
 import numpy as np
 import pytest
 
+from opendbc.car.mazda.values import MazdaFlags
 from openpilot.sunnypilot.selfdrive.controls.tests.speed_dep_helpers import (
-  SAMPLE_SPEED_BP, SAMPLE_LAT_ACCEL_FACTOR_BP, SAMPLE_FRICTION_BP, activate_speed_dep, make_torque_params,
+  SAMPLE_SPEED_BP, SAMPLE_LAT_ACCEL_FACTOR_BP, SAMPLE_FRICTION_BP, activate_speed_dep, make_cp, make_torque_params,
 )
 
 
@@ -183,6 +183,21 @@ class TestManualOverridePriority:
 
     expected_factor = float(np.interp(15.0, SAMPLE_SPEED_BP, SAMPLE_LAT_ACCEL_FACTOR_BP))
     assert tp.latAccelFactor == pytest.approx(expected_factor, abs=1e-4), "Without manual override, speed-dep should be used"
+
+
+class TestManualOverrideTuneScale:
+  """Typed on upstream's scale like params.toml; the Mazda EPS envelope's STEER_MAX is 1.5x it."""
+
+  def test_typed_values_put_stock_counts_on_the_wire(self, make_override):
+    CP = make_cp('MAZDA_CX5_2022')
+    CP.brand = 'mazda'
+    CP.flags = int(MazdaFlags.GEN1 | MazdaFlags.STEER_TO_ZERO_EPS)
+    ovr = make_override(enforce=True, manual_override=True, manual_lat_accel_factor='1.2', manual_friction='0.15', CP=CP)
+    tp = make_torque_params()
+    ovr.update_override_torque_params(tp)
+    # counts per m/s^2 and friction counts of an 800-count build running the typed values
+    assert 1200 / tp.latAccelFactor == pytest.approx(800 / 1.2, rel=1e-6)
+    assert tp.friction * 1200 == pytest.approx(0.15 * 800, rel=1e-6)
 
 
 class TestChangeDetection:

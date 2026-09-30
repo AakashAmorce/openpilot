@@ -134,9 +134,9 @@ friction included; the KP schedule is v0's at every speed; the extension's outpu
 ### Steer-limit classifier (`steer_limit.py`)
 
 controlsd sets `steer_limited_by_safety` when |CC.actuators.torque - carOutput.torque| >
-0.01. One carcontroller slew step is 12/1200 = 0.010 of scale below the CX-5's cliff and
-12/800 = 0.015 above it, so any command walking faster than the rate limit reads as limited:
-51% of active frames on a logged v2 drive, and the bidirectional freeze blocked integrator
+0.01. One carcontroller slew step is 12/1200 = 0.010 of scale on the CX-5 (0.015 on the
+800-count scale the logged drive still ran above 32 mph), so any command walking faster than
+the rate limit reads as limited: 51% of active frames on a logged v2 drive, and the bidirectional freeze blocked integrator
 decay toward a reversing error on about 13% of frames. That standing bias is where v0's
 |i| p50 of 0.275 came from (v2 0.016). An EPS pinned at its ceiling also never raised the
 saturation alert, because the ceiling clamp itself kept the flag high.
@@ -153,8 +153,9 @@ that wound the integrator up against the EPS slew lag, because while the command
 the slew the plant is not following it and integrating that error is actuator-rate windup,
 which is what upstream's flag exists for. The freeze is directional so decay stays live, and
 the rail is carved out because the PID limits already sit on it (below) and a False flag
-lets the tune's own saturation test raise the alert. The 0.9 step fraction covers the
-carcontroller reading the scale at `vEgoRaw` while the classifier interpolates at `vEgo`.
+lets the tune's own saturation test raise the alert. The 0.9 step fraction covers a
+speed-dependent scale (Rivian's) that the carcontroller reads at `vEgoRaw` while the
+classifier interpolates at `vEgo`; on a flat scale a full step is exact.
 `error_prev` is the previous frame's `pid_log.error`; the one-frame lag is accepted at 100 Hz.
 
 Caveat: a driver-limited frame with a decaying integrator also hands False to the alert
@@ -168,8 +169,9 @@ stale-integrator-vs-error frames 59% -> 5%, open-loop output delta < 0.014.
 
 ### EPS rail via `steer_max` (`latcontrol_torque_ext.py`)
 
-`get_steer_rail_schedule(CP)` gives EPS_CEILING / STEER_MAX(v): on the CX-5 the rail is
-648/1200 = 0.54 at 14.2 m/s and 620/800 = 0.775 from 14.5 m/s up. The extension writes it to
+`get_steer_rail_schedule(CP)` gives EPS_CEILING / STEER_MAX: on the CX-5 the rail falls
+monotonically from 1148/1200 = 0.96 below 8 m/s to 620/1200 = 0.52 from 14.5 m/s up. The
+extension writes it to
 the host tune as `steer_max` in `update_override_torque_params`, so every tune's own
 `update_limits()` puts the PID limits on the rail and its saturation test
 (`steer_max - |output| < 1e-3`) fires there, with no tune code. The limits scale linearly in
@@ -178,49 +180,58 @@ its own handling. Corner windows on routes 12a, 12c and 126 ran 58 to 100% rail 
 integrator frozen (no windup); exit ringing there (about 1 m/s^2 pk-pk) is P-driven loop
 gain at 4 to 11 m/s, which is what KD addresses.
 
-### Friction and LAF per-count across the STEER_MAX cliff (`latcontrol_torque_ext_override.py`)
+### One STEER_MAX, and the tune scale (2026-09-30)
 
-The CX-5's STEER_MAX steps 1200 -> 800 between 14.2 and 14.5 m/s. Bins learn normalized
-values under one scale each (the bin boundary is aligned to the cliff), so a plain interp
-between the 12.0 and 16.4 m/s bin centers smears the scale's step across the whole span:
-about +18% torque below the cliff (the 27 to 32 mph wobble band) and -19% above. Both
-tables therefore interpolate in CAN-count space and rescale by `steer_max_schedule` at the
-current speed, exact at bin centers, unchanged on flat platforms (schedule None).
+Every steering Mazda runs the EPS envelope's flat `STEER_MAX` of 1200 counts, the panda's
+`max_torque` for it. Until 2026-09-30 it stepped 1200 -> 800 between 14.2 and 14.5 m/s
+(`STEER_MAX_LOOKUP`), which put every learned and typed torque value in two units: bins learned
+one scale each, a plain interp smeared the step across the 12.0-16.4 m/s span (+18% / -19%
+torque), and friction inverts (its counts are friction * STEER_MAX), so the override carried a
+per-count interp for the bins, a per-frame rescale for flat tunes, and the rail interpolated
+ceiling/scale across the cliff (0.024 high at 31.9 to 32.3 mph, which kept `at_rail` false
+and suppressed the saturation alert there). The EPS is linear in counts (latAccelFactor spread
+1.47x across speeds in counts, 2.59x as a fraction of the ceiling), so one scale loses nothing:
+all of that is gone, and the ceiling clamp and the rail stay because they are the hardware.
 
-Friction is inverted. `get_friction` returns +-friction * latAccelFactor in lat-accel space
-and the linear torque function divides by latAccelFactor again, so the normalized friction
-torque is the bin value and its counts are friction * STEER_MAX(v). A plain interp of the
-CX-5 bins put 149 -> 166 -> 112 -> 122 counts on the wire through 12.0, 14.2, 14.5 and
-16.4 m/s. The 2026-08-29 note that friction "cancels the cliff on its own" (79.5 vs 80.2
-counts) used the wrong formula; corrected 2026-09-01.
+Values fitted on upstream's 800 (`TUNE_STEER_MAX`) are converted once where they enter,
+latAccelFactor x 1.5 and friction / 1.5 (`get_tune_scale`), so they put the same counts per
+m/s^2 on the wire as a stock build:
+- params.toml's tune, in the Mazda interface's `configure_torque_tune` override (an override
+  rather than a step in `_get_params`, so sunnypilot's second call converts too). The CX-5 2022
+  borrows the CX-9 2021's (1.76 at 800 counts); it runs its own global learner's value
+  instead, 1.222 / 0.154 at 800 counts (`TORQUE_TUNES`, converted with the rest).
+- the manual override and the custom offline values (`TorqueParamsOverride*`), typed against
+  stock behaviour. The developer UI's live latAccelFactor is on STEER_MAX, 1.5x a stock value.
+- NNLC's model torque (and the friction override summed with it): the models were trained on
+  800. Until this change NNLC ran 1.5x torque below 32 mph on the stepped scale.
 
-The manual override owns the params on every frame, or the per-frame interp out-writes it
-between its 3 s polls (299 of 300 frames before the fix). Comparisons are made in float32
-because `torque_params` is a capnp Float32 builder; a float64 compare re-ran `update_limits`
-at 100 Hz.
+Behaviour on the wire is unchanged in normal driving (same counts per m/s^2). What moved, over
+3.8M highway frames of the CX-5 corpus:
+- The driver envelope is built from 1200 above 32 mph as well: at the 620-count ceiling the
+  command yields from about 54 counts of opposing driver torque, not 27, the same continuous
+  envelope the panda checks. The 800-based envelope had trimmed 0.25% of highway frames, by a
+  median 60 counts, with a hand on the wheel.
+- controlsd's 0.01 mismatch is 12 counts above 32 mph (was 8): 30.7% of highway frames exceed
+  it rather than 39.5%, as below 32 mph already.
+- torqued's fits are not scale-invariant (TLS on a wide cloud, and a spread-based friction):
+  on the same points, learning on 1200 moves highway latAccelFactor within about 5% and friction
+  counts up 13 to 21%. The global learner's outer buckets fill in about two highway drives
+  instead of one.
 
-### Flat tunes across the STEER_MAX cliff (`latcontrol_torque_ext_override.py`)
+Rejected: a flat 800 with |torque| up to 1.435 at crawl. It needs no conversions, but
+car.capnp documents `actuators.torque` as bounded at 1.0, and any consumer that clips there
+would silently cap low-speed authority at 800 counts.
 
-With the speed bins off (their toggle, live torque or EnforceTorqueControl off, the manual
-override), the controller runs one latAccelFactor and friction: the CP tune, torqued's global
-fit, or the override. All three sit on the 800-count scale: params.toml's Mazda values are
-upstream's, the global fit only takes points above `MIN_VEL` (15 m/s, past the cliff), and a
-manual value is typed against stock behaviour. Run unscaled on the 1200 -> 800 schedule, the
-same LAF asked for 1.5x the counts below the cliff as above it. `get_tune_scale_schedule(CP)`
-gives STEER_MAX(v) / `TUNE_STEER_MAX` (1.5 below 14.2 m/s, 1.0 above 14.5), and the override
-multiplies LAF and divides friction by it every frame, so a flat tune puts a flat-800 build's
-counts on the wire at every speed while the 1200 envelope and the EPS ceiling still apply. The
-host's own writes (CP tune at init, `update_torque_parameters`, `disable_speed_dep_torque`)
-are told apart from the rescaled ones by value and become the new base; the base is seeded
-with the CP tune, so switching the manual override off mid-drive hands back the CP tune.
+The manual override writes the params on every frame, ahead of the speed bins' interp, which
+would otherwise out-write it between its 3 s polls. Writes compare in float32: `torque_params`
+is a capnp Float32 builder, and a float64 compare re-ran `update_limits` at 100 Hz.
 
 ### Swapped chassis (`speed_dependent.toml`)
 
-The swap fallback names a CX-5 KF, CX-9 2016-20, Mazda3 or Mazda6 behind the 2022 CX-5 EPS,
-which brings the 1200 -> 800 schedule. With no entry those cars ran the generic bins, whose
-(12, 18) bin spans the cliff, with no schedule attached for the per-count interp. Each now
-substitutes the CX-5 2022 table under `requires_steer_to_zero`, like the KE; on its stock EPS
-the entry is withheld and the car keeps the flat legacy path.
+The swap fallback names a CX-5 KE or KF, CX-9 2016-20, Mazda3 or Mazda6 behind the 2022 CX-5
+EPS. Each substitutes the CX-5 2022 table under `requires_steer_to_zero`: the table was learned
+behind that EPS firmware. On its stock EPS the entry is withheld (a steering floor and the
+firmware's dead band) and the car learns default bins from its global seed.
 
 ## Speed-bin learner and cache (`torqued_ext.py`)
 
@@ -229,9 +240,15 @@ fed by `_on_torque_point` after upstream's quality filters. `_estimate_params_sp
 runs upstream's total-least-squares fit per bin, clips to +-sanity of the seed (upstream's
 FACTOR_SANITY 0.3 / FRICTION_SANITY 0.5; 1.0 / 1.0 with the relaxed toggle), advances the
 bin's filter decay from MIN_FILTER_DECAY 50 toward MAX 250 as upstream does, and resets a bin
-that goes NaN with valid data. Bins come from `speed_dependent.toml` (CX-5:
-6.5, 9.5, 12.0, 16.4, 21.0, 28.0, 35.0 m/s, refreshed 2026-08-19 from the device cache) or
-the defaults seeded with the global offline values.
+that goes NaN with valid data. Bins come from `speed_dependent.toml` or the defaults seeded
+with the global offline values. A bin refits whenever a point has been routed to it since its
+last fit. Until 2026-09-30 the test was the bucket length, which stops changing once all eight
+ring buffers are full (12000 points) while new points keep replacing old ones, so a full bin
+froze at whatever it had learned when it filled: on the test car every bin above 16 m/s was
+full, and the device's values sat within 5% of the seeds while a refit of its own cached
+points read up to 21% lower. A car with a steering floor keeps the bins centered above it,
+and the first of them keeps the lower edge the full table gives it (`min_speed`) instead of
+reaching down over the floor and the dead band to 5 m/s.
 
 Wire. The per-bin values do not ride on `lateralTorqueParameters` (comma's struct, which an
 upstream sync would collide on). torqued_ext publishes its own `liveTorqueParametersSP`
@@ -268,6 +285,34 @@ was learned under (`seedVersion`, 0 for a cache written before the field) and an
 restarts learning from the seeds, values and points both. Bump it with the seed refresh in
 the same commit; a device picks it up on the next boot after the update.
 
+## Seeds (2026-09-30)
+
+The seeds keep the feel of the stepped scale: the CX-5 2022's are the values the test car
+drives on, the CX-9 2021's its existing seeds, both converted exactly to 1200 counts (bins
+from 16.4 m/s up were learned at 800: LAF x 1.5, friction / 1.5). The CX-5's new 34.5 and 37
+m/s centers take the old table's values there, within 1% of it in counts at every speed.
+
+`tools/mazda_long/speed_bin_seeds.py` gives the reference to check them against: it replays
+torqued's point filter over rlogs with the steer axis in applied counts / 1200
+(`torqueOutputCan`, so every build lands on one scale) and runs the learner's estimator per bin
+(at most 1500 points per steer bucket, |steer| < 0.5, TLS slope, spread friction), which
+matches a direct refit of the device's cached bin points. Over the CX-5's builds from
+2026-09-01 on (511 segments), in counts against the seeds: feedforward within 0 to 9% up to 55
+mph and 16 to 18% more torque at 63 to 78 mph; friction 30 to 58% higher. About half of that is
+the frozen bins (a refit of the device's own cached points already reads up to 27% more torque
+below 30 mph and 21% more friction), the rest learning on 1200 above 32 mph. The fixed learner
+starts from the seeds and moves toward the data; the test car runs the relaxed sanity band
+(+-100%), stock is +-30% LAF and +-50% friction.
+
+The fit depends on the controller as well as the car (5 to 8 m/s read 1.76 to 2.88 across
+earlier builds, 13 to 24 m/s stayed within 10%). Bootstrap over segments gives +-0.19 LAF at
+6.5 m/s and +-0.04 to 0.10 elsewhere; a second owner's CX-5 2022 (49 segments) sits within 25%
+of each bin. Split-half cross-validation of layouts against 1 m/s fits: a crawl bin (3 to 5
+m/s) and a split at 13 m/s did not beat the existing centers, noise-limited below 14 m/s; a bin
+from 35.75 to 40 m/s (80 to 89 mph) did, learning 2.76 against 2.20 at 34.5 in both this era and
+the whole corpus. The CX-9 2021 has no drive above 32 mph in the corpus (its one route reads
+2.29 at 16.4 m/s against the converted 2.30).
+
 ## Constants
 
 | name | value | measurement | route |
@@ -280,12 +325,12 @@ the same commit; a device picks it up on the next boot after the update.
 | `RELEASE_ERROR_RAMP_T` | 0.3 s | release slew p90 29.4 -> 14.7 /s | same |
 | `KD_INTERP_SPEEDS` / `KD_INTERP` | [7.5, 10, 12, 14.5] m/s -> [1.65, 1.05, 0.85, 0] | 0.3 s * KP(v); plant K 2.56, tau 0.86 s, delay 150 ms; sim overshoot 1.63 -> 1.21; removal returns 85% of exit swing (0.313 -> 0.415, v0 0.433); logged pair 0.188 vs 0.489 RMS | 12e (system-ID); 132/139 vs 12d/12f |
 | curvature buffer length | `LAT_ACCEL_REQUEST_BUFFER_SECONDS` 1.0 s (v0's) | applied counter-swing +0.01 to 0.05 at decelerating low-speed exits without it | 12d, 12f |
-| `MISMATCH_THRESHOLD` | 1e-2 | controlsd's own threshold; one slew step is 0.010 / 0.015 of scale below / above the cliff | logged v2 drive (51% of active frames flagged) |
+| `MISMATCH_THRESHOLD` | 1e-2 | controlsd's own threshold; one slew step is 0.010 of the 1200 scale (0.015 on 800) | logged v2 drive (51% of active frames flagged) |
 | `RAIL_EPS` | 1e-3 | the tunes' own saturation test | |
-| `RATE_STEP_FRACTION` | 0.9 | carcontroller rounds the scale at vEgoRaw, classifier interpolates at vEgo | |
-| EPS rail (`get_steer_rail_schedule`) | 648/1200 = 0.54 at 14.2 m/s, 620/800 = 0.775 above | 58 to 100% rail duty in tight corners, integrator frozen | 12a, 12c, 126 |
-| STEER_MAX cliff | 1200 -> 800 at 14.2 to 14.5 m/s | plain interp smear +18% below / -19% above; friction counts 149 -> 166 -> 112 -> 122 | speed_dependent.toml bins |
-| CX-5 speed bins | 6.5, 9.5, 12.0, 16.4, 21.0, 28.0, 35.0 m/s | boundary at 14.2 m/s aligned to the cliff | device cache 2026-08-19 |
+| `RATE_STEP_FRACTION` | 0.9 | a speed-dependent scale read at vEgoRaw vs vEgo; exact on a flat one | |
+| EPS rail (`get_steer_rail_schedule`) | 1148/1200 = 0.96 below 8 m/s to 620/1200 = 0.52 from 14.5 m/s | 58 to 100% rail duty in tight corners, integrator frozen | 12a, 12c, 126 |
+| `STEER_MAX` / `TUNE_STEER_MAX` | 1200 at every speed / 800 | tune scale 1.5; LAF spread 1.47x in counts vs 2.59x as a fraction of the ceiling | CX-5 corpus |
+| CX-5 speed bins | 6.5, 9.5, 12.0, 16.4, 21.0, 28.0, 34.5, 37.0 m/s | device values converted, new centers interpolated; 37.0 learns 2.76 vs 2.20 at 34.5; crawl bin and 13 m/s split not supported by CV | device cache 2026-09-29; builds from 2026-09-01, 511 segments |
 | bin sanity | +-0.3 LAF, +-0.5 friction (relaxed 1.0 / 1.0) | upstream's FACTOR_SANITY / FRICTION_SANITY | |
 | filter decay | 50 to 250 (MIN / MAX_FILTER_DECAY) | restored from cache; resetting to MIN re-learned 5x faster per boot | |
 | cache cadence | every 240 sm frames (60 s) | upstream's `LiveTorqueParameters` write | |
