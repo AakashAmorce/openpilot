@@ -484,6 +484,51 @@ keeps cruise-off false after the first press. Tests: `TestShipsDark` and `TestWh
 in `test_mazda_mads_white_wheel.py`, plus the mazdacan allowlist and interface raw-latch
 tests.
 
+### The hands-on-wheel frame (mapped on the car 2026-09-30, route 00000267)
+
+Every alert with the `steerRequired` icon (saturation, driver monitoring, the quiet EPS-standby
+banner, the disable alerts) also goes to the car's own dash as the hands-on-wheel code in
+0x440, at the 2 Hz alert cadence and only above the LKAS speed floor. Which bits draw the text
+was mapped by cycling four codes under cruise at 28-47 mph, 6 s on and 6 s off, and matching
+the driver's clock against the frames in the rlog:
+
+| 0x440 code | radar echo (`CRZ_CTRL`) | cluster |
+| --- | --- | --- |
+| `HANDS_WARN_3_BITS=7` + `HANDS_ON_STEER_WARN` + `HANDS_ON_STEER_WARN_2` (the frame since March) | `HANDS_OFF_STEERING=1`, nibble 9 | text, 4 of 4 |
+| `HANDS_ON_STEER_WARN` + `HANDS_ON_STEER_WARN_2` | nibble 9, no hands-off | nothing |
+| `HANDS_WARN_3_BITS=7` + `HANDS_ON_STEER_WARN` | hands-off, nibble 1 | nothing |
+| `HANDS_ON_STEER_WARN_2` alone | nibble 8 | nothing |
+| `HANDS_ON_STEER_WARN` alone (shipped 09-29 to 09-30) | nibble 1 | nothing, route 00000260 |
+
+The radar copies 0x440 byte 7's low nibble into `CRZ_CTRL.HANDS_ON_STEER_WARN` and raises
+`HANDS_OFF_STEERING` on the 0b111 code; the text needs the code and bit 59 together, so the
+radar's hands-off state comes with it. It is a status flag: across 115 logged runs with it set
+the radar's accel command never dropped, cruise never cancelled and the master cylinder never
+moved. The camera's own frames with `HANDS_ON_STEER_WARN` are lane-departure warnings, not a
+hands-off warning: bit 57 and bit 58 are `LDW_WARN_LL` / `LDW_WARN_RL` as the DBC says (79 of 79
+left-bit onsets 0.9 m from the left line, 63 of 63 right-bit onsets from the right). Nothing in
+the corpus shows a stock hands-off frame, so the frame above is the only one known to draw.
+
+Two traps for anyone repeating this. The panda drops our 0x243/0x440 and forwards the camera's
+own whenever openpilot is not controlling (`mazda_openpilot_controlling`), so a parked injection
+with card stopped puts nothing on the bus and the src 128 echoes are the camera's frames.
+Parked, the radar also reports cruise unavailable and mirrors nothing. The map has to be
+driven, with cruise or MADS lateral on.
+
+`DashSteerWarning` (carcontroller.py) decides when the frame goes out. The device alert is the
+primary channel and is untouched. The dash mirrors it under cruise and under MADS-only alike,
+with three rules from the corpus (264 warning windows). It goes out only while openpilot is
+steering (`latActive`), which already keeps it off the dash at a standstill and through an EPS
+block, where openpilot drops lateral for the banner's duration. It never starts inside the 2 s
+quiet window after lateral or cruise comes on: the driver is on the button, and the EPS-standby
+banner outlives the block that raised it, which is how it reached the dash on about 1 in 25
+engagements. And once the driver cancels or touches the brake while the alert is up it is
+withdrawn at once and stays down until the alert clears. Anything the last frame asserted
+comes down outside the cadence, the same path as the white wheel. Tests:
+`test_mazda_dash_warning.py`; the golden capture moved one frame (the slot inside the window of
+the engaged steer ramp). Open: whether the cluster chime is louder with cruise off than on;
+logs cannot record it, and the four mapped alerts were all under cruise.
+
 ## Constants
 
 | Constant | Value | Measurement | Routes |
@@ -506,6 +551,7 @@ tests.
 | `steerActuatorDelay` | 0.14 s (2022 EPS) / 0.1 s | lagd 0.338 total on a CX-5 2022 | corpus |
 | `steerRatio` (CX-5 2022) | 18.1 | paramsd learner, 2.9M samples | corpus |
 | `LKAS_LIMITS.DISABLE_SPEED` / `ENABLE_SPEED` | 45 / 52 kph | pre-2022 EPS lockout hysteresis | upstream |
+| `DASH_STEER_WARNING_QUIET_FRAMES` | 200 (2 s) | the EPS-standby banner at engagement lasts 1.8 s; 38 of 65 warning windows with a state change inside were it | corpus, 264 windows |
 
 ## Tried and rejected
 
