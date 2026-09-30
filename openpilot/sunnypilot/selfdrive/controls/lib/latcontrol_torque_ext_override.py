@@ -7,6 +7,7 @@ See the LICENSE.md file in the root directory for more details.
 
 import numpy as np
 
+from opendbc.sunnypilot.car.interfaces import get_tune_scale_schedule
 from openpilot.common.params import Params
 
 
@@ -35,6 +36,35 @@ class LatControlTorqueExtOverride:
     self._speed_dep_car_cfg = None
     self._last_vego = 0.0
 
+    # A flat tune (the CP tune, torqued's global fit, the manual override) is fitted on the
+    # platform's tune scale; where STEER_MAX moves with speed it is rescaled per frame so the
+    # counts per m/s^2 match a build running that scale. None on a flat-scale platform.
+    self._tune_scale_schedule = get_tune_scale_schedule(CP)
+    # the host's last flat values (CP tune, update_torque_parameters) and what this wrote over
+    # them, so a new host write is told apart from our own rescaled one. Seeded with the CP tune
+    # so the manual override switched off mid-drive falls back to it, not to its own values.
+    self._flat_base = None
+    if CP.lateralTuning.which() == 'torque':
+      tune = CP.lateralTuning.torque
+      self._flat_base = (float(np.float32(tune.latAccelFactor)), float(np.float32(tune.friction)))
+    self._flat_written = None
+
+  def _tune_scale_at(self, v_ego: float) -> float:
+    if self._tune_scale_schedule is None:
+      return 1.0
+    return float(np.interp(v_ego, self._tune_scale_schedule[0], self._tune_scale_schedule[1]))
+
+  @staticmethod
+  def _write_torque_params(torque_params, lat_accel_factor: float, friction: float) -> bool:
+    # torque_params is a capnp Float32 builder: compare in float32 or update_limits runs every frame
+    lat_accel_factor = float(np.float32(lat_accel_factor))
+    friction = float(np.float32(friction))
+    if lat_accel_factor == torque_params.latAccelFactor and friction == torque_params.friction:
+      return False
+    torque_params.latAccelFactor = lat_accel_factor
+    torque_params.friction = friction
+    return True
+
   def update_override_torque_params(self, torque_params) -> bool:
     changed = False
 
@@ -49,10 +79,9 @@ class LatControlTorqueExtOverride:
           self._override_friction = float(self.params.get("TorqueParamsOverrideFriction", return_default=True))
 
       if self.torque_override_enabled:
-        if torque_params.latAccelFactor != self._override_lat_accel_factor or torque_params.friction != self._override_friction:
-          torque_params.latAccelFactor = self._override_lat_accel_factor
-          torque_params.friction = self._override_friction
-          changed = True
+        scale = self._tune_scale_at(self._last_vego)
+        changed = self._write_torque_params(torque_params, self._override_lat_accel_factor * scale, self._override_friction / scale)
+        self._flat_written = (torque_params.latAccelFactor, torque_params.friction)
         return changed
 
     # Speed-dep latAccelFactor and friction, interpolated by speed each frame. On a platform
@@ -69,12 +98,16 @@ class LatControlTorqueExtOverride:
       else:
         new_lat_accel_factor = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_lat_accel_factor_bp))
         new_fric = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_friction_bp))
-      # torque_params is a capnp Float32 builder: compare in float32 or update_limits runs every frame
-      new_lat_accel_factor = float(np.float32(new_lat_accel_factor))
-      new_fric = float(np.float32(new_fric))
-      if new_lat_accel_factor != torque_params.latAccelFactor or new_fric != torque_params.friction:
-        torque_params.latAccelFactor = new_lat_accel_factor
-        torque_params.friction = new_fric
-        changed = True
+      changed = self._write_torque_params(torque_params, new_lat_accel_factor, new_fric)
+
+    elif self._tune_scale_schedule is not None:
+      # Flat tune on a speed-dependent STEER_MAX: without this the same latAccelFactor asks for
+      # 1.5x the counts below the CX-5's 32 mph step as above it. Friction is inverted, as above.
+      current = (torque_params.latAccelFactor, torque_params.friction)
+      if self._flat_base is None or current != self._flat_written:
+        self._flat_base = current
+      scale = self._tune_scale_at(self._last_vego)
+      changed = self._write_torque_params(torque_params, self._flat_base[0] * scale, self._flat_base[1] / scale)
+      self._flat_written = (torque_params.latAccelFactor, torque_params.friction)
 
     return changed

@@ -199,6 +199,29 @@ between its 3 s polls (299 of 300 frames before the fix). Comparisons are made i
 because `torque_params` is a capnp Float32 builder; a float64 compare re-ran `update_limits`
 at 100 Hz.
 
+### Flat tunes across the STEER_MAX cliff (`latcontrol_torque_ext_override.py`)
+
+With the speed bins off (their toggle, live torque or EnforceTorqueControl off, the manual
+override), the controller runs one latAccelFactor and friction: the CP tune, torqued's global
+fit, or the override. All three sit on the 800-count scale: params.toml's Mazda values are
+upstream's, the global fit only takes points above `MIN_VEL` (15 m/s, past the cliff), and a
+manual value is typed against stock behaviour. Run unscaled on the 1200 -> 800 schedule, the
+same LAF asked for 1.5x the counts below the cliff as above it. `get_tune_scale_schedule(CP)`
+gives STEER_MAX(v) / `TUNE_STEER_MAX` (1.5 below 14.2 m/s, 1.0 above 14.5), and the override
+multiplies LAF and divides friction by it every frame, so a flat tune puts a flat-800 build's
+counts on the wire at every speed while the 1200 envelope and the EPS ceiling still apply. The
+host's own writes (CP tune at init, `update_torque_parameters`, `disable_speed_dep_torque`)
+are told apart from the rescaled ones by value and become the new base; the base is seeded
+with the CP tune, so switching the manual override off mid-drive hands back the CP tune.
+
+### Swapped chassis (`speed_dependent.toml`)
+
+The swap fallback names a CX-5 KF, CX-9 2016-20, Mazda3 or Mazda6 behind the 2022 CX-5 EPS,
+which brings the 1200 -> 800 schedule. With no entry those cars ran the generic bins, whose
+(12, 18) bin spans the cliff, with no schedule attached for the per-count interp. Each now
+substitutes the CX-5 2022 table under `requires_steer_to_zero`, like the KE; on its stock EPS
+the entry is withheld and the car keeps the flat legacy path.
+
 ## Speed-bin learner and cache (`torqued_ext.py`)
 
 Each bin is a `TorqueBuckets` with per-bucket minimums = the global learner's / n_bins,

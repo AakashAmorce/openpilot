@@ -64,7 +64,10 @@ def make_ci():
 
 
 def make_lac(mazda=True):
-  return LatControlTorqueV0(make_cp(mazda), custom.CarParamsSP.new_message().as_reader(), make_ci(), DT)
+  lac = LatControlTorqueV0(make_cp(mazda), custom.CarParamsSP.new_message().as_reader(), make_ci(), DT)
+  # LAF is the tune in effect at the test speed, not a flat tune for the override to rescale
+  lac.extension._tune_scale_schedule = None
+  return lac
 
 
 CX5_SLEW = get_steer_slew_schedule(make_cp())
