@@ -268,7 +268,6 @@ class TestPromptFreezeOvershoot:
     """The reported drive: engaged at 40 with a 45 target, car 1.3 mph over the setpoint,
     prompt left unanswered. Nothing may move -- during the prompt or after it times out."""
     loop = Loop(baseline_mph=40, seed=31)
-    loop.decel_overshoot = True
     loop.v_ego_mph = 41.3
     loop.a_target = -0.5  # the plan converging on the setpoint the car is sitting above
     loop.limit_mph = 45

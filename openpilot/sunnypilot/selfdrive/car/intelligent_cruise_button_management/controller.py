@@ -15,7 +15,6 @@ from opendbc.car.structs import car
 from opendbc.car import structs
 from opendbc.sunnypilot.car.icbm_actuation_profile import get_actuation_profile
 from openpilot.common.constants import CV
-from openpilot.common.params import Params
 from openpilot.common.realtime import DT_CTRL
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import get_minimum_set_speed
@@ -30,7 +29,6 @@ SessionState = custom.LongitudinalPlanSP.SpeedLimit.AssistState
 
 INACTIVE_TIMER = 0.4
 # Match selfdrived's 0.1 s parameter refresh cadence.
-PARAMS_UPDATE_FRAMES = int(0.1 / DT_CTRL)
 # After a driver press, defer synthesized movement in the opposite direction.
 DRIVER_PRESS_GRACE_T = 3.0
 DRIVER_PRESS_GRACE_FRAMES = int(DRIVER_PRESS_GRACE_T / DT_CTRL)
@@ -42,14 +40,17 @@ REACT_TIMER = 0.3
 RESTORE_QUIET_TIME = 1.0
 RESTORE_QUIET_FRAMES = int(RESTORE_QUIET_TIME / DT_CTRL)
 
-# Stock ACC deceleration follows the gap between dash set speed and actual speed. Convert
-# requested deceleration to a brand-specific gap and never command above the plan target.
+# Stock ACC deceleration follows the gap between dash set speed and actual speed, in stages,
+# and keeps growing past 10 mph (harder still at highway speed). Hold the dash the gap that
+# yields the limiter's own requested decel below vEgo instead of walking it to the whole dip.
 DECEL_OVERSHOOT_PARAMS = {
   'mazda': {
-    'decel_bp': [0.02, 0.09, 0.26, 0.44, 0.73],  # desired decel magnitude, m/s^2
-    # gap below vEgo, mph; leads the steady-state inverse to pay back the dash walk
-    'gap_v': [2.0, 4.0, 6.0, 8.5, 10.0],
-    'max_gap': 10.,  # mph; the response saturates, going deeper buys nothing
+    'speed_bp': [20.1, 29.1],  # m/s (45, 65 mph)
+    'decel_bp': [0.15, 0.30, 0.50, 0.60, 0.70, 0.75, 0.90, 1.05],  # requested decel magnitude, m/s^2
+    # gap below vEgo, mph, per speed_bp row. Planners budget 0.75 (limits._STOCK_A_BUDGET); a
+    # request past it means the car is late, and the columns beyond are the ECU's remaining range
+    'gap_v': [[2.5, 3.0, 3.75, 6.5, 8.5, 10.0, 16.25, 20.25],
+              [2.5, 3.0, 3.5, 6.5, 7.25, 7.75, 12.5, 17.25]],
     'min_decel': 0.15,  # m/s^2; leave gentle coast-downs to the stock behavior
   },
 }
@@ -81,9 +82,7 @@ class IntelligentCruiseButtonManagement:
   def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP):
     self.CP = CP
     self.CP_SP = CP_SP
-    self.params = Params()
     self.profile = get_actuation_profile(CP.brand)
-    self.frame = 0
 
     self.v_target = 0
     self.v_cruise_cluster = 0
@@ -107,9 +106,8 @@ class IntelligentCruiseButtonManagement:
     # A pending SLA confirmation freezes both the target and the servo. card also vetoes
     # emission from its same-frame session state because this view is two message hops old.
     self.prompt_frozen = False
-    self.decel_overshoot_enabled = self.params.get_bool("SmartCruiseDecelOvershoot")
     self.overshoot_mph = 0.0
-    self.overshoot_params = DECEL_OVERSHOOT_PARAMS.get(CP.brand)
+    self.overshoot_params = DECEL_OVERSHOOT_PARAMS.get(CP.brand)  # brands with a measured plant
     self.limiter_active = False
 
     self.fast_active = False
@@ -119,20 +117,35 @@ class IntelligentCruiseButtonManagement:
 
     self.cruise_button_timers = dict(CRUISE_BUTTON_TIMER)
 
+  @staticmethod
+  def source_a_target(LP_SP: custom.LongitudinalPlanSP) -> float:
+    """The active limiter's own decel request. LP_SP.aTarget is the MPC output, which rails at
+    A_CRUISE_MIN whenever the target sits a few mph below vEgo, whatever the limiter asked for."""
+    source = LP_SP.longitudinalPlanSource
+    if source == LongitudinalPlanSource.sccVision:
+      return LP_SP.smartCruiseControl.vision.aTarget
+    if source == LongitudinalPlanSource.sccMap:
+      return LP_SP.smartCruiseControl.map.aTarget
+    if source == LongitudinalPlanSource.speedLimitAssist:
+      return LP_SP.speedLimit.assist.aTarget
+    return LP_SP.aTarget
+
   def update_decel_overshoot(self, CS: car.CarState, LP_SP: custom.LongitudinalPlanSP) -> float:
     if self.overshoot_params is None:
       return 0.0
 
     p = self.overshoot_params
     want = 0.0
+    a_request = -self.source_a_target(LP_SP)
     # Do not accumulate a gap while button emission is blocked.
     # the gap trick drives a stock ACC's own deceleration; openpilot longitudinal brakes itself
-    if (self.decel_overshoot_enabled and not self.CP.openpilotLongitudinalControl
+    if (not self.CP.openpilotLongitudinalControl
         and self.is_ready and not self.prompt_frozen
         and self.down_grace_timer <= 0
         and LP_SP.longitudinalPlanSource in DECEL_OVERSHOOT_SOURCES
-        and LP_SP.aTarget < -p['min_decel'] and CS.vEgo > LP_SP.vTarget):
-      want = min(float(np.interp(-LP_SP.aTarget, p['decel_bp'], p['gap_v'])), p['max_gap'])
+        and a_request > p['min_decel'] and CS.vEgo > LP_SP.vTarget):
+      gaps = [np.interp(a_request, p['decel_bp'], row) for row in p['gap_v']]
+      want = float(np.interp(CS.vEgo, p['speed_bp'], gaps))
 
     if want > self.overshoot_mph:
       self.overshoot_mph = min(want, self.overshoot_mph + DECEL_OVERSHOOT_RISE * DT_CTRL)
@@ -146,7 +159,13 @@ class IntelligentCruiseButtonManagement:
   def update_calculations(self, CS: car.CarState, LP_SP: custom.LongitudinalPlanSP) -> None:
     speed_conv = CV.MS_TO_KPH if self.is_metric else CV.MS_TO_MPH
 
-    self.limiter_active = LP_SP.longitudinalPlanSource != LongitudinalPlanSource.cruise
+    limiter_active = LP_SP.longitudinalPlanSource != LongitudinalPlanSource.cruise
+    if limiter_active and not self.limiter_active:
+      # a limiter that comes on after a driver SET+ is new information, not what the driver
+      # overrode: route 260 t=1059, cruise set to 40 then a 34 mph curve, the car accelerated
+      # into it for 5 s while the grace parked the down moves
+      self.down_grace_timer = 0
+    self.limiter_active = limiter_active
 
     v_target_ms = LP_SP.vTarget
     if self.CP.openpilotLongitudinalControl and LP_SP.longitudinalPlanSource in OP_LONG_PLANNER_SOURCES:
@@ -157,8 +176,13 @@ class IntelligentCruiseButtonManagement:
       v_target_ms = min(CS.vCruise * CV.KPH_TO_MS, session_cap if session_cap > 0. else V_CRUISE_UNSET)
     overshoot_ms = self.update_decel_overshoot(CS, LP_SP) * CV.MPH_TO_MS
     if overshoot_ms > 0:
-      # Command relative to actual speed while keeping the plan target as the upper bound.
-      v_target_ms = min(v_target_ms, max(CS.vEgo, LP_SP.vTarget) - overshoot_ms)
+      # Track actual speed at the requested gap, even above a deeper plan target: walking the dash
+      # to the whole dip brakes as hard as the dip is deep. Near the target, sit no further below
+      # it than the car is above it, so the ECU's lag lands the car on it instead of under it.
+      # Down-only: the dash rises during a descent only to land on the target, never above it.
+      v_plan = LP_SP.vTarget
+      v_command = max(CS.vEgo - overshoot_ms, v_plan - max(CS.vEgo - v_plan, 0.))
+      v_target_ms = min(v_command, max(CS.cruiseState.speedCluster, v_plan))
 
     self.v_target_prev = self.v_target
     self.v_target = round(v_target_ms * speed_conv)
@@ -175,6 +199,12 @@ class IntelligentCruiseButtonManagement:
     v_ahead_min = LP_SP.smartCruiseControl.vision.vAheadMin
     self.lookahead_valid = v_ahead_min > 0.
     self.dip_ahead = self.lookahead_valid and v_ahead_min * speed_conv < self.v_target_raw - self.react_deadband
+    if self.dip_ahead and self.v_target > self.v_cruise_cluster:
+      # A dip ahead caps a restore at its own level rather than freezing a dash that sits below it.
+      v_ahead = int(v_ahead_min * speed_conv)
+      if v_ahead - self.v_cruise_cluster >= self.react_deadband:
+        self.v_target = min(self.v_target, v_ahead)
+        self.dip_ahead = False
 
   def update_restore_quiet_timer(self) -> None:
     # Measure stable restore demand against the unmodified target. Confirmation prompts
@@ -301,9 +331,6 @@ class IntelligentCruiseButtonManagement:
     if self.CP_SP.pcmCruiseSpeed:
       return
 
-    if self.frame % PARAMS_UPDATE_FRAMES == 0:
-      self.decel_overshoot_enabled = self.params.get_bool("SmartCruiseDecelOvershoot")
-    self.frame += 1
 
     self.is_metric = is_metric
     self.prompt_frozen = LP_SP.speedLimit.assist.state == SessionState.preActive

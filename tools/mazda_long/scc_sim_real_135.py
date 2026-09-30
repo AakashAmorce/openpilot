@@ -11,8 +11,8 @@ import openpilot.cereal.messaging as messaging
 from openpilot.cereal import log
 from openpilot.common.params import Params
 from opendbc.car import structs
-from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control import vision_controller
-from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.vision_controller import (
+from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.zoompilot import vision_controller
+from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.zoompilot.vision_controller import (
     SmartCruiseControlVision)
 
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.controller import (

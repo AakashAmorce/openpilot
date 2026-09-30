@@ -51,16 +51,17 @@ class TestAssistMirrorDefaultMessage:
       mirror.update(session, v_ego=25.0, distance=150.0, a_ego=0.0, events_sp=EventsSP())
     assert mirror.output_a_target == pytest.approx(-0.75)
 
-  def test_op_long_cap_decel_is_clipped_to_the_budget(self):
+  def test_cap_decel_is_clipped_to_the_budget(self):
     session = custom.CarStateSP.new_message().zoompilot.cruiseSession
     session.state = SpeedLimitAssistState.adapting
     session.vCap = 15.0
-    # 25 -> 15 m/s over 100 m asks -2.0; on openpilot long the wire is an actuator command
+    # 25 -> 15 m/s over 100 m asks -2.0; on openpilot long the wire is an actuator command and
+    # on stock ACC it sizes the servo's gap, and a limit is a prediction on either: budget at most
     stock, op_long = self._mirror(), self._mirror(op_long=True)
     for _ in range(60):
       stock.update(session, v_ego=25.0, distance=100.0, a_ego=0.0, events_sp=EventsSP())
       op_long.update(session, v_ego=25.0, distance=100.0, a_ego=0.0, events_sp=EventsSP())
-    assert stock.output_a_target == pytest.approx(-2.0)
+    assert stock.output_a_target == pytest.approx(-stock.limits.a_budget)
     assert op_long.output_a_target == pytest.approx(-op_long.limits.a_budget)
     assert op_long.limits.a_budget < 2.0
 

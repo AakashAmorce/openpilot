@@ -4,14 +4,11 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of zoompilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 
-ICBM deceleration overshoot: the down-only lever that commands the dash below vEgo so
-the stock ACC delivers the requested deceleration, and the gates that keep it a lever
-rather than a destination.
+ICBM deceleration overshoot: the down-only lever that holds the dash below vEgo so the
+stock ACC delivers the limiter's requested deceleration, and the gates that keep it a
+lever rather than a destination.
 """
 from openpilot.cereal import custom
-from opendbc.car.structs import car
-from openpilot.common.constants import CV
-from openpilot.common.params import Params
 from openpilot.sunnypilot.selfdrive.car.tests.icbm_servo_harness import make_icbm, run_frames
 
 State = custom.IntelligentCruiseButtonManagement.IntelligentCruiseButtonManagementState
@@ -20,41 +17,73 @@ SessionState = custom.LongitudinalPlanSP.SpeedLimit.AssistState
 
 
 class TestDecelOvershoot:
-  """Down-only overshoot: command the dash below the planner target so the stock ACC
-  delivers the requested deceleration (its decel scales with dash-vs-vEgo gap)."""
+  """The dash is held the gap below vEgo that makes the stock ACC deliver the limiter's own
+  requested decel (its decel follows the dash-vs-vEgo gap in stages and keeps growing past
+  10 mph), bounded by the plan target on the way in."""
 
   def make_icbm(self, brand="mazda"):
     return make_icbm(brand)
 
-  def run_frames(self, icbm, target_mph, v_ego_mph, a_target, n=1, source='sccVision', enabled=True):
-    Params().put_bool("SmartCruiseDecelOvershoot", enabled)
-    icbm.decel_overshoot_enabled = enabled
-    for _ in range(n):
-      CS = car.CarState(vEgo=v_ego_mph * CV.MPH_TO_MS,
-                        cruiseState={"speedCluster": target_mph * CV.MPH_TO_MS})
-      CC = car.CarControl(enabled=True)
-      LP_SP = custom.LongitudinalPlanSP(vTarget=target_mph * CV.MPH_TO_MS, aTarget=a_target)
-      LP_SP.longitudinalPlanSource = source
-      icbm.run(CS, CC, LP_SP, is_metric=False)
+  def run_frames(self, icbm, target_mph, v_ego_mph, a_target, n=1, source='sccVision', mpc_a_target=None, dash_mph=None):
+    run_frames(icbm, target_mph, target_mph if dash_mph is None else dash_mph, n=n, source=source, v_ego_mph=v_ego_mph,
+               a_target=a_target, mpc_a_target=mpc_a_target)
 
-  def test_commands_below_target_when_decelerating(self):
+  def test_gap_is_sized_by_the_request(self):
+    """A gentle request holds a small gap and tracks vEgo; it does not walk to a deep target."""
     icbm = self.make_icbm()
-    # planner wants -0.45 m/s^2 at 45 mph toward a 40 mph target: gap_v asks ~8.5 mph below
-    # vEgo, leading the steady-state inverse to pay back the dash walk
-    self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100)
-    assert icbm.v_target <= 37, icbm.v_target
-    assert icbm.v_target >= 35, icbm.v_target
+    self.run_frames(icbm, target_mph=30, v_ego_mph=45, a_target=-0.3, n=100, dash_mph=45)
+    assert icbm.v_target == 42, icbm.v_target  # 45 - 3.0
 
-  def test_deep_dip_is_a_no_op(self):
-    """When the target is already far below vEgo the plant is saturated; never go deeper."""
+  def test_deep_dip_brakes_at_budget_not_at_depth(self):
+    """Routes 24c/24d/128: walking the dash to a dip 20-30 mph down opened a 15-20 mph gap and
+    the ECU braked at -1.0 to -1.15 m/s^2. The gap stops at the stock budget's."""
     icbm = self.make_icbm()
-    self.run_frames(icbm, target_mph=20, v_ego_mph=45, a_target=-1.0, n=100)
-    assert icbm.v_target == 20, icbm.v_target
+    self.run_frames(icbm, target_mph=20, v_ego_mph=45, a_target=-0.75, n=100, dash_mph=45)
+    assert icbm.v_target == 35, icbm.v_target  # 45 - 10
+
+  def test_a_late_request_uses_the_ecus_remaining_range(self):
+    """Past the budget the planner is saying the car is late; the gap goes on past 10 mph,
+    where the ECU still brakes harder (-1.05 m/s^2 at 20 mph)."""
+    icbm = self.make_icbm()
+    self.run_frames(icbm, target_mph=20, v_ego_mph=45, a_target=-1.05, n=300, dash_mph=45)
+    assert icbm.v_target == 25, icbm.v_target  # 45 - 20.25
+
+  def test_highway_gap_is_smaller(self):
+    """The ECU brakes harder per mph of gap at highway speed; the same request asks less."""
+    icbm = self.make_icbm()
+    self.run_frames(icbm, target_mph=40, v_ego_mph=65, a_target=-0.75, n=100, dash_mph=65)
+    assert icbm.v_target == 57, icbm.v_target  # 65 - 7.75
+
+  def test_reads_the_limiters_request_not_the_mpc(self):
+    """LP_SP.aTarget is the MPC output and rails at -1.2 whenever the target sits below vEgo."""
+    icbm = self.make_icbm()
+    self.run_frames(icbm, target_mph=30, v_ego_mph=45, a_target=-0.3, n=100, mpc_a_target=-1.2, dash_mph=45)
+    assert icbm.v_target == 42, icbm.v_target
+
+  def test_lands_on_the_target(self):
+    """Near the target the dash sits no further below it than the car is above it, so the
+    ECU's lag does not carry the car 4-5 mph under the curve's speed."""
+    icbm = self.make_icbm()
+    self.run_frames(icbm, target_mph=40, v_ego_mph=42, a_target=-0.7, n=100)
+    assert icbm.v_target == 38, icbm.v_target  # 42 - 8.5 = 33.5, floored at 40 - 2
+
+  def test_never_raises_the_dash_above_the_target(self):
+    """With the dash already on the target a gentle request asks for a gap the car already
+    has; the servo holds rather than walking the dash up over the plan."""
+    icbm = self.make_icbm()
+    self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.3, n=100, dash_mph=40)
+    assert icbm.v_target == 40, icbm.v_target
+
+  def test_never_above_the_target_once_below_it(self):
+    icbm = self.make_icbm()
+    self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.7, n=100)
+    self.run_frames(icbm, target_mph=40, v_ego_mph=39, a_target=-0.7, n=50)
+    assert icbm.v_target == 40, icbm.v_target
 
   def test_releases_back_to_target(self):
     icbm = self.make_icbm()
     self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100)
-    assert icbm.v_target < 40
+    assert icbm.v_target < 45
     # decel demand ends; command must return to the target (slew-limited release)
     self.run_frames(icbm, target_mph=40, v_ego_mph=40, a_target=0.0, n=400)
     assert icbm.v_target == 40, icbm.v_target
@@ -67,11 +96,6 @@ class TestDecelOvershoot:
   def test_mazda_only(self):
     icbm = self.make_icbm(brand="hyundai")
     self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100)
-    assert icbm.v_target == 40, icbm.v_target
-
-  def test_toggle_off_disables_overshoot(self):
-    icbm = self.make_icbm()
-    self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100, enabled=False)
     assert icbm.v_target == 40, icbm.v_target
 
 
@@ -93,15 +117,15 @@ class TestDecelOvershootIsALever:
     """Layer 2: a limiter asking for decel while a prompt is open must not accumulate a
     gap the servo is forbidden to emit."""
     icbm = self.make_icbm()
-    self.run_frames(40, 40, n=60, icbm=icbm, overshoot=True)
+    self.run_frames(40, 40, n=60, icbm=icbm)
 
     sends = self.run_frames(40, 40, n=500, icbm=icbm, source='speedLimitAssist', v_ego_mph=41.3,
-                            a_target=-0.5, overshoot=True, session_state=SessionState.preActive)
+                            a_target=-0.5, session_state=SessionState.preActive)
     assert icbm.overshoot_mph == 0., f"banked behind the freeze: {icbm.overshoot_mph}"
     assert all(s == SendButtonState.none for s in sends)
 
     # prompt times out with the limiter gone: nothing is owed, so nothing moves
-    sends = self.run_frames(40, 40, n=200, icbm=icbm, source='cruise', v_ego_mph=41.3, overshoot=True)
+    sends = self.run_frames(40, 40, n=200, icbm=icbm, source='cruise', v_ego_mph=41.3)
     assert all(s == SendButtonState.none for s in sends), "stale gap dumped at the timeout"
     assert icbm.state == State.holding
 
@@ -109,13 +133,14 @@ class TestDecelOvershootIsALever:
     """Layer 2 must cost nothing: if the limiter is still asking for decel when the prompt
     clears, the gap rebuilds at DECEL_OVERSHOOT_RISE and the descent still happens."""
     icbm = self.make_icbm()
-    self.run_frames(40, 40, n=60, icbm=icbm, overshoot=True)
-    self.run_frames(40, 40, n=500, icbm=icbm, source='speedLimitAssist', v_ego_mph=41.3,
-                    a_target=-0.5, overshoot=True, session_state=SessionState.preActive)
+    self.run_frames(40, 40, n=60, icbm=icbm)
+    # a lower limit (35) behind the prompt; the dash still shows the old 40
+    self.run_frames(35, 40, n=500, icbm=icbm, source='speedLimitAssist', v_ego_mph=41.3,
+                    a_target=-0.5, session_state=SessionState.preActive)
     assert icbm.overshoot_mph == 0.
 
-    sends = self.run_frames(40, 40, n=100, icbm=icbm, source='speedLimitAssist', v_ego_mph=41.3,
-                            a_target=-0.5, overshoot=True)
+    sends = self.run_frames(35, 40, n=100, icbm=icbm, source='speedLimitAssist', v_ego_mph=41.3,
+                            a_target=-0.5)
     assert icbm.overshoot_mph > 2., f"gap did not rebuild: {icbm.overshoot_mph}"
     # tap or hold is the profile's call from the remaining distance; either is a descent
     down = (SendButtonState.decrease, SendButtonState.decreaseHold)
@@ -130,11 +155,11 @@ class TestDecelOvershootIsALever:
     icbm.overshoot_mph = 5.  # left over from a curve that just ended
 
     # off-limiter the residual drops at the build rate; check inside the bleed window
-    sends = self.run_frames(40, 40, n=40, icbm=icbm, source='cruise', v_ego_mph=41.3, overshoot=True)
+    sends = self.run_frames(40, 40, n=40, icbm=icbm, source='cruise', v_ego_mph=41.3)
     assert icbm.overshoot_mph > 0., "precondition: the residual is still bleeding off"
     assert icbm.state == State.holding, f"descended on a residual: {icbm.state}"
     assert all(s == SendButtonState.none for s in sends)
-    sends = self.run_frames(40, 40, n=60, icbm=icbm, source='cruise', v_ego_mph=41.3, overshoot=True)
+    sends = self.run_frames(40, 40, n=60, icbm=icbm, source='cruise', v_ego_mph=41.3)
     assert icbm.overshoot_mph == 0., "the residual must clear at the build rate once on cruise"
     assert all(s == SendButtonState.none for s in sends)
 

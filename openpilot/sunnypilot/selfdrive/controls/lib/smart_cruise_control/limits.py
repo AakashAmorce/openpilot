@@ -27,8 +27,8 @@ _OP_LONG_A_BUDGET = 1.2
 _OP_LONG_J_BP = [0., 10., 25., 40.]
 _OP_LONG_J_VALS = [1.6, 1.2, 0.8, 0.6]
 
-# stock ACC decelerates with the gap between the dash set speed and actual speed, and the
-# response saturates per brand (mazda: DECEL_OVERSHOOT_PARAMS); a plan assuming more arrives hot
+# stock ACC decelerates with the gap between the dash set speed and actual speed; decel
+# overshoot holds the gap that delivers this budget and no deeper (mazda: DECEL_OVERSHOOT_PARAMS)
 _STOCK_A_BUDGET = {'mazda': 0.75}
 # unmeasured brands: a smaller budget only means braking starts earlier, the safe way to be wrong
 _STOCK_A_BUDGET_DEFAULT = 0.5
@@ -40,6 +40,10 @@ _MPH_PER_MS = 2.23694
 # what the servo's button stream actually moves the dash at: forged hold frames register as
 # discrete presses, so the native hold grid must not size the actuation lead
 _SERVO_WALK_RATE = {'mazda': 4.0}  # mph/s, measured
+# the ECU brakes on the gap as soon as it opens, and decel overshoot holds the dash at most this
+# far below actual speed (its gap at the stock budget), so only this much of a dip is walked
+# before the car is braking at budget; the rest of the dip is tracked down, not waited out
+_SERVO_TRACK_GAP = {'mazda': 8.0}  # mph
 
 # shared solver gate: a constraint binds once the decel it requires reaches this fraction of
 # the budget; below 1.0 leaves headroom for slope and curvature error
@@ -60,6 +64,7 @@ class PlanningLimits:
   op_long: bool
   # stock path only: the dash has to be walked down before the ECU sees the new set speed
   walk_rate: float = 5.  # display units per second the servo actually achieves
+  track_gap: float = 0.  # display units walked before the ECU brakes at budget; 0 = the whole dip
 
   def jerk(self, v_ego: float) -> float:
     """The consumer's own jerk limit easing into a_budget; 0 where the ECU self-smooths."""
@@ -69,22 +74,26 @@ class PlanningLimits:
 
   @property
   def a_pub_min(self) -> float:
-    """Deepest aTarget a source may publish on this path, m/s2 (see A_PUB_MIN)."""
-    return -self.a_budget if self.op_long else A_PUB_MIN
+    """Deepest aTarget a predicted constraint may publish, m/s2: the budget. Only measured
+    geometry may ask for the ECU's range past it (A_PUB_MIN), and its publisher says so."""
+    return -self.a_budget
 
   def pub_jerk(self, v_ego: float) -> float:
     """Jerk the published aTarget ramps at: the consumer's own on openpilot long, PUB_JERK on stock."""
     return self.jerk(v_ego) or PUB_JERK
 
   def dash_traversal_time(self, delta_v_ms: float) -> float:
-    """Seconds of dash walking to lower the set speed by delta_v (stock path only).
+    """Seconds of dash walking before a dip of delta_v brakes at budget (stock path only).
 
     Display units are taken as mph: the measured rates are imperial-only so far, and for a
     lead estimate the ~1.6x metric error is inside the response-time uncertainty anyway.
     """
     if self.op_long or delta_v_ms <= 0.:
       return 0.
-    return delta_v_ms * _MPH_PER_MS / max(self.walk_rate, 1.)
+    walk = delta_v_ms * _MPH_PER_MS
+    if self.track_gap > 0.:
+      walk = min(walk, self.track_gap)
+    return walk / max(self.walk_rate, 1.)
 
 
 def get_planning_limits(CP: structs.CarParams) -> PlanningLimits:
@@ -94,16 +103,19 @@ def get_planning_limits(CP: structs.CarParams) -> PlanningLimits:
   profile = get_actuation_profile(CP.brand)
   return PlanningLimits(a_budget=_STOCK_A_BUDGET.get(CP.brand, _STOCK_A_BUDGET_DEFAULT),
                         t_lead=_STOCK_RESPONSE_T, op_long=False,
-                        walk_rate=_SERVO_WALK_RATE.get(CP.brand, profile.tap_rate_hz))
+                        walk_rate=_SERVO_WALK_RATE.get(CP.brand, profile.tap_rate_hz),
+                        track_gap=_SERVO_TRACK_GAP.get(CP.brand, 0.))
 
 
-def publish_ramp(a_des: float, a_prev: float, lim: PlanningLimits, v_ego: float, dt: float = DT_MDL) -> float:
+def publish_ramp(a_des: float, a_prev: float, lim: PlanningLimits, v_ego: float, dt: float = DT_MDL,
+                 a_floor: float | None = None) -> float:
   """Shape a decel request for the plan aTarget wire: clip to the path, then jerk-limit the step.
 
   The published aTarget seeds mpc.set_cur_state, which is not jerk-limited the way the
   cruise candidate is, so a one-frame step would reach the actuators as a snap. a_prev is
-  the value published last frame.
+  the value published last frame. a_floor lets measured geometry ask past the budget.
   """
-  a_des = max(a_des, lim.a_pub_min)
+  floor = lim.a_pub_min if a_floor is None or lim.op_long else max(a_floor, A_PUB_MIN)
+  a_des = max(a_des, floor)
   step = lim.pub_jerk(v_ego) * dt
   return float(min(max(a_des, a_prev - step), a_prev + step))

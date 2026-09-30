@@ -6,11 +6,9 @@ See the LICENSE.md file in the root directory for more details.
 """
 
 from openpilot.selfdrive.ui.mici.widgets.button import BigParamControl
-from openpilot.selfdrive.ui.sunnypilot.cruise_badges import ICBM_BADGE, STOCK_ACC_ONLY_BADGE, icbm_moves_speed_limits
 from openpilot.selfdrive.ui.sunnypilot.mici.widgets.button import (
   BigButtonSP,
   BigMultiParamToggleSP,
-  BigParamControlSP,
   BigParamOption,
   speed_unit,
 )
@@ -18,7 +16,6 @@ from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
-from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.controller import DECEL_OVERSHOOT_PARAMS
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import icbm_applicable
 
 SL_MODE_LABELS = [tr("off"), tr("info"), tr("warn"), tr("assist")]
@@ -59,16 +56,11 @@ class CruiseLayoutMici(NavScroller):
     self._prev_icbm_available: bool | None = None
     self._prev_has_long_or_icbm: bool | None = None
     self._prev_sla_available: bool | None = None
-    self._prev_overshoot_available: bool | None = None
-    self._overshoot_usable = False
 
     self._icbm_toggle = BigParamControl(tr("intelligent cruise button management"), "IntelligentCruiseButtonManagement")
     self._dec_toggle = BigParamControl(tr("dynamic experimental control"), "DynamicExperimentalControl")
     self._scc_v_toggle = BigParamControl(tr("smart cruise vision"), "SmartCruiseControlVision")
     self._scc_m_toggle = BigParamControl(tr("smart cruise map"), "SmartCruiseControlMap")
-    # longitudinal control brakes itself and ignores overshoot: shown off, stored value kept for stock ACC
-    self._scc_do_toggle = BigParamControlSP(tr("decel overshoot"), "SmartCruiseDecelOvershoot",
-                                            depends_on=lambda: self._overshoot_usable)
     self._custom_acc_btn = BigButtonSP(tr("custom increments"))
     self._speed_limit_btn = BigButtonSP(tr("speed limit"))
 
@@ -77,7 +69,7 @@ class CruiseLayoutMici(NavScroller):
 
     self._scroller.add_widgets([
       self._icbm_toggle, self._dec_toggle,
-      self._scc_v_toggle, self._scc_m_toggle, self._scc_do_toggle,
+      self._scc_v_toggle, self._scc_m_toggle,
       self._custom_acc_btn, self._speed_limit_btn,
     ])
 
@@ -113,10 +105,6 @@ class CruiseLayoutMici(NavScroller):
     icbm_available = cp_ready and icbm_applicable(ui_state.CP, ui_state.CP_SP)
     # Read live toggle state to avoid the five-second params refresh delay.
     has_icbm = icbm_available and self._icbm_toggle._checked
-    # decel overshoot drives the stock ACC through ICBM; needs a measured per-brand plant map
-    overshoot_available = has_icbm and cp_ready and ui_state.CP.brand in DECEL_OVERSHOOT_PARAMS
-    self._overshoot_usable = overshoot_available and not has_long
-    self._scc_do_toggle.refresh()
 
     self._icbm_toggle.set_enabled(icbm_available and offroad)
     self._dec_toggle.set_enabled(has_long)
@@ -124,17 +112,10 @@ class CruiseLayoutMici(NavScroller):
     self._scc_m_toggle.set_enabled(has_long or has_icbm)
     self._custom_acc_btn.set_enabled(((has_long and not ui_state.CP.pcmCruise) or has_icbm) and offroad if cp_ready else False)
 
-    # badges only where alpha long and ICBM split the cruise features (cruise_badges)
-    self._scc_do_toggle.set_badge(tr(STOCK_ACC_ONLY_BADGE) if overshoot_available and has_long else None)
-
     # Remove dependent params only on a true-to-false transition.
     if not icbm_available and self._prev_icbm_available is not False:
       ui_state.params.remove("IntelligentCruiseButtonManagement")
     self._prev_icbm_available = icbm_available
-
-    if not overshoot_available and self._prev_overshoot_available is not False:
-      ui_state.params.remove("SmartCruiseDecelOvershoot")
-    self._prev_overshoot_available = overshoot_available
 
     has_long_or_icbm = has_long or has_icbm
     if not has_long_or_icbm and self._prev_has_long_or_icbm is not False:
@@ -166,8 +147,9 @@ class CruiseLayoutMici(NavScroller):
       sl_source = SL_SOURCE_LABELS[min(sl_source_idx, len(SL_SOURCE_LABELS) - 1)]
       sl_offset_val = ui_state.params.get("SpeedLimitValueOffset", return_default=True) or 0
       unit = "%" if offset_type == 2 else (speed_unit() if offset_type == 1 else "")
-      icbm = icbm_moves_speed_limits(has_long, has_icbm, sl_mode_idx)
-      badges = [(sl_mode, "on"), (tr(ICBM_BADGE), "on" if icbm else "off"), (sl_source, "on")]
+      # under alpha long ICBM, not the planner's prompt, moves the set speed to the limit (assist only)
+      icbm = has_long and has_icbm and sl_mode_idx == SL_MODE_ASSIST
+      badges = [(sl_mode, "on"), (tr("icbm"), "on" if icbm else "off"), (sl_source, "on")]
       if unit:
         sign = "+" if sl_offset_val > 0 else ""
         badges.append((f"{sign}{sl_offset_val}{unit}", "on"))
