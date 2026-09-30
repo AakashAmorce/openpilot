@@ -13,11 +13,10 @@ LKAS_REQUEST (the request it received), LKAS_EFFECTIVE (what it applied) and LKA
 Older Mazda EPS firmware locks steering out after about 5 s of hands-off and below 45 kph
 (LKAS_LIMITS: disabled going down through 45 kph, re-enabled going up through 52 kph, and the
 LKAS_BLOCK bit lags the speed on the way up). That is a property of the EPS, not of the car.
-Upstream keeps those cars dashcam only; here they steer above the floor and a lockout surfaces as
-`steerFaultTemporary`. The 2022 CX-5 EPS can steer to zero and has no hands-off lockout, so a car
-with that EPS swapped in loses the floor too. The CX-5 KE (`SWAP_ONLY_PLATFORMS`) is the one
-exception: no stock KE EPS has been seen steering, so it stays dashcam until a steer-to-zero EPS
-is read.
+Upstream keeps those cars dashcam only; here every Mazda platform steers above the floor and a
+lockout surfaces as `steerFaultTemporary`. No stock CX-5 KE EPS has been logged yet, so the first
+stock KE install shows whether it steers at all. The 2022 CX-5 EPS can steer to zero and has no
+hands-off lockout, so a car with that EPS swapped in loses the floor too.
 
 `MazdaFlags.STEER_TO_ZERO_EPS` is therefore set from the EPS firmware (`STEER_TO_ZERO_EPS_FW`:
 KBST-3210X-A-00 and KSD5-3210X-C-00, the CX-5 2022 EPS block in fingerprints.py) or from the
