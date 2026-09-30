@@ -35,6 +35,16 @@ LIVE_TORQUE_PARAMETERS_SP_KEY = "LiveTorqueParametersSP"
 LiveTorqueParametersSP = custom.CustomReserved19
 
 
+def fit_torque_points(points):
+  """Upstream's estimate_params on one point set ([steer, 1, lateral accel] rows): the TLS slope
+  (latAccelFactor), its offset and the spread friction. Raises LinAlgError as the SVD does."""
+  from openpilot.selfdrive.locationd.torqued import FRICTION_FACTOR, slope2rot
+  _, _, v = np.linalg.svd(points, full_matrices=False)
+  slope, offset = -v.T[0:2, 2] / v.T[2, 2]
+  _, spread = np.matmul(points[:, [0, 2]], slope2rot(slope)).T
+  return slope, offset, np.std(spread) * FRICTION_FACTOR
+
+
 class TorqueEstimatorExt:
   """Per-speed-bin torque learning, mixed into TorqueEstimator.
 
@@ -81,8 +91,11 @@ class TorqueEstimatorExt:
         self.friction_sanity = 0.8 if decimated else 1.0
 
       if self._params.get_bool("CustomTorqueParams"):
-        self.offline_latAccelFactor = float(self._params.get("TorqueParamsOverrideLatAccelFactor", return_default=True))
-        self.offline_friction = float(self._params.get("TorqueParamsOverrideFriction", return_default=True))
+        # typed on upstream's tune scale, like the manual override they share with
+        from opendbc.sunnypilot.car.interfaces import get_tune_scale
+        scale = get_tune_scale(self.CP)
+        self.offline_latAccelFactor = float(self._params.get("TorqueParamsOverrideLatAccelFactor", return_default=True)) * scale
+        self.offline_friction = float(self._params.get("TorqueParamsOverrideFriction", return_default=True)) / scale
 
     # bins and their cache must exist before the first get_msg
     if self.speed_binned:
@@ -108,12 +121,13 @@ class TorqueEstimatorExt:
 
 
   @staticmethod
-  def _centers_to_bounds(centers):
-    """Bin bounds at the midpoints between consecutive centers; the outer edges take the
-    default range (5 to 40 m/s)."""
+  def _centers_to_bounds(centers, min_speed=None):
+    """Bin bounds at the midpoints between consecutive centers; the outer edges take min_speed
+    (the config's, when it dropped bins below a steering floor) or the default range's 5 m/s,
+    and the default range's 40 m/s."""
     bounds = []
     for i, c in enumerate(centers):
-      lo = DEFAULT_SPEED_BIN_BOUNDS[0][0] if i == 0 else (centers[i - 1] + c) / 2
+      lo = (DEFAULT_SPEED_BIN_BOUNDS[0][0] if min_speed is None else min_speed) if i == 0 else (centers[i - 1] + c) / 2
       hi = DEFAULT_SPEED_BIN_BOUNDS[-1][1] if i == len(centers) - 1 else (c + centers[i + 1]) / 2
       bounds.append((lo, hi))
     return bounds
@@ -135,7 +149,7 @@ class TorqueEstimatorExt:
 
     if 'speed_bp' in cfg:
       self.speed_bin_centers = list(cfg['speed_bp'])
-      self.speed_bin_bounds = self._centers_to_bounds(self.speed_bin_centers)
+      self.speed_bin_bounds = self._centers_to_bounds(self.speed_bin_centers, cfg.get('min_speed'))
     else:
       self.speed_bin_bounds = list(DEFAULT_SPEED_BIN_BOUNDS)
       self.speed_bin_centers = list(DEFAULT_SPEED_BIN_CENTERS)
@@ -143,7 +157,9 @@ class TorqueEstimatorExt:
     n_bins = len(self.speed_bin_bounds)
 
     self.speed_bin_points = [self._make_speed_bin_bucket(TorqueBuckets, STEER_BUCKET_BOUNDS, POINTS_PER_BUCKET) for _ in range(n_bins)]
-    self._speed_bin_last_len = [0] * n_bins
+    # a bin with points since its last fit: a full bin's length stops changing while its ring
+    # buffers keep turning over, so the length cannot mark new data
+    self._speed_bin_dirty = [True] * n_bins
     self._speed_bin_last_valid = [False] * n_bins
 
     # seeds from the TOML entry, else the global offline values for every bin
@@ -183,6 +199,7 @@ class TorqueEstimatorExt:
     for i, (lo, hi) in enumerate(self.speed_bin_bounds):
       if lo <= vego < hi:
         self.speed_bin_points[i].add_point(steer, lateral_acc)
+        self._speed_bin_dirty[i] = True
         break
 
   @staticmethod
@@ -325,7 +342,7 @@ class TorqueEstimatorExt:
     """Independent total-least-squares fit per bin, upstream's estimate_params() per bucket
     set. A bin that goes NaN with valid data is reset, as upstream resets its global fit."""
     from openpilot.selfdrive.locationd.torqued import TorqueBuckets, STEER_BUCKET_BOUNDS, \
-      POINTS_PER_BUCKET, FRICTION_FACTOR, slope2rot, MIN_FILTER_DECAY, MAX_FILTER_DECAY
+      POINTS_PER_BUCKET, MIN_FILTER_DECAY, MAX_FILTER_DECAY
 
     results = []
     for i, bucket in enumerate(self.speed_bin_points):
@@ -334,18 +351,14 @@ class TorqueEstimatorExt:
         continue
 
       # nothing new since the last fit
-      cur_len = len(bucket)
-      if cur_len == self._speed_bin_last_len[i]:
+      if not self._speed_bin_dirty[i]:
         results.append((i, self._speed_bin_last_valid[i]))
         continue
 
       # self.fit_points honors the decimated (qlog) point count
       points = bucket.get_points(self.fit_points)
       try:
-        _, _, v = np.linalg.svd(points, full_matrices=False)
-        slope, offset = -v.T[0:2, 2] / v.T[2, 2]  # slope = latAccelFactor
-        _, spread = np.matmul(points[:, [0, 2]], slope2rot(slope)).T
-        friction_coeff = np.std(spread) * FRICTION_FACTOR
+        slope, _, friction_coeff = fit_torque_points(points)  # slope = latAccelFactor
         if not any(np.isnan(val) for val in [slope, friction_coeff]):
           factor_lo, factor_hi = self.speed_bin_lat_accel_factor_bounds[i]
           fric_lo, fric_hi = self.speed_bin_friction_bounds[i]
@@ -354,7 +367,7 @@ class TorqueEstimatorExt:
           self.speed_bin_filtered[i]['latAccelFactor'].update_alpha(self.speed_bin_decays[i])
           self.speed_bin_filtered[i]['frictionCoefficient'].update(np.clip(friction_coeff, fric_lo, fric_hi))
           self.speed_bin_filtered[i]['frictionCoefficient'].update_alpha(self.speed_bin_decays[i])
-          self._speed_bin_last_len[i] = cur_len
+          self._speed_bin_dirty[i] = False
           self._speed_bin_last_valid[i] = bucket.is_valid()
           results.append((i, self._speed_bin_last_valid[i]))
           continue
@@ -365,7 +378,7 @@ class TorqueEstimatorExt:
         cloudlog.warning(f"speed-dep: bin {i} produced NaN with valid data, resetting bin")
         self.speed_bin_points[i] = self._make_speed_bin_bucket(TorqueBuckets, STEER_BUCKET_BOUNDS, POINTS_PER_BUCKET)
         self.speed_bin_decays[i] = MIN_FILTER_DECAY
-        self._speed_bin_last_len[i] = 0
+        self._speed_bin_dirty[i] = True
       self._speed_bin_last_valid[i] = False
       results.append((i, False))
     return results

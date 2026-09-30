@@ -16,10 +16,10 @@ from openpilot.sunnypilot.selfdrive.controls.tests.speed_dep_helpers import Fake
 def make_override(monkeypatch):
   """Factory for a LatControlTorqueExtOverride whose Params is a FakeParams; the fake is
   reachable afterwards as ovr.params."""
-  def _make(enforce=False, manual_override=False, manual_lat_accel_factor='200', manual_friction='15'):
+  def _make(enforce=False, manual_override=False, manual_lat_accel_factor='200', manual_friction='15', CP=None):
     fake = FakeParams(enforce, manual_override, manual_lat_accel_factor, manual_friction)
     monkeypatch.setattr(override_module, "Params", lambda: fake)
-    return LatControlTorqueExtOverride(make_cp())
+    return LatControlTorqueExtOverride(CP or make_cp())
   return _make
 
 

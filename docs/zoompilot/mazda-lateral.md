@@ -10,11 +10,13 @@ LKAS_REQUEST (the request it received), LKAS_EFFECTIVE (what it applied) and LKA
 
 ## 2022 EPS detection and the STEER_TO_ZERO_EPS flag
 
-Older Mazdas are dashcam only for one reason: their EPS locks steering out after about 5 s of
-hands-off and below 45 kph (LKAS_LIMITS: disabled going down through 45 kph, re-enabled going up
-through 52 kph, and the LKAS_BLOCK bit lags the speed on the way up). That is a property of the
-EPS, not of the car. The 2022 CX-5 EPS can steer to zero and has no hands-off lockout, so a car
-with that EPS swapped in is controllable and lifts out of dashcam with it.
+Older Mazda EPS firmware locks steering out after about 5 s of hands-off and below 45 kph
+(LKAS_LIMITS: disabled going down through 45 kph, re-enabled going up through 52 kph, and the
+LKAS_BLOCK bit lags the speed on the way up). That is a property of the EPS, not of the car.
+Upstream keeps those cars dashcam only; here every Mazda platform steers above the floor and a
+lockout surfaces as `steerFaultTemporary`. No stock CX-5 KE EPS has been logged yet, so the first
+stock KE install shows whether it steers at all. The 2022 CX-5 EPS can steer to zero and has no
+hands-off lockout, so a car with that EPS swapped in loses the floor too.
 
 `MazdaFlags.STEER_TO_ZERO_EPS` is therefore set from the EPS firmware (`STEER_TO_ZERO_EPS_FW`:
 KBST-3210X-A-00 and KSD5-3210X-C-00, the CX-5 2022 EPS block in fingerprints.py) or from the
@@ -95,18 +97,14 @@ and 1 at a margin of 1, while 2 leaves none at either 30 or 50 ms. It costs 30 c
 which widens the frames the ceiling actually trims from 2.1% to 3.0% on those two
 driver-fighting routes.
 
-## Speed-dependent STEER_MAX
+## STEER_MAX
 
 `STEER_MAX` is the scale from the controller's normalized output to CAN counts
-(`new_torque = actuators.torque * steer_max`), not just a ceiling, and latAccelFactor is
-proportional to it. Changing it rescales every sub-saturation command and invalidates every
-`speed_dependent.toml` LAF seed at once, so it is left alone and the EPS's real ceiling is
-enforced separately (next section).
-
-`STEER_MAX_LOOKUP` is 1200 up to 14.2 m/s and 800 from 14.5 m/s (about 32 mph): 1200 below for
-full low-speed authority and feedforward overshoot, 800 above for smoother highway steering.
-Speed-dependent STEER_MAX is only applied on the 2022 EPS; the pre-2022 path uses upstream's
-constant 800.
+(`new_torque = actuators.torque * STEER_MAX`), not just a ceiling, and latAccelFactor is
+proportional to it. It is 1200 at every speed on the EPS envelope, the panda's `max_torque`;
+the EPS's real ceiling is enforced separately (next section). Values fitted on upstream's 800
+convert once through `TUNE_SCALE`; why the 1200 -> 800 step it replaced (2026-09-30) is gone:
+`lateral-tune.md`, "One STEER_MAX, and the tune scale".
 
 ## EPS ceiling clamp
 
@@ -491,8 +489,8 @@ tests.
 | Constant | Value | Measurement | Routes |
 | --- | --- | --- | --- |
 | `STEER_STEP` | 1 (100 Hz) | EPS slews 12 counts per 10 ms whatever the command cadence | stock camera drive census |
-| `STEER_MAX` | 1200 | scale of normalized torque to counts; LAF seeds depend on it | design |
-| `STEER_MAX_LOOKUP` | 1200 to 14.2 m/s, 800 from 14.5 m/s | low-speed authority vs highway smoothness | on-car tuning |
+| `STEER_MAX` | 1200 at every speed | scale of normalized torque to counts; LAF seeds depend on it | design |
+| `TUNE_STEER_MAX` / `TUNE_SCALE` | 800 / 1.5 | upstream's scale: params.toml tunes, manual override, NNLC models convert x / 1.5 | design |
 | `STEER_DELTA_UP` / `STEER_DELTA_DOWN` | 12 / 12 | delivered step p99 and p99.9 of 12, 11.7M frames | corpus; CX-9 2021 62k; CX-5 2022 318k |
 | `max_rt_delta` (panda) | 384 | 32 x max_rate_up, upstream's ratio | derived |
 | `STEER_DRIVER_MULTIPLIER` | 15 | tuned for the 2022 EPS (upstream 1) | on-car tuning |

@@ -182,7 +182,7 @@ class TestLearnerSanityBounds:
 
 class TestSeedValidityGate:
   """Entries measured on a steer-to-zero EPS declare requires_steer_to_zero and must not
-  apply to the same model with its stock EPS (different STEER_MAX schedule, mis-scaled LAF)."""
+  apply to the same model with its stock EPS (a steering floor and the firmware's dead band)."""
 
   def test_flagged_entry_suppressed_on_stock_eps(self, set_speed_dep_config):
     set_speed_dep_config({'SWAP_CAR': {'requires_steer_to_zero': True, 'speed_bp': [10.0]}})
@@ -197,8 +197,10 @@ class TestSeedValidityGate:
     cfg = {'speed_bp': [10.0, 20.0], 'laf_bp': [1.0, 2.0], 'friction_bp': [0.1, 0.2]}
     set_speed_dep_config({'PLAIN_CAR': cfg})
     assert get_speed_dep_config_for_car(make_cp('PLAIN_CAR', 0.0)) == cfg
-    # a steering floor keeps the entry but drops the bins centered below it
-    assert get_speed_dep_config_for_car(make_cp('PLAIN_CAR', 12.5)) == {'speed_bp': [20.0], 'laf_bp': [2.0], 'friction_bp': [0.2]}
+    # a steering floor keeps the entry but drops the bins centered below it; the first kept bin's
+    # lower edge stays at the midpoint the full table gives it
+    assert get_speed_dep_config_for_car(make_cp('PLAIN_CAR', 12.5)) == {'speed_bp': [20.0], 'laf_bp': [2.0], 'friction_bp': [0.2],
+                                                                        'min_speed': 15.0}
 
   def test_entry_with_every_bin_below_the_floor_falls_back_to_defaults(self, set_speed_dep_config):
     set_speed_dep_config({'PLAIN_CAR': {'speed_bp': [10.0], 'laf_bp': [1.0], 'seed_version': 3}})

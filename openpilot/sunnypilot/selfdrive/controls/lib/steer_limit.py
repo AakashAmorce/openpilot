@@ -28,8 +28,8 @@ from typing import NamedTuple
 
 MISMATCH_THRESHOLD = 1e-2  # controlsd.publish: abs(CC.actuators.torque - CO.actuatorsOutput.torque) > 1e-2
 RAIL_EPS = 1e-3            # the tunes' own saturation test: steer_max - |output| < 1e-3
-# the carcontroller reads the scale at vEgoRaw and rounds it, the classifier interpolates at
-# vEgo, so accept a slightly short step
+# a speed-dependent scale (Rivian's) is read at vEgoRaw and rounded by the carcontroller and
+# interpolated at vEgo here, so accept a slightly short step
 RATE_STEP_FRACTION = 0.9
 
 

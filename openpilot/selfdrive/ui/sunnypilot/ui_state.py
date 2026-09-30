@@ -6,8 +6,11 @@ See the LICENSE.md file in the root directory for more details.
 """
 from enum import Enum
 
+import numpy as np
+
 from openpilot.cereal import messaging, log, custom
 from opendbc.car.structs import car
+from opendbc.sunnypilot.car.interfaces import get_steer_rail_schedule
 from openpilot.common.params import Params
 from openpilot.sunnypilot import jetlink_adapter
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.display import OnroadBrightness
@@ -70,6 +73,10 @@ class UIStateSP:
     self.enforce_torque_control: bool = False
     self.custom_torque_params: bool = False
     self.torque_override_enabled: bool = False
+    # carOutput's applied torque on a scale where the EPS rail is +-1, for the torque bar and
+    # lane lines: a torque tune saturates at the rail, below the carcontroller's full scale
+    self.torque_utilization: float = 0.0
+    self._steer_rail_schedule = None
     self._sp_initialized: bool = False
 
   def update(self) -> None:
@@ -79,6 +86,14 @@ class UIStateSP:
       self.sunnylink_state.stop()
     # read where sm is updated, so the params thread never touches a message
     self._accelerator_state_name = str(self.sm['modelDataV2SP'].acceleratorState)
+    self._update_torque_utilization()
+
+  def _update_torque_utilization(self) -> None:
+    torque = self.sm['carOutput'].actuatorsOutput.torque
+    if self._steer_rail_schedule is not None:
+      rail = float(np.interp(self.sm['carState'].vEgo, self._steer_rail_schedule[0], self._steer_rail_schedule[1]))
+      torque = min(1.0, max(-1.0, torque / rail))
+    self.torque_utilization = torque
 
   @property
   def jetlink_view(self):
@@ -174,6 +189,7 @@ class UIStateSP:
     if CP_SP_bytes is not None:
       self.CP_SP = messaging.log_from_bytes(CP_SP_bytes, custom.CarParamsSP)
       self.has_icbm = self.CP_SP.intelligentCruiseButtonManagementAvailable and self.params.get_bool("IntelligentCruiseButtonManagement")
+    self._steer_rail_schedule = get_steer_rail_schedule(self.CP) if self.CP is not None else None
 
     self._enforce_constraints()
     source = get_active_source(chestnut=self.chestnut_present, chestnut_active=self.chestnut_active,
