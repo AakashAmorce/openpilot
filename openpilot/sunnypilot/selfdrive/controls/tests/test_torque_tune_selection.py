@@ -28,7 +28,7 @@ from openpilot.cereal import custom
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.sunnypilot.selfdrive.controls import controlsd_ext
-from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import ControlsExt
+from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import TUNE_SWAP_INACTIVE_FRAMES, ControlsExt
 
 class FakeLaC(str):
   """A controller stand-in that compares as its version label and counts resets."""
@@ -69,7 +69,8 @@ def ctx(monkeypatch):
     CP = car.CarParams.new_message(steerControlType="torque")
     CP.lateralTuning.init('torque')
     controls = SimpleNamespace(params=params, CP=CP.as_reader(),
-                               CP_SP=custom.CarParamsSP.new_message().as_reader())
+                               CP_SP=custom.CarParamsSP.new_message().as_reader(),
+                               _inactive_frames=TUNE_SWAP_INACTIVE_FRAMES)
     yield params, controls
 
 
@@ -164,6 +165,46 @@ class TestTorqueTuneSelection:
 
     swap(controls, big=False)
     assert controls.LaC == BY_VERSION[small] and controls.LaC.resets == 1
+
+  def test_a_hand_back_while_steering_keeps_the_tune_that_steers(self, ctx):
+    """2026-09-29: every big-to-small hand-back while steering stepped the commanded torque
+    by 0.09 to 0.19 in one tick, from switching to the idle controller's stale state. The
+    controller that steers carries the small model until lateral has been inactive for
+    TUNE_SWAP_INACTIVE_FRAMES in a row: a one-frame drop or a 0.3 s one keeps it."""
+    params, controls = ctx
+    params.put("TorqueControlTune", 2.0, block=True)
+    params.put("TorqueControlTuneBig", 1.0, block=True)
+    select(controls)
+    swap(controls, big=True)            # swapped in with nothing in control
+    big = controls.LaC
+
+    def frame(lat_active):
+      ControlsExt.note_lat_active(controls, lat_active)
+      swap(controls, big=False)
+
+    assert big == V1 and big.resets == 1
+    for gap in (0, 1, 30, TUNE_SWAP_INACTIVE_FRAMES - 1):
+      for _ in range(20):               # handed back while steering
+        frame(True)
+      for _ in range(gap):              # a steer fault flicker, a short blinker pause
+        frame(False)
+      frame(True)
+      assert controls.LaC is big and big.resets == 1, f"swapped after a {gap}-frame gap"
+    for _ in range(TUNE_SWAP_INACTIVE_FRAMES):   # half a second off: a disengage, a stop
+      frame(False)
+    assert controls.LaC == V2 and controls.LaC.resets == 1
+    for _ in range(10):                 # and the next engagement is on the small tune
+      frame(True)
+    assert controls.LaC == V2 and controls.LaC.resets == 1
+
+  def test_switching_while_inactive_is_unchanged(self, ctx):
+    params, controls = ctx
+    params.put("TorqueControlTune", 2.0, block=True)
+    params.put("TorqueControlTuneBig", 1.0, block=True)
+    select(controls)
+    for big, tune in ((True, V1), (False, V2), (True, V1)):
+      swap(controls, big=big)
+      assert controls.LaC == tune
 
   def test_enforce_off_ignores_the_big_tune(self, ctx):
     """The enforce-off v0 forcing applies to both sizes."""
