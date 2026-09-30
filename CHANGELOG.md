@@ -4,6 +4,24 @@ zoompilot vUNRELEASED
 * Run big models on a Mac, Jetson, NVIDIA Linux PC or iPhone <3
 * Turn on: Settings > Models > Accelerator Link.
 
+**Big model, Accelerator Link**
+* Jetlink v0.7.2: one server on Jetson, Mac, Linux PC, iPhone and Android. Update the comma and Jetlink together.
+* Losing the big model no longer disengages. A 5 s "Big model lost, small model driving" warning shows and the small model keeps driving.
+* The big model swaps in only while nothing is engaged, MADS included. "Big Model Active" chimes when you can engage again.
+* The torque tune follows the model that is steering and swaps after half a second of inactive steering, so a hand-back no longer steps the torque.
+* Fixed "Driving Model Lagging" for several seconds after a model switch.
+* Fixed a false "LOW MEMORY" takeover alert with the Accelerator Link on.
+
+**Mazda steering**
+* One STEER_MAX at every speed. Tunes, learned seeds and the manual override convert exactly, and speed-bin learning no longer stalls once a bin is full.
+* The torque bar and lane-line colour now reach their limits where the EPS does.
+* Older Mazdas and the 2012-16 CX-5 steer on their stock EPS; older EPS firmware keeps the 45 kph floor.
+* The dash "hands on wheel" warning mirrors zoompilot's alert while it steers.
+
+**Curve speed (Mazda)**
+* Curves are planned on the whole model path with a tracking servo: braking starts earlier and lands softer. The decel overshoot toggle is gone.
+* A speed limit prompt no longer freezes the servo mid-curve; only a button press resolves it.
+
 **General Updates & Fixes**
 * **Lane Keep Off:** Dash/infotainment buttons now disable steering but retain cruise control, adding a "Lateral Disabled, LKAS is off" alert.
 * **False Alerts:** Fixed "Steering Assist Temporarily Unavailable" showing when lane-keep is off.
