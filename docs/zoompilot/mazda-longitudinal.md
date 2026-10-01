@@ -380,17 +380,32 @@ LongControl already parks at `CP.stopAccel` while stopping, which for this car i
 value: stock MRCC holds raw -1024 at a stop, so `stopAccel = -1.024` and the plan's value is sent
 as-is. Nothing in the machine latches; `holding` is recomputed every frame.
 
-### Body brake hold and the relax
+### Body hold and the relax
 
-GEAR.BRAKE_HOLD is the body ECU taking the standstill hold over and holding the brakes itself.
-Stock relaxes its standstill command the instant that happens, not on any schedule: across 13
-stock holds of 4.5 s or longer, the relax and GEAR.BRAKE_HOLD agreed to within +-0.02 s in all 9
-where both were visible, and the latch itself landed anywhere from 0.01 s to 7.6 s after
-standstill. `ACCEL_HOLD_LATCHED` (-0.001 m/s2, raw -1) is the relaxed value sent once the car has
-the brakes. Stock drops CRZ_CTRL.ACC_ACTIVE_2 together with the relax. If the latch never comes
-the port simply keeps braking at the plan's value. BRAKE_HOLD is the driver's Auto Hold feature;
-with Auto Hold off the latched family below is structurally unreachable, and the CX-9 body never
-sets it.
+Once STOPPING has held a stop for a few seconds, the body ECU takes the standstill hold over and
+holds the brakes itself. It says so in EPB.HOLD_STATE (0x79 byte 2, low nibble: 2 idle, 3
+holding, 5 releasing), and that is what stock relaxes on, not on any schedule: across 43 stock
+holds the radar dropped STOPPING and relaxed within 0 to 40 ms of HOLDING in every one. The body
+usually takes the hold 3.3 to 4.5 s after standstill (1.5 to 11 s across the corpus).
+`ACCEL_HOLD_LATCHED` (-0.001 m/s2, raw -1) is the relaxed value sent once the car has the brakes.
+Stock drops CRZ_CTRL.ACC_ACTIVE_2 together with the relax.
+
+GEAR.BRAKE_HOLD is Auto Hold. With Auto Hold armed it joins the body's hold 10 to 30 ms after
+HOLDING and lights HOLD on the dash; 15 of the 43 stock holds never had it, and stock relaxed and
+released those exactly the same way. So `CS.body_hold` is either signal: HOLD_STATE carries the
+handshake on every hold-capable body whatever the Auto Hold setting, and BRAKE_HOLD on its own is
+still a held car. If the body never takes the hold, the port keeps braking at the plan's value for
+as long as the stop lasts. That is all there is on the 2016.5 CX-5 KE, whose body has no
+standstill hold: HOLD_STATE stays 0 there, where the hold-capable bodies read 0x3 in the high
+nibble.
+
+Until 2026-10-01 the port keyed on BRAKE_HOLD alone, which broke every car with Auto Hold off. It
+kept STOPPING and hold-grade braking on the wire under a body that already held, then released on
+the never-latched path with no unlatch pulse, the one thing the body lets go on. The CX-9 that sat
+still under a positive command (route 09) has a hold-capable body and Auto Hold off (driver stops of
+up to 41 s in route 04, BRAKE_HOLD never set), which matches that failure; an rlog of a
+CX-9 stop would confirm it. `tools/mazda_long/acc_hold_census.py` reproduces the stock census and
+`tools/mazda_long/replay_standstill_hold.py` checks a drive against it.
 
 ### Release grammar
 
@@ -470,7 +485,7 @@ plan is braking the hold command is the plan's own, but the moment it turns posi
 freezes where it is: stock never lets ACCEL_CMD climb while STOPPING is asserted.
 
 A latched release does not start climbing until the body lets go: stock pins the command at
-raw -1 until GEAR.BRAKE_HOLD drops in every latched release of the corpus.
+raw -1 until the body releases in every latched release of the corpus.
 
 `ACCEL_RESUME_PULSE_MAX` (0.25 m/s2) is the ACCEL_CMD ceiling while a latched release's pulse
 plays: stock's latched releases peak at +0.24 to +0.25 m/s2 (raw +182 / +195) in the pulse tail,
@@ -524,9 +539,10 @@ was about +0.78, i.e. about +0.67 above its plan; stock's own latched breakaways
 reaching stock's p25 (+0.11 to a cap of +0.86) and the CX-9's +0.47 reaching +1.22, while a plan
 of +0.11 no longer climbs to +1.45.
 
-What the corpus does not settle is the CX-9 itself: its qlog carries no CAN, so GEAR.BRAKE_HOLD
-and the stop bits are unobservable there. A body brake latch invisible to us is still on the
-table, and would not be cured by asking harder. An rlog would settle it.
+What the corpus does not settle is the CX-9 itself: its qlog carries no CAN, so the body hold
+and the stop bits are unobservable there. The likelier cause is a body hold the port could not
+see (Body hold and the relax), which no amount of asking harder would cure. An rlog would settle
+it.
 
 ### Tried and rejected: a lead-distance cap on the breakaway
 
@@ -718,7 +734,7 @@ the dash lane indicators, so those two stay zeroed.
 | `RESUME_REPULSE_T` | 1.0 s | body answered all 10 pulses in 30 to 51 ms | 103, 115, 118, 11d, 12c, 132, 139, fe |
 | `RELEASE_DEBOUNCE_T` | 0.2 s | lead opening >= +0.31 m/s at all 23 stock latched pulses | corpus |
 | `LEAD_DEBOUNCE_T` | 0.5 s | 6 leadVisible toggles in 1.4 s on a 120 m lead | 6bb2dc61c4 |
-| `ACCEL_HOLD_LATCHED` | -0.001 m/s2 | relax and BRAKE_HOLD within +-0.02 s in 9 of 9 visible | 13 stock holds |
+| `ACCEL_HOLD_LATCHED` | -0.001 m/s2 | stock relaxes 0 to 40 ms after HOLD_STATE goes HOLDING, 43 of 43 | 43 stock holds |
 | `ACCEL_RESUME_PULSE_MAX` | 0.25 m/s2 | stock latched pulse tail +0.24 to +0.25, +0.34 worst | corpus |
 | `ACCEL_RELEASE_BAND` | -0.26 m/s2 | stock never-latched relax target -0.27 to -0.18 | corpus |
 | `ACCEL_RELEASE_RAMP` | 1.25 m/s3 | +25 raw per 50 Hz frame | corpus |
