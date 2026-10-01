@@ -24,7 +24,8 @@ current speed. It only ever uses settings the driver could pick on the wheel; st
 the brakes and AEB.
 
 States: `idle` -> `shortening` (held at least 3.5 s, past MRCC's own 3 s resume window) -> `short`
-(held, or crawling) -> `restoring` -> `idle`. `restore_pending` covers cruise dropping while short.
+(held, or crawling) -> `restoring` -> `idle`. `restore_pending` covers cruise dropping while short and
+retries; `guard` covers a driver press while a shorter tap of ours may still land.
 
 - Closed loop: one distance tap, then wait up to 1 s for `CRZ_CTRL.DISTANCE_SETTING` to move before
   the next. Taps share CRZ_BTNS pacing with ICBM and the TJA cleanup (`last_button_frame`, at least
@@ -33,7 +34,8 @@ States: `idle` -> `shortening` (held at least 3.5 s, past MRCC's own 3 s resume 
 - Shorter only at a standstill in HOLD, longer only on the way back. The restore never asks for a
   shorter gap than the driver's; an overshoot to a longer setting ends the episode (`restored_longer`).
 - A press the ECU applies late is still caught: once a tap has gone out, the episode only ends when the
-  setting reads at or longer than the driver's with no tap in the last 3 s.
+  setting reads at or longer than the driver's with no tap in the last 6 s, and for 15 s after that a
+  setting found shorter than the driver's reopens the restore (`late_landing`).
 - Never delays a resume: if openpilot starts pressing RES or the car moves mid-sequence, the
   pull-away goes first with whatever setting was reached.
 - Restore point: the lead gap reaches the driver's setting's gap at the current speed (time gaps from
@@ -41,12 +43,14 @@ States: `idle` -> `shortening` (held at least 3.5 s, past MRCC's own 3 s resume 
   stop-and-go traffic does not cycle the setting at every start. Backstops: 20 mph, 15 s, or 1 s
   without a lead.
 - The driver wins: a physical distance press during an episode ends it and keeps the driver's choice.
-  One episode per stop.
+  If a shorter tap of ours may still be in flight, their choice is taken as the reading when they first
+  pressed plus their own presses, and anything of ours that lands on top of it is undone, longer only.
+  One episode per stop; a distance press at the stop keeps it from arming.
 - A deaf ECU: if three taps in a row go unconfirmed at a stop with none ever confirmed, it stops arming
-  for the rest of the drive (and still restores anything that lands late). A restore that keeps
-  missing retries after 2 s, then every 30 s (`restore_stuck`). Every unconfirmed or wrong-size step
-  counts against a per-drive budget of 30; past it, it stops tapping for the drive
-  (`disabled_for_drive`). Successful taps do not count, so heavy stop-and-go is unaffected.
+  for the rest of the drive (and still restores anything that lands late). A restore is never given
+  up: it retries after 2 s, then every 30 s (`restore_stuck`). A drive with 30 or more unconfirmed or
+  wrong-size steps that are at least half of its taps stops shortening for the rest of the drive
+  (`shortening_disabled_for_drive`); restores carry on. A few dropped presses never trip it.
 
 `DISTANCE_SETTING` raw: 1 is 4 bars (longest), 4 is 1 bar (shortest); `DISTANCE_LESS` raises it (see
 the cluster comment in `update_longitudinal`).
