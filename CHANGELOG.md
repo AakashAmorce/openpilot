@@ -10,6 +10,7 @@ zoompilot vUNRELEASED
 * The big model swaps in only while nothing is engaged, MADS included. "Big Model Active" chimes when you can engage again.
 * The torque tune follows the model that is steering and swaps after half a second of inactive steering, so a hand-back no longer steps the torque.
 * Fixed "Driving Model Lagging" for several seconds after a model switch.
+* Fixed a false "LOW MEMORY" takeover alert with the Accelerator Link on.
 
 **Mazda steering**
 * One STEER_MAX at every speed. Tunes, learned seeds and the manual override convert exactly, and speed-bin learning no longer stalls once a bin is full.
