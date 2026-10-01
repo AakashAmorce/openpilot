@@ -275,6 +275,23 @@ until the radar has been silenced once; the teardown gate already waits out a st
 The deeper fix is carstate not reporting a stock engagement as `cruiseState.enabled` under op-long
 at all, which needs an audit of every enabled consumer first.
 
+### The cancel settle wait
+
+Upstream's controller waits 70 ms before its first CANCEL, but only while the brake is pressed,
+to keep a press of ours from landing after the car has already cancelled on the brake: a CANCEL
+with cruise off is the stock main-off. The wheel CANCEL is the same race without the brake.
+It disengages openpilot through MADS's `manualLongitudinalRequired` 60 to 90 ms before the radar
+answers the press, the car still reports cruise on in between, and controlsd raises
+`cruiseControl.cancel` for those 6 to 10 frames. Every one of the five wheel cancels on 2026-09-30
+(routes 00000260, 269, 26a, 26b) had our press go out in the same 10 ms as the radar going
+inactive. The two main-offs that day were the driver's own second press.
+
+The controller now waits `CANCEL_SETTLE_T` (0.2 s) of sustained request before any first press,
+whatever disengaged openpilot. A request the car answers itself never produces a press; a real
+desync, where openpilot has dropped out and the car keeps cruising, is cancelled 0.2 s later than
+before, which is the cost upstream already accepted under braking. Tests: `TestCancelSettle` in
+`test_mazda_buttons.py`; the golden capture moved one frame, the first press of its cancel phase.
+
 ### Speed Limit Assist and ICBM under alpha long
 
 Alpha long changes who commands acceleration, not who keeps the set speed: the body still owns
@@ -695,6 +712,7 @@ the dash lane indicators, so those two stay zeroed.
 | `RADAR_SESSION_LIMIT_T` | 10.0 s | per-episode UDS budget | design |
 | `MAZDA_ENGAGE_BTN_WINDOW` | 10 CRZ_BTNS frames | press 30 to 70 ms before ACC_ACTIVE, 104 engagements | corpus |
 | `CANCEL_CONTEXT_T` | 0.5 s | PEDALS lags the CAN_OFF press by a few frames | 7f9e3ff336 |
+| `CANCEL_SETTLE_T` | 0.2 s | the car answers its own cancels 60 to 90 ms after openpilot disengages on them; the request lasted 6 to 10 frames on all five wheel cancels | 00000260, 269, 26a, 26b |
 | `MAZDA_CANCEL_CONTEXT_FRAMES` | 25 PEDALS frames | `CANCEL_CONTEXT_T` on the 50 Hz PEDALS clock | derived |
 | `RESUME_UNLATCH_LATCHED_T` | 0.18 s (9 wire frames) | latched pulses 6 to 11 wire frames, mode 9 | 33-pulse census |
 | `RESUME_REPULSE_T` | 1.0 s | body answered all 10 pulses in 30 to 51 ms | 103, 115, 118, 11d, 12c, 132, 139, fe |
