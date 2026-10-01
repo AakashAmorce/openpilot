@@ -9,6 +9,7 @@ from openpilot.selfdrive.ui.mici.widgets.button import BigParamControl
 from openpilot.selfdrive.ui.sunnypilot.mici.widgets.button import (
   BigButtonSP,
   BigMultiParamToggleSP,
+  BigParamControlSP,
   BigParamOption,
   speed_unit,
 )
@@ -17,6 +18,7 @@ from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import icbm_applicable, icbm_moves_speed_limits
+from openpilot.sunnypilot.mads.helpers import offroad_brand
 
 SL_MODE_LABELS = [tr("off"), tr("info"), tr("warn"), tr("assist")]
 SL_SOURCE_LABELS = [tr("car"), tr("map"), tr("car-first"), tr("map-first"), tr("combined")]
@@ -61,6 +63,11 @@ class CruiseLayoutMici(NavScroller):
     self._dec_toggle = BigParamControl(tr("dynamic experimental control"), "DynamicExperimentalControl")
     self._scc_v_toggle = BigParamControl(tr("smart cruise vision"), "SmartCruiseControlVision")
     self._scc_m_toggle = BigParamControl(tr("smart cruise map"), "SmartCruiseControlMap")
+    # Mazda stock MRCC only: shortens the distance setting through a hold so the pull-away
+    # starts sooner, then restores it. Read at car start, so offroad only.
+    self._dar_toggle = BigParamControlSP(tr("dynamic auto resume"), "MazdaDynamicAutoResume",
+                                         depends_on=self._dar_allowed)
+    self._dar_toggle.set_visible(self._is_mazda)
     self._custom_acc_btn = BigButtonSP(tr("custom increments"))
     self._speed_limit_btn = BigButtonSP(tr("speed limit"))
 
@@ -68,7 +75,7 @@ class CruiseLayoutMici(NavScroller):
       btn.set_subtitle_font_size(24)
 
     self._scroller.add_widgets([
-      self._icbm_toggle, self._dec_toggle,
+      self._icbm_toggle, self._dec_toggle, self._dar_toggle,
       self._scc_v_toggle, self._scc_m_toggle,
       self._custom_acc_btn, self._speed_limit_btn,
     ])
@@ -98,6 +105,7 @@ class CruiseLayoutMici(NavScroller):
     self._dec_toggle.refresh()
     self._scc_v_toggle.refresh()
     self._scc_m_toggle.refresh()
+    self._dar_toggle.refresh()
 
     cp_ready = ui_state.CP is not None and ui_state.CP_SP is not None
     has_long = cp_ready and ui_state.has_longitudinal_control
@@ -156,6 +164,15 @@ class CruiseLayoutMici(NavScroller):
 
     self._update_custom_acc_state()
     self._update_speed_limit_state(cp_ready, has_long, has_icbm, offset_type)
+
+  @staticmethod
+  def _is_mazda() -> bool:
+    return offroad_brand(ui_state.params, ui_state.CP, ui_state.is_offroad()) == "mazda"
+
+  @staticmethod
+  def _dar_allowed() -> bool:
+    # openpilot longitudinal already pulls away as the gap opens; this works stock MRCC's buttons.
+    return ui_state.is_offroad() and not ui_state.has_longitudinal_control
 
   def _update_custom_acc_state(self):
     if not gui_app.widget_in_stack(self._acc_view):

@@ -250,6 +250,10 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"HyundaiLongitudinalTuning", {PERSISTENT | BACKUP, INT, "0"}},
     {"MazdaTjaButton", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"MazdaMovingTakeover", {PERSISTENT | BACKUP, BOOL, "0"}},
+    // Dynamic Auto Resume (Cruise panel): shorten stock MRCC's distance through a hold, then restore it.
+    {"MazdaDynamicAutoResume", {PERSISTENT | BACKUP, BOOL, "0"}},
+    // Developer only, no UI: run Dynamic Auto Resume's logic and log the taps without sending any.
+    {"MazdaDynamicAutoResumeShadow", {PERSISTENT, BOOL, "0"}},
     {"SubaruStopAndGo", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"SubaruStopAndGoManualParkingBrake", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaCoopSteering", {PERSISTENT | BACKUP, BOOL, "0"}},

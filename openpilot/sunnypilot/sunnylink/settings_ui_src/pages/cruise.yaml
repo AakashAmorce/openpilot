@@ -24,6 +24,23 @@ sections:
     - $ref: '#/macros/longitudinal'
     enablement:
     - $ref: '#/macros/longitudinal'
+  - key: MazdaDynamicAutoResume
+    widget: toggle
+    title: Dynamic Auto Resume
+    description: When stopped in traffic, temporarily shortens the radar cruise following distance so you pull away sooner
+      when traffic moves, then restores your distance setting once a normal gap forms. Mazda stock radar cruise only; not
+      used with zoompilot longitudinal control.
+    visibility:
+    - type: capability
+      field: brand
+      equals: mazda
+    enablement:
+    - $ref: '#/macros/offroad'
+    - type: not
+      condition:
+        type: capability
+        field: has_longitudinal_control
+        equals: true
   - key: DisengageOnAccelerator
     widget: toggle
     title: Disengage Cruise on Accelerator Pedal

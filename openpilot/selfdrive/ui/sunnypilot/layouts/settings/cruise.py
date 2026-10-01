@@ -8,6 +8,7 @@ from enum import IntEnum
 
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.cruise_sub_layouts.speed_limit_settings import SpeedLimitSettingsLayout
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.sunnypilot.mads.helpers import offroad_brand
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import icbm_applicable, icbm_moves_speed_limits
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.sunnypilot.lib.styles import style
@@ -31,6 +32,10 @@ ACC_ENABLED_DESCRIPTION = tr_noop("Enable custom Short & Long press increments f
 ACC_NOLONG_DESCRIPTION = tr_noop("This feature can only be used with zoompilot longitudinal control enabled.")
 ACC_PCMCRUISE_DISABLED_DESCRIPTION = tr_noop("This feature is not supported on this platform due to vehicle limitations.")
 ONROAD_ONLY_DESCRIPTION = tr_noop("Start the vehicle to check vehicle compatibility.")
+
+DAR_DESC = tr_noop("When stopped in traffic, temporarily shortens the radar cruise following distance so you pull away " +
+                   "sooner when traffic moves, then restores your distance setting once a normal gap forms. " +
+                   "Mazda stock radar cruise only; not used with zoompilot longitudinal control.")
 
 
 class CruiseLayout(Widget):
@@ -89,9 +94,17 @@ class CruiseLayout(Widget):
       description=tr("Enable toggle to allow the model to determine when to use zoompilot ACC or zoompilot End to End Longitudinal."),
       param="DynamicExperimentalControl")
 
+    self.dar_toggle = toggle_item_sp(
+      title=tr("Dynamic Auto Resume"),
+      description=tr(DAR_DESC),
+      param="MazdaDynamicAutoResume",
+      enabled=lambda: ui_state.is_offroad() and not ui_state.has_longitudinal_control)
+    self.dar_toggle.set_visible(lambda: offroad_brand(ui_state.params, ui_state.CP, ui_state.is_offroad()) == "mazda")
+
     items = [
       self.icbm_toggle,
       self.dec_toggle,
+      self.dar_toggle,
       self.scc_v_toggle,
       self.scc_m_toggle,
       self.custom_acc_toggle,
