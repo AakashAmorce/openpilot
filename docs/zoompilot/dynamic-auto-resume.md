@@ -43,8 +43,10 @@ retries; `guard` covers a driver press while a shorter tap of ours may still lan
   stop-and-go traffic does not cycle the setting at every start. Backstops: 20 mph, 15 s, or 1 s
   without a lead.
 - The driver wins: a physical distance press during an episode ends it and keeps the driver's choice.
-  If a shorter tap of ours may still be in flight, their choice is taken as the reading when they first
-  pressed plus their own presses, and anything of ours that lands on top of it is undone, longer only.
+  If a shorter tap of ours may still be in flight, their choice is taken as the reading they reacted to
+  plus their own presses (a step of ours that landed within 1 s before their press counts as unseen),
+  and once our in-flight taps have had time to land, anything of ours on top of it is undone, longer
+  only.
   One episode per stop; a distance press at the stop keeps it from arming.
 - A deaf ECU: if three taps in a row go unconfirmed at a stop with none ever confirmed, it stops arming
   for the rest of the drive (and still restores anything that lands late). A restore is never given
@@ -94,4 +96,5 @@ setting; the real standstill gap behind `STOP_GAP`.
 - A restore that cannot land is only logged; there is no driver alert yet.
 - A tap sent just before openpilot starts pressing RES can cost the first RES frame (the ECU's 200 ms
   floor), delaying the resume by up to about 0.2 s; RES keeps repeating until the car moves.
-- A driver press within a late tap's window can leave one extra step after the driver's choice.
+- A driver's choice is inferred from their presses and the reading they reacted to; when it is
+  ambiguous it errs longer.
