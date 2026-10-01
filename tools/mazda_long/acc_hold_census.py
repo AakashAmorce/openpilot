@@ -26,20 +26,29 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "opendbc_repo"))
 
+from opendbc.can.dbc import DBC
+from opendbc.can.parser import get_raw_value
 from opendbc.car.mazda.carstate import HOLD_STATE_HOLDING
+from opendbc.car.mazda.values import CarControllerParams
 from openpilot.tools.lib.logreader import LogReader
 
 CRZ_INFO, EPB, GEAR = 0x21b, 0x79, 0x228
+MSGS = DBC("mazda_2017").addr_to_msg
+RELAXED = CarControllerParams.ACCEL_HOLD_LATCHED
 
 
-def accel_cmd_raw(dat):
-  return (((dat[2] & 0x03) << 11) | (dat[3] << 3) | (dat[4] >> 5)) - 4096
+def signal(addr, dat, name):
+  """One DBC signal from a raw frame, in order within the log (a CANParser batch would lose it)."""
+  sig = MSGS[addr].sigs[name]
+  raw = get_raw_value(dat, sig)
+  if sig.is_signed:
+    raw -= ((raw >> (sig.size - 1)) & 1) << sig.size
+  return raw * sig.factor + sig.offset
 
 
 def episodes(path):
   """Yield one dict per HOLDING episode that ends inside the log."""
   t0 = None
-  state = None
   brake_hold = False
   stop = cmd = None
   gas = False
@@ -50,40 +59,40 @@ def episodes(path):
     t0 = t if t0 is None else t0
     w = m.which()
     if w == "sendcan":
-      sent |= any(c.address == CRZ_INFO for c in m.sendcan)
+      if not sent:
+        sent = any(c.address == CRZ_INFO for c in m.sendcan)
     elif w == "carState":
       gas = m.carState.gasPressed
     elif w == "can":
       for c in m.can:
-        if c.src != 0:
+        if c.src != 0 or c.address not in (CRZ_INFO, EPB, GEAR):
           continue
         dat = bytes(c.dat)
         if c.address == CRZ_INFO:
-          stop, cmd = (dat[5] >> 2) & 1, accel_cmd_raw(dat)
+          stop, cmd = signal(CRZ_INFO, dat, "STOPPING"), signal(CRZ_INFO, dat, "ACCEL_CMD")
           if ep is not None:
-            if ep["relax"] is None and not stop and cmd == -1:
+            if ep["relax"] is None and not stop and abs(cmd - RELAXED) < 5e-4:
               ep["relax"] = t - ep["t"]
-            if (dat[6] >> 6) & 1 and ep["unlatch"] is None:
+            if signal(CRZ_INFO, dat, "RESUME_UNLATCHING") and ep["unlatch"] is None:
               ep["unlatch"] = t
         elif c.address == GEAR:
-          brake_hold = bool((dat[2] >> 4) & 1)
+          brake_hold = bool(signal(GEAR, dat, "BRAKE_HOLD"))
           if brake_hold and ep is not None and ep["brake_hold"] is None:
             ep["brake_hold"] = t - ep["t"]
-        elif c.address == EPB:
-          new = dat[2] & 0x0f
-          if new == HOLD_STATE_HOLDING and state != HOLD_STATE_HOLDING:
+        else:
+          holding = signal(EPB, dat, "HOLD_STATE") == HOLD_STATE_HOLDING
+          if holding and ep is None:
             ep = {"t": t, "stop0": stop, "cmd0": cmd, "relax": None, "unlatch": None,
                   "brake_hold": 0.0 if brake_hold else None}
-          elif new != HOLD_STATE_HOLDING and state == HOLD_STATE_HOLDING and ep is not None:
-            ep.update(t_rel=ep["t"] - t0, dur=t - ep["t"], exit=new, gas=gas, oplong=sent,
-                      unlatch_lead=None if ep["unlatch"] is None else t - ep["unlatch"])
+          elif not holding and ep is not None:
+            ep.update(t_rel=ep["t"] - t0, dur=t - ep["t"], exit=int(signal(EPB, dat, "HOLD_STATE")), gas=gas,
+                      oplong=sent, unlatch_lead=None if ep["unlatch"] is None else t - ep["unlatch"])
             yield ep
             ep = None
-          state = new
 
 
-def fmt(x):
-  return "-" if x is None else f"{x:.2f}"
+def fmt(x, spec=".2f"):
+  return "-" if x is None else f"{x:{spec}}"
 
 
 if __name__ == "__main__":
@@ -91,7 +100,7 @@ if __name__ == "__main__":
     name = os.path.basename(os.path.dirname(path)) if os.path.basename(path) == "rlog.zst" else os.path.basename(path)
     for ep in episodes(path):
       who = "OPLONG" if ep["oplong"] else "stock"
-      onset = f"onset stop={ep['stop0']} cmd={ep['cmd0']}"
+      onset = f"onset stop={fmt(ep['stop0'], '.0f')} cmd={fmt(ep['cmd0'], '+.3f')}"
       body = f"relax_after={fmt(ep['relax'])} brake_hold_after={fmt(ep['brake_hold'])}"
       end = f"exit->{ep['exit']} unlatch_lead={fmt(ep['unlatch_lead'])} gas={int(ep['gas'])}"
       print(f"{name} {who} t={ep['t_rel']:7.2f} dur={ep['dur']:5.1f} {onset} | {body} | {end}")

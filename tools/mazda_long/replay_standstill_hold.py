@@ -23,6 +23,7 @@ the controller instead of mocking it. The review_2026_08 replays share these hel
 
 Usage: .venv/bin/python3 tools/mazda_long/replay_standstill_hold.py <rlog> [<rlog> ...]
 """
+import functools
 import os
 import sys
 
@@ -31,34 +32,38 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "opendbc_repo"))
 
 from opendbc.can import CANParser
-from opendbc.car.mazda.carstate import HOLD_STATE_HOLDING
-from opendbc.car.mazda.tests.conftest import car_control, car_control_sp, car_controller, mazda_car_state, set_car_state
+from opendbc.car.mazda.carstate import body_holds
+from opendbc.car.mazda.tests.conftest import CRZ_INFO, car_control, car_control_sp, car_controller, car_params, \
+  car_params_sp, crz_info, frame, mazda_car_state, set_car_state
 from openpilot.tools.lib.logreader import LogReader
 
-CRZ_INFO = 0x21b
-_rig_state = {}
+EPB, GEAR = 0x79, 0x228
 
-
-def build_controller():
-  """The alpha-long CX-5 2022 controller the test rig builds."""
-  return car_controller()
+# The alpha-long CX-5 2022 controller the test rig builds.
+build_controller = car_controller
 
 
 def decode_cmd(dat):
-  return (((dat[2] & 0x3) << 11) | (dat[3] << 3) | (dat[4] >> 5)) - 4096
+  return crz_info(dat)[0]
+
+
+@functools.cache
+def _rig_car_state():
+  CP = car_params(alpha_long=True)
+  return mazda_car_state(CP, car_params_sp(CP, alpha_long=True))
 
 
 def frames(path):
   """Logged (t, carControl, carState, body hold) at the carControl rate."""
-  cp = CANParser("mazda_2017", [("EPB", float("nan")), ("GEAR", float("nan"))], 0)
+  cp = CANParser("mazda_2017", [(EPB, float("nan")), (GEAR, float("nan"))], 0)
   body_hold = False
   cs = None
   out = []
   for m in LogReader(path):
     w = m.which()
     if w == "can":
-      cp.update([(m.logMonoTime, [(c.address, bytes(c.dat), c.src) for c in m.can])])
-      body_hold = cp.vl["EPB"]["HOLD_STATE"] == HOLD_STATE_HOLDING or cp.vl["GEAR"]["BRAKE_HOLD"] == 1
+      cp.update([(m.logMonoTime, [(c.address, bytes(c.dat), 0) for c in m.can if c.src == 0 and c.address in (EPB, GEAR)])])
+      body_hold = body_holds(cp.vl)
     elif w == "carState":
       cs = m.carState
     elif w == "carControl" and cs is not None:
@@ -69,10 +74,7 @@ def frames(path):
 def mock_inputs(cc, cs, body_hold, lead=None):
   """One logged (carControl, carState) frame as update_longitudinal's inputs, on a real CarState.
   lead is the (dRel, vRel) for CC_SP.leadOne, if the replay carries one."""
-  if "cs" not in _rig_state:
-    ctrl = car_controller()
-    _rig_state["cs"] = mazda_car_state(ctrl.CP, ctrl.CP_SP)
-  carstate = set_car_state(_rig_state["cs"], body_hold=body_hold, standstill=cs.standstill, gas=cs.gasPressed,
+  carstate = set_car_state(_rig_car_state(), body_hold=body_hold, standstill=cs.standstill, gas=cs.gasPressed,
                            brake_pressed=cs.brakePressed, v_ego=cs.vEgo, available=cs.cruiseState.available,
                            cruise_engaged=cs.cruiseState.enabled)
   act = cc.actuators
@@ -92,16 +94,17 @@ def replay(path):
     t0 = t if t0 is None else t0
     sends = ctrl.update_longitudinal(*mock_inputs(cc, cs, body_hold))
     ctrl.frame += 1
-    dat = next((d for a, d, b in sends if a == CRZ_INFO and b == 0), None)
+    dat = frame(sends, CRZ_INFO)
     if dat is None or not cs.standstill or not cc.longActive:
       continue
-    cmd, stop = decode_cmd(dat), (dat[5] >> 2) & 1
+    cmd, stop, _ = crz_info(dat)
     stopped += 1
     held += body_hold
-    if ctrl.stop_and_go.holding and body_hold and (stop or cmd != -1):
-      bad.append((t - t0, f"body holds but we send stop={stop} cmd={cmd:+d}"))
-    elif ctrl.stop_and_go.holding and not body_hold and cc.actuators.accel < -0.1 and (not stop or cmd > -100):
-      bad.append((t - t0, f"plan {cc.actuators.accel:+.2f}, body not holding, but we send stop={stop} cmd={cmd:+d}"))
+    if ctrl.stop_and_go.holding:
+      if body_hold and (stop or cmd != -1):
+        bad.append((t - t0, f"body holds but we send stop={stop:d} cmd={cmd:+d}"))
+      elif not body_hold and cc.actuators.accel < -0.1 and (not stop or cmd > -100):
+        bad.append((t - t0, f"plan {cc.actuators.accel:+.2f}, body not holding, but we send stop={stop:d} cmd={cmd:+d}"))
 
   print(f"\n{os.path.relpath(path)}: {stopped} engaged frames stopped, {held} with the body holding")
   for t, why in bad[:10]:
