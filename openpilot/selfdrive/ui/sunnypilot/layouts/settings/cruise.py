@@ -6,12 +6,11 @@ See the LICENSE.md file in the root directory for more details.
 """
 from enum import IntEnum
 
-from openpilot.selfdrive.ui.sunnypilot.cruise_badges import TiziCruiseBadges
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.cruise_sub_layouts.speed_limit_settings import SpeedLimitSettingsLayout
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.controller import DECEL_OVERSHOOT_PARAMS
-from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import icbm_applicable
+from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import icbm_applicable, icbm_moves_speed_limits
 from openpilot.system.ui.lib.multilang import tr, tr_noop
+from openpilot.system.ui.sunnypilot.lib.styles import style
 from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp, option_item_sp, simple_button_item_sp
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.scroller_tici import Scroller
@@ -42,7 +41,6 @@ class CruiseLayout(Widget):
 
     items = self._initialize_items()
     self._scroller = Scroller(items, line_separator=True, spacing=0)
-    self._badges = TiziCruiseBadges(self.scc_do_toggle, self.sla_settings_button)
 
   def _initialize_items(self):
 
@@ -60,13 +58,6 @@ class CruiseLayout(Widget):
       title=tr("Smart Cruise Control - Map"),
       description=tr("Use map data to estimate the appropriate speed to drive through turns ahead."),
       param="SmartCruiseControlMap")
-
-    self.scc_do_toggle = toggle_item_sp(
-      title=tr("Smart Cruise Control - Deceleration Overshoot"),
-      description=tr("Temporarily set the cruise speed below the Smart Cruise target during slowdowns so the " +
-                     "stock ACC delivers the requested deceleration, then restore it as the car slows. " +
-                     "Only available with stock ACC on vehicles with a measured ACC response curve."),
-      param="SmartCruiseDecelOvershoot")
 
     self.custom_acc_toggle = toggle_item_sp(
       title=tr("Custom ACC Speed Increments"),
@@ -103,7 +94,6 @@ class CruiseLayout(Widget):
       self.dec_toggle,
       self.scc_v_toggle,
       self.scc_m_toggle,
-      self.scc_do_toggle,
       self.custom_acc_toggle,
       self.custom_acc_short_increment,
       self.custom_acc_long_increment,
@@ -154,12 +144,8 @@ class CruiseLayout(Widget):
           self.icbm_toggle.set_description(new_desc)
           self.icbm_toggle.show_description(True)
 
-      # decel overshoot drives the stock ACC through ICBM; needs a measured per-brand plant map
-      overshoot_available = has_icbm and ui_state.CP.brand in DECEL_OVERSHOOT_PARAMS
-      self.scc_do_toggle.action_item.set_enabled(overshoot_available and not has_long)
-      if not overshoot_available:
-        ui_state.params.remove("SmartCruiseDecelOvershoot")
-      self._badges.update(has_long, has_icbm, overshoot_available)
+      icbm_sla = icbm_moves_speed_limits(has_long, has_icbm, ui_state.speed_limit_mode)
+      self.sla_settings_button.set_right_value(tr("icbm") if icbm_sla else "", style.GREEN)
 
       if has_long or has_icbm:
         self.custom_acc_toggle.action_item.set_enabled(((has_long and not ui_state.CP.pcmCruise) or has_icbm) and ui_state.is_offroad())

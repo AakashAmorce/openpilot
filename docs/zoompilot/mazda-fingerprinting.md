@@ -84,7 +84,7 @@ same EPS swapped into another Mazda is recognised as what it is.
 Everything the 2022 EPS changes hangs off that one flag (see mazda-lateral.md): the 1200/12/12
 torque envelope and the matching panda param bit, `minSteerSpeed = 0`, `steerActuatorDelay`,
 carstate's non-delivery fault handling, and, together with a radar bus, alpha-long availability.
-`dashcamOnly` clears for the CX-5 2022, the CX-9 2021 and any car with the flag.
+No Mazda platform is `dashcamOnly`; the flag decides only the floor, the latch and alpha long.
 
 The CX-9 2021 in `fingerprints.py` carries EPS firmware TC3M-3210X-A-00, which is not in
 `STEER_TO_ZERO_EPS_FW`. A stock CX-9 2021 therefore gets upstream's 800/10/25 envelope and, under

@@ -457,30 +457,11 @@ LAYOUT_TARGETS = [
 
 
 class TestCruiseBadges:
-  """Badges show only where alpha long and ICBM split the cruise features. In any other setup
-  one system carries everything and the panel looks as it did before badges."""
+  """The speed limit button's icbm badge follows the stored mode. Which setups move speed limits
+  through ICBM is icbm_moves_speed_limits, tested on its own; this checks the layout wiring."""
 
-  @pytest.mark.parametrize(("has_long", "has_icbm", "mode", "shown"), [
-    (True, True, 3, True),
-    (True, True, 2, False),  # warn never moves the set speed
-    (True, False, 3, False),
-    (False, True, 3, False),
-  ])
-  def test_speed_limit_badge_only_in_the_split_setup(self, params, has_long, has_icbm, mode, shown):
-    from openpilot.selfdrive.ui.sunnypilot.cruise_badges import icbm_moves_speed_limits
-    assert icbm_moves_speed_limits(has_long, has_icbm, mode) == shown
-
-  def test_badged_toggle_renders(self, params):
-    from openpilot.selfdrive.ui.sunnypilot.mici.widgets.button import BigParamControlSP
-    toggle = BigParamControlSP("decel overshoot", "SmartCruiseDecelOvershoot")
-    font_size = toggle._label._font_size
-    toggle.set_badge("stock acc only")
-    render(toggle)
-    assert toggle._label._font_size == font_size  # the badge never resizes the title
-    toggle.set_badge(None)
-    render(toggle)
-
-  def test_overshoot_shows_off_under_long_but_keeps_its_value(self, params, monkeypatch):
+  @pytest.mark.parametrize(("mode", "shown"), [(3, True), (2, False)])
+  def test_speed_limit_badge_follows_mode(self, params, mode, shown):
     from opendbc.car.structs import car
     from openpilot.cereal import custom
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts.cruise import CruiseLayoutMici
@@ -492,20 +473,18 @@ class TestCruiseBadges:
       intelligentCruiseButtonManagementAvailable=True).to_bytes(), block=True)
     params.put_bool("AlphaLongitudinalEnabled", True, block=True)
     params.put_bool("IntelligentCruiseButtonManagement", True, block=True)
-    params.put_bool("SmartCruiseDecelOvershoot", True, block=True)
-    old_cp, old_cp_sp = ui_state.CP, ui_state.CP_SP
+    params.put("SpeedLimitMode", mode, block=True)
+    saved = ui_state.CP, ui_state.CP_SP, ui_state.has_longitudinal_control, ui_state.has_icbm
     try:
       ui_state.update_params()
       layout = CruiseLayoutMici()
       render(layout)
-      assert not layout._scc_do_toggle._checked
-      assert not layout._scc_do_toggle.enabled
-      assert layout._scc_do_toggle._badge == "stock acc only"
-      assert params.get_bool("SmartCruiseDecelOvershoot")
+      assert ("icbm" in (layout._speed_limit_btn._badge_labels or [])) == shown
     finally:
-      ui_state.CP, ui_state.CP_SP = old_cp, old_cp_sp
-      params.remove("CarParamsPersistent")
-      params.remove("CarParamsSPPersistent")
+      ui_state.CP, ui_state.CP_SP, ui_state.has_longitudinal_control, ui_state.has_icbm = saved
+      for key in ("CarParamsPersistent", "CarParamsSPPersistent", "AlphaLongitudinalEnabled",
+                  "IntelligentCruiseButtonManagement", "SpeedLimitMode"):
+        params.remove(key)
 
 
 class TestSubtitleAreaRenders:

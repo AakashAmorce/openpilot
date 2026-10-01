@@ -49,7 +49,7 @@ The CX-5 keeps its factory cruise; zoompilot can set the speed for you by 'press
 - **Fixed ICBM.** sunnypilot's Intelligent-Cruise-Button-Management and Smart-Cruise are broken for Mazda. I rebuilt how zoompilot works your wheel buttons. The speed you dial is remembered exactly: curves and speed limits can borrow it for a while, but you get your number back, never one or two under it. If the car misses a press, it quietly catches up.
 - **Speed-limit assist that sticks.** When the car sees a new limit, the screen asks once. Tap minus to accept a lower one and zoompilot dials the car down for you. It used to forget your answer a moment later; now it holds until the road changes. Press plus while it has you at a limit and it steps aside until the next sign. Your buttons always win.
 - **Smart Cruise.** A sunnypilot feature that reduces your set speed before a curve in the road and sets it back after. You can use vision or downloaded maps to determine when to slow down. Enable it in the cruise settings menu.
-- **Deceleration overshoot (alpha).** The Mazda does not instantly react to adjustments in set cruise speed. This option reduces the set cruise speed MORE than what the model calls for, to get the deceleration the curve needs.
+- **Deceleration overshoot.** The Mazda's cruise control brakes according to how far the set speed sits below the car's speed, so for a curve zoompilot holds the set speed the measured gap below your actual speed that gives the braking the curve needs, then lands it on the curve's speed. Always on for Mazda; no setting.
 
 ## additional Mazdas covered
 

@@ -1,29 +1,125 @@
 """
-Copyright (c) 2026-, Zeph Leggett.
+Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 
-This file is part of zoompilot and is licensed under the MIT License.
+This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
-
-Vision controller: lifecycle, holding the set speed, braking at the budget, arriving at
-the allowed speed, and the far-field curvature bias correction. The highway horizon,
-per-path budgets, publication ramp and lookahead wire live in test_vision_horizon.py;
-the road rendering and the base case live in vision_harness.py.
 """
-import pytest
+from typing import Any
 
-from openpilot.cereal import custom
+import numpy as np
+from openpilot.common.parameterized import parameterized
+
+import openpilot.cereal.messaging as messaging
+from openpilot.cereal import custom, log
+from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
+from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control import MIN_V
-from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control import vision_controller
-from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.vision_controller import SmartCruiseControlVision
-from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.tests.vision_harness import (
-  CURVE_KAPPA, CURVE_V, SETPOINT, V_EGO, VisionCase, curve_at, make_cp, patch_gain)
+from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.vision_controller import SmartCruiseControlVision, _ENTERING_PRED_LAT_ACC_TH
+from openpilot.common.test import OpenpilotTestCase
 
 VisionState = custom.LongitudinalPlanSP.SmartCruiseControl.VisionState
 
 
-class TestLifecycle(VisionCase):
+def _th_above_f32(th: float) -> float:
+  """
+  Return the next representable float32 *above* `th`.
+  This avoids flaky comparisons around thresholds due to float32 rounding.
+  """
+  th32 = np.float32(th)
+  above32 = np.nextafter(th32, np.float32(np.inf), dtype=np.float32)
+  return float(above32)
+
+
+def _build_single_spike_filtered(n: int, base: float = 1.0) -> np.ndarray:
+  """
+  Create an array where max() is >= threshold but p97 is < threshold.
+  This demonstrates the behavior difference vs np.amax().
+
+  Note: We intentionally construct using float32-representable values to match
+  the data path through cereal/capnp.
+  """
+  th = float(_ENTERING_PRED_LAT_ACC_TH)
+  th32 = float(np.float32(th))
+
+  # numpy percentile default is linear interpolation: idx=(n-1)*p/100
+  idx = (n - 1) * 0.97
+  w = float(idx - np.floor(idx))
+
+  base32 = float(np.float32(base))
+
+  # Choose spike so that p97 = base + w*(spike-base) < th
+  # -> spike < base + (th-base)/w. Use a margin (0.9) and ensure spike >= th.
+  if w == 0.0:
+    spike = th32 + 1.0
+  else:
+    spike = base32 + (th32 - base32) / w * 0.9
+    spike = max(spike, th32 + 0.01)
+
+  arr = np.full(n, base32, dtype=np.float32)
+  arr[-1] = np.float32(spike)
+  return arr
+
+
+def generate_modelV2():
+  model = messaging.new_message('modelV2')
+  position = log.XYZTData.new_message()
+  speed = 30
+  position.x = [float(x) for x in (speed + 0.5) * np.array(ModelConstants.T_IDXS)]
+  model.modelV2.position = position
+  orientation = log.XYZTData.new_message()
+  curvature = 0.05
+  orientation.x = [float(curvature) for _ in ModelConstants.T_IDXS]
+  orientation.y = [0.0 for _ in ModelConstants.T_IDXS]
+  model.modelV2.orientation = orientation
+  orientationRate = log.XYZTData.new_message()
+  orientationRate.z = [float(z) for z in ModelConstants.T_IDXS]
+  model.modelV2.orientationRate = orientationRate
+  velocity = log.XYZTData.new_message()
+  velocity.x = [float(x) for x in (speed + 0.5) * np.ones_like(ModelConstants.T_IDXS)]
+  velocity.x[0] = float(speed)  # always start at current speed
+  model.modelV2.velocity = velocity
+  acceleration = log.XYZTData.new_message()
+  acceleration.x = [float(x) for x in np.zeros_like(ModelConstants.T_IDXS)]
+  acceleration.y = [float(y) for y in np.zeros_like(ModelConstants.T_IDXS)]
+  model.modelV2.acceleration = acceleration
+
+  return model
+
+
+def generate_carState():
+  car_state = messaging.new_message('carState')
+  speed = 30
+  v_cruise = 50
+  car_state.carState.vEgo = float(speed)
+  car_state.carState.standstill = False
+  car_state.carState.vCruise = float(v_cruise * 3.6)
+
+  return car_state
+
+
+def generate_controlsState():
+  controls_state = messaging.new_message('controlsState')
+  controls_state.controlsState.curvature = 0.05
+
+  return controls_state
+
+
+class TestSmartCruiseControlVision(OpenpilotTestCase):
+
+  def setup_method(self):
+    self.params = Params()
+    self.reset_params()
+    self.scc_v = SmartCruiseControlVision()
+
+    mdl = generate_modelV2()
+    cs = generate_carState()
+    controls_state = generate_controlsState()
+    self.sm: Any = {'modelV2': mdl.modelV2, 'carState': cs.carState, 'controlsState': controls_state.controlsState}
+
+  def reset_params(self):
+    self.params.put_bool("SmartCruiseControlVision", True, block=True)
 
   def test_initial_state(self):
     assert self.scc_v.state == VisionState.disabled
@@ -31,204 +127,83 @@ class TestLifecycle(VisionCase):
     assert self.scc_v.output_v_target == V_CRUISE_UNSET
     assert self.scc_v.output_a_target == 0.
 
-  def test_param_disable(self):
+  def test_system_disabled(self):
     self.params.put_bool("SmartCruiseControlVision", False, block=True)
-    self.scc_v.enabled = False
-    self.run_road(V_EGO, curve_at(50.))
+    self.scc_v.enabled = self.params.get_bool("SmartCruiseControlVision")
+
+    for _ in range(int(10. / DT_MDL)):
+      self.scc_v.update(self.sm, True, False, 0., 0., 0.)
+    assert self.scc_v.state == VisionState.disabled
+    assert not self.scc_v.is_active
+
+  def test_disabled(self):
+    for _ in range(int(10. / DT_MDL)):
+      self.scc_v.update(self.sm, False, False, 0., 0., 0.)
     assert self.scc_v.state == VisionState.disabled
 
-  def test_long_disabled(self):
-    self.run_road(V_EGO, curve_at(50.), enabled=False)
-    assert self.scc_v.state == VisionState.disabled
-    assert self.scc_v.output_v_target == V_CRUISE_UNSET
-
-  def test_override_suspends_control(self):
-    self.run_road(V_EGO, curve_at(50.), override=True)
-    assert self.scc_v.state == VisionState.overriding
-    assert self.scc_v.output_v_target == V_CRUISE_UNSET
-
-
-class TestHoldSetSpeed(VisionCase):
-
-  def test_straight_road_never_acts(self):
-    self.run_road(V_EGO, lambda s: 0., n=10)
+  def test_transition_disabled_to_enabled(self):
+    for _ in range(int(10. / DT_MDL)):
+      self.scc_v.update(self.sm, True, False, 0., 0., 0.)
     assert self.scc_v.state == VisionState.enabled
-    assert self.scc_v.output_v_target == V_CRUISE_UNSET
-    assert self.scc_v.a_required == 0.
 
-  def test_distant_curve_holds_set_speed(self):
-    # a curve 185 m out, as the model actually reports one at that range: even with the
-    # under-read corrected it asks well under the 0.7 * 1.2 commit, so the car holds
-    self.run_road(V_EGO, curve_at(185., kappa=0.012), attenuate=True)
-    assert self.scc_v.state == VisionState.enabled
-    assert self.scc_v.output_v_target == V_CRUISE_UNSET
-    assert 0. < self.scc_v.a_required < 0.84
+  @parameterized.expand([
+      ("p97_just_above_threshold", True),
+      ("single_spike_filtered", False),
+      ("persistent_high_values", True),
+    ], names=["case", "should_enter"])
+  def test_max_pred_lat_acc_uses_p97_and_threshold(self, case, should_enter):
+    n = len(ModelConstants.T_IDXS)
+    th = float(_ENTERING_PRED_LAT_ACC_TH)
 
+    if case == "p97_just_above_threshold":
+      # Use the next representable float32 above threshold to avoid float32 rounding flakiness.
+      val = _th_above_f32(th)
+      pred_lat_accels = np.full(n, np.float32(val), dtype=np.float32)
 
-class TestBrakeAtBudget(VisionCase):
+    elif case == "single_spike_filtered":
+      pred_lat_accels = _build_single_spike_filtered(n, base=1.0)
 
-  def test_curve_inside_braking_distance_engages(self):
-    self.run_road(V_EGO, curve_at(100.))
-    assert self.scc_v.state == VisionState.entering
-    assert self.scc_v.is_active
-    # target leads v_ego by the required decel, capped by the profile
-    assert MIN_V < self.scc_v.output_v_target < V_EGO - 0.5
-    assert self.scc_v.output_a_target < 0.
+    elif case == "persistent_high_values":
+      # Make enough "high" samples so p97 is driven by the persistent trend, not a single outlier.
+      high_count = max(2, int(np.ceil(n * 0.03)) + 1)
+      pred_lat_accels = np.full(n, np.float32(1.0), dtype=np.float32)
+      pred_lat_accels[-high_count:] = np.float32(2.0)
+      pred_lat_accels[-1] = np.float32(8.0)  # keep one big outlier too
 
-  def test_a_target_is_jerk_ramped(self):
-    sm = self.make_sm(V_EGO, curve_at(100.))
-    prev = 0.
-    j = self.scc_v.limits.jerk(V_EGO)
-    for i in range(45):
-      self.scc_v.update(sm, True, False, V_EGO, 0., SETPOINT)
-      a = self.scc_v.output_a_target
-      if i:
-        assert a <= prev + 1e-9
-        assert prev - a <= j * DT_MDL + 1e-6
-      prev = a
-    assert prev < -1.0  # converged to a material deceleration request
+    else:
+      raise AssertionError(f"Unknown case: {case}")
 
-  def test_planned_slowdown_does_not_lower_the_estimate(self):
-    # Geometry-derived curvature must remain stable as the model velocity plan slows.
-    self.run_road(V_EGO, curve_at(100.), v_model=0.7 * V_EGO)
-    assert self.scc_v.is_active
+    # Override model predictions so:
+    # predicted_lat_accels = abs(orientationRate.z) * velocity.x == pred_lat_accels
+    mdl = generate_modelV2()
+    mdl.modelV2.velocity.x = [1.0 for _ in range(n)]
+    mdl.modelV2.orientationRate.z = [float(x) for x in pred_lat_accels]
+    self.sm["modelV2"] = mdl.modelV2
 
-  def test_slowing_toward_the_curve_stays_committed(self):
-    self.run_road(V_EGO, curve_at(100.))
-    assert self.scc_v.is_active
-    self.run_road(14., curve_at(40.), n=1)
-    assert self.scc_v.is_active
-    assert self.scc_v.solver_active
+    v_ego = float(MIN_V + 5.0)
 
+    # 1st update: disabled -> enabled
+    self.scc_v.update(self.sm, True, False, v_ego, 0.0, 0.0)
+    # 2nd update: evaluate entering condition from enabled state
+    self.scc_v.update(self.sm, True, False, v_ego, 0.0, 0.0)
 
-class TestArriveAtAllowedSpeed(VisionCase):
+    # Controller does percentile on numpy float64 arrays (values already quantized by capnp),
+    # so compute expected in float64 to match behavior and avoid interpolation/rounding deltas.
+    expected_p97 = float(np.percentile(pred_lat_accels.astype(np.float64), 97))
 
-  def test_holds_allowed_speed_inside_the_curve(self):
-    # approach a touch fast, curve at the bumper
-    self.run_road(12., curve_at(0.), cur_curvature=CURVE_KAPPA)
-    assert self.scc_v.is_active
-    # settled at the allowed speed: hold it, do not re-accelerate toward the setpoint
-    self.run_road(CURVE_V, curve_at(0.), cur_curvature=CURVE_KAPPA, n=2)
-    assert self.scc_v.state == VisionState.turning
-    assert abs(self.scc_v.output_v_target - CURVE_V) < 1.0
+    # allow tiny numeric differences due to float conversions/interpolation
+    assert np.isclose(self.scc_v.max_pred_lat_acc, expected_p97, rtol=1e-6, atol=1e-5)
 
-  def test_releases_when_the_road_straightens(self):
-    self.run_road(12., curve_at(0.), cur_curvature=CURVE_KAPPA)
-    assert self.scc_v.is_active
-    self.run_road(CURVE_V, lambda s: 0., cur_curvature=0., n=3)
-    assert self.scc_v.state == VisionState.enabled
-    assert self.scc_v.output_v_target == V_CRUISE_UNSET
+    if should_enter:
+      # We assert entering primarily by state (this is the actual intended behavior).
+      assert self.scc_v.state == VisionState.entering
+      # Optional sanity: should be >= threshold with some margin (since we used nextafter above threshold).
+      assert self.scc_v.max_pred_lat_acc > th
 
-  def test_hairpin_floors_at_min_v(self):
-    # kappa 0.12 allows 4.1 m/s, below the 20 km/h operating floor
-    self.run_road(6., curve_at(0., kappa=0.12), cur_curvature=0.12)
-    assert self.scc_v.is_active
-    assert self.scc_v.output_v_target == MIN_V
+    else:
+      # Difference vs np.amax(): max can be above threshold, but p97 stays below it.
+      assert float(np.max(pred_lat_accels)) >= th
+      assert self.scc_v.max_pred_lat_acc < th
+      assert self.scc_v.state == VisionState.enabled
 
-
-class TestFarFieldCurvatureBias(VisionCase):
-
-  def test_recovers_an_attenuated_far_corner(self):
-    # a corner the model reports at 55% of its real curvature: the correction pulls the
-    # planned speed back toward the truth instead of planning for the corner it was told
-    road = curve_at(110., kappa=0.012)
-    self.run_road(V_EGO, road, attenuate=True)
-    truth = (2.0 * 0.95 / 0.012) ** 0.5
-    with patch_gain([1.0] * len(vision_controller._KAPPA_BIAS_GAIN)):
-      raw = SmartCruiseControlVision(make_cp())
-      self.run_road(V_EGO, road, scc=raw, attenuate=True)
-    # as reported the corner looks far faster than it is; corrected it lands much closer
-    assert raw.v_dip_ahead > truth + 4.
-    assert self.scc_v.v_dip_ahead < raw.v_dip_ahead - 2.
-    assert self.scc_v.v_dip_ahead > truth  # under-corrects: the cap is deliberate
-
-  def test_bias_correction_commits_earlier(self):
-    # Bias correction moves the reported corner above the commit threshold.
-    road = curve_at(110., kappa=0.013)
-    self.run_road(V_EGO, road, attenuate=True)
-    assert self.scc_v.is_active
-
-    with patch_gain([1.0] * len(vision_controller._KAPPA_BIAS_GAIN)):
-      raw = SmartCruiseControlVision(make_cp())
-      self.run_road(V_EGO, road, scc=raw, attenuate=True)
-    assert not raw.is_active
-    assert self.scc_v.a_required > raw.a_required
-
-  def test_near_field_is_never_outvoted(self):
-    # a constant-radius curve the car is already in: the far half of the SAME curve is
-    # attenuated, so correcting it would settle the car below the speed the road requires.
-    # The near floor holds it at the true allowed speed.
-    self.run_road(12., curve_at(0.), cur_curvature=CURVE_KAPPA, attenuate=True)
-    self.run_road(CURVE_V, curve_at(0.), cur_curvature=CURVE_KAPPA, n=2, attenuate=True)
-    # the near field plans at the margin, and that is exactly where it settles
-    near_allowed = (2.0 * 0.95 / CURVE_KAPPA) ** 0.5
-    assert abs(self.scc_v.output_v_target - near_allowed) < 0.05
-    # uncorrected the far half of the same curve reads gentler, so nothing drags it under
-    with patch_gain([1.0] * len(vision_controller._KAPPA_BIAS_GAIN)):
-      raw = SmartCruiseControlVision(make_cp())
-      self.run_road(CURVE_V, curve_at(0.), cur_curvature=CURVE_KAPPA, n=3, scc=raw, attenuate=True)
-    assert self.scc_v.output_v_target >= raw.output_v_target - 0.05
-
-  def test_near_floor_does_not_block_braking_for_a_tighter_corner(self):
-    # the floor only applies once the near field is what binds; a gentle bend under the
-    # nose must not stop the car braking for a hairpin beyond it
-    def road(s):
-      return 0.008 if s < 90. else 0.06
-    self.run_road(V_EGO, road, n=5)
-    assert self.scc_v.is_active
-    assert self.scc_v.output_v_target < V_EGO - 2.
-
-  def test_straight_road_is_unaffected_by_the_gain(self):
-    # a gain on a kappa of zero is still zero; no false braking is bought with it
-    self.run_road(V_EGO, lambda s: 0., n=10)
-    assert self.scc_v.a_required == 0.
-    assert self.scc_v.output_v_target == V_CRUISE_UNSET
-
-  @pytest.mark.parametrize("kappa, d0", [(1. / 645., 60.), (1. / 500., 60.)], ids=["r645", "r500"])
-  @pytest.mark.parametrize("op_long", [True, False], ids=["op_long", "stock"])
-  def test_highway_bend_the_raw_path_allows_never_commits(self, kappa, d0, op_long):
-    # 70 mph, perfect geometry, inside the near window: an r=645 m bend 60 m out sits at
-    # 1.49 m/s2 at the set speed, under the ceiling, and an r=500 m bend 60 m out is
-    # take-able at 30.8 m/s. Multiplied by the far-field gain both read as corners; above
-    # the fitted speed band the gain is gone, so neither may commit, on either path.
-    v = 31.
-    scc = SmartCruiseControlVision(make_cp(op_long=op_long))
-    self.run_road(v, curve_at(d0, kappa), n=40, setpoint=v, scc=scc)
-    assert not scc.is_active, (kappa, d0, op_long)
-    assert scc.output_v_target == V_CRUISE_UNSET
-    assert scc.output_a_target == 0.
-
-  def test_gain_fades_out_above_the_fitted_speed_band(self):
-    # the same attenuated corner at 70 mph, inside the near window, plans exactly as it
-    # would with no gain
-    v, road = 31., curve_at(80., kappa=0.012)
-    self.run_road(v, road, setpoint=v, attenuate=True)
-    with patch_gain([1.0] * len(vision_controller._KAPPA_BIAS_GAIN)):
-      raw = SmartCruiseControlVision(make_cp())
-      self.run_road(v, road, setpoint=v, scc=raw, attenuate=True)
-    assert self.scc_v.a_required > 0.
-    assert self.scc_v.a_required == pytest.approx(raw.a_required)
-    assert self.scc_v.v_dip_ahead == pytest.approx(raw.v_dip_ahead)
-    road = curve_at(150., kappa=0.012)
-    # and is still whole at the top of the band
-    v = 22.
-    self.run_road(v, road, setpoint=v, attenuate=True)
-    with patch_gain([1.0] * len(vision_controller._KAPPA_BIAS_GAIN)):
-      raw = SmartCruiseControlVision(make_cp())
-      self.run_road(v, road, setpoint=v, scc=raw, attenuate=True)
-    assert self.scc_v.v_dip_ahead < raw.v_dip_ahead - 1.
-
-  def test_real_curve_commits_exactly_as_before_the_fade(self):
-    # The fitted speed band retains the calibrated correction.
-    v = 15.6
-    road = curve_at(90., kappa=CURVE_KAPPA)
-    self.run_road(v, road, setpoint=v, attenuate=True)
-    assert self.scc_v.is_active
-    assert self.scc_v.a_required == pytest.approx(0.861, abs=2e-3)
-    assert self.scc_v.output_v_target == pytest.approx(14.739, abs=2e-3)
-
-    stock = SmartCruiseControlVision(make_cp(op_long=False))
-    self.run_road(v, road, setpoint=v, scc=stock, attenuate=True)
-    assert stock.is_active
-    assert stock.a_required == pytest.approx(2.126, abs=2e-3)
-    assert stock.output_v_target == pytest.approx(10.219, abs=2e-3)
+  # TODO-SP: mock modelV2 data to test other states

@@ -5,8 +5,8 @@ This file is part of zoompilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 
-# The steer-limit classifier (lib/steer_limit.py): the unit table on both sides of the CX-5's
-# STEER_MAX cliff, the controlsd_ext wiring that replaces controlsd's flag with the
+# The steer-limit classifier (lib/steer_limit.py): the unit table at two slew steps (the CX-5
+# 2022's 12 counts over its 1200 and over upstream's 800), the controlsd_ext wiring that replaces controlsd's flag with the
 # classifier's driver_limited, and the integrator-level consequence run through the real v0
 # controller against a simulated slew-limited actuator.
 
@@ -27,11 +27,11 @@ from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import ControlsExt
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v0 import LatControlTorque as LatControlTorqueV0
 from openpilot.sunnypilot.selfdrive.controls.lib.steer_limit import CLEAN, SteerLimit, classify
 
-# CX-5 2022 carcontroller numbers: 12 counts/frame over 1200 below the cliff, over 800 above;
-# EPS ceiling 648/1200 at 14.2 m/s and 620/800 from 14.5 m/s up
-BELOW_CLIFF = {'slew_up': 12.0 / 1200.0, 'slew_down': 12.0 / 1200.0, 'rail_scale': 648.0 / 1200.0}
-ABOVE_CLIFF = {'slew_up': 12.0 / 800.0, 'slew_down': 12.0 / 800.0, 'rail_scale': 620.0 / 800.0}
-SIDES = [pytest.param(BELOW_CLIFF, id='below_cliff'), pytest.param(ABOVE_CLIFF, id='above_cliff')]
+# 12 counts/frame with the CX-5 2022's EPS ceiling at 14.2 m/s, over its 1200-count STEER_MAX and
+# over an 800-count one, where a step is wider than controlsd's 0.01 mismatch threshold
+STEP_1200 = {'slew_up': 12.0 / 1200.0, 'slew_down': 12.0 / 1200.0, 'rail_scale': 648.0 / 1200.0}
+STEP_800 = {'slew_up': 12.0 / 800.0, 'slew_down': 12.0 / 800.0, 'rail_scale': 648.0 / 800.0}
+SIDES = [pytest.param(STEP_1200, id='scale_1200'), pytest.param(STEP_800, id='scale_800')]
 
 DT = 0.01
 LAT_DELAY = 0.3
@@ -104,12 +104,12 @@ class TestClassifyTable:
     assert lim == SteerLimit(limited=True, driver_limited=False, rate_limited=True, at_rail=False)
 
   def test_command_walking_under_the_rate_limit_is_lag_not_a_driver(self):
-    # above the cliff a step is 0.015: a command moving 0.012 per frame is tracked exactly, one
+    # on an 800 scale a step is 0.015: a command moving 0.012 per frame is tracked exactly, one
     # carOutput frame late, and the 0.012 gap clears the 0.01 threshold every frame
-    lim = cl(0.312, 0.300, 0.288, ABOVE_CLIFF)
+    lim = cl(0.312, 0.300, 0.288, STEP_800)
     assert (lim.rate_limited, lim.driver_limited) == (True, False)
     # the same gap with the actuator barely moving is a driver holding it
-    lim = cl(0.312, 0.300, 0.299, ABOVE_CLIFF)
+    lim = cl(0.312, 0.300, 0.299, STEP_800)
     assert (lim.rate_limited, lim.driver_limited) == (False, True)
 
   @pytest.mark.parametrize('side', SIDES)
@@ -276,7 +276,7 @@ class TestIntegratorUnderTheNewFlag:
   (|i| stays put); once the error flips sign the old flag still freezes it and the new one
   lets it bleed; at the rail the new flag is False and the tune's saturation alert fires."""
 
-  V_EGO = 14.0        # below the cliff: step 0.01, rail 0.556
+  V_EGO = 14.0        # step 0.01, rail 0.556
   ERROR = 0.1
   FRAMES = 300        # per phase
   SEED_I = 0.3

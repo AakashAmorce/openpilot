@@ -169,7 +169,6 @@ class Loop:
     # plan is asking for real decel AND the car is above the plan target.
     self.v_ego_mph = None
     self.a_target = 0.
-    self.decel_overshoot = False
     self.driver_queue = {}  # tick -> (ButtonType, hold_ticks)
     self._driver_active = None  # (button, remaining_ticks)
     self.sla_events = []  # (tick, event int) emitted by SLA, across the whole run
@@ -208,6 +207,9 @@ class Loop:
     if self.lookahead_mph is not None:
       LP_SP.smartCruiseControl.vision.vAheadMin = float(self.lookahead_mph * self.u_ms)
     LP_SP.aTarget = float(self.a_target)
+    # the servo reads each limiter's own request, not the MPC's railed aTarget
+    LP_SP.smartCruiseControl.vision.aTarget = float(self.a_target)
+    LP_SP.speedLimit.assist.aTarget = float(self.a_target)
     LP_SP.speedLimit.assist.state = self.mirror.state
     LP_SP.speedLimit.assist.vTarget = float(self.mirror.output_v_target)
     LP_SP.speedLimit.resolver.speedLimit = self.limit_mph * self.u_ms
@@ -231,8 +233,6 @@ class Loop:
     self.helper.reconcile_setpoint_with_dash(CS)
 
   def run(self, seconds, assert_each=None):
-    Params().put_bool("SmartCruiseDecelOvershoot", self.decel_overshoot)
-    self.servo.decel_overshoot_enabled = self.decel_overshoot
     for _ in range(int(seconds / DT_CTRL)):
       self.tick_n += 1
 
